@@ -10,6 +10,7 @@ Ao iniciar uma sessão neste projeto, ler nesta ordem:
 5. docs/ARCHITECTURE.md — decisões arquiteturais (ADRs) aceitas
 6. docs/PROTOCOLOS.md — checklists aplicáveis à tarefa atual
 7. CHANGELOG.md — o que mudou recentemente
+8. docs/TOM-E-CHATS.md — tom de voz, regras de confronto e modos de chat
 
 ## Projeto
 **MKS-ULTIMATE** — Framework de trading automatizado baseado em Renko para MetaTrader 5.
@@ -53,3 +54,4 @@ Todos os documentos abaixo existem em `docs/` e devem ser consultados:
 - `docs/ARCHITECTURE.md` — decisões arquiteturais (ADRs)
 - `docs/PROTOCOLOS.md` — checklists para momentos de risco
 - `docs/CHEATSHEET.md` — referência rápida de comandos
+- `docs/TOM-E-CHATS.md` — tom de voz, regras de confronto e modos de chat estruturados
