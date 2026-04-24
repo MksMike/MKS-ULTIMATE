@@ -1,0 +1,35 @@
+{
+  "permissions": {
+    "defaultMode": "default",
+
+    "allow": [
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git branch)",
+      "Bash(git remote:*)",
+      "Bash(gh repo view:*)",
+      "Bash(gh issue list:*)",
+      "Bash(gh pr list:*)",
+      "Bash(gh auth status)"
+    ],
+
+    "ask": [
+      "Bash(git push:*)",
+      "Bash(git checkout:*)",
+      "Bash(git merge:*)",
+      "Bash(git rebase:*)"
+    ],
+
+    "deny": [
+      "Bash(rm -rf:*)",
+      "Bash(git reset --hard:*)",
+      "Bash(git push --force:*)",
+      "Bash(git push -f:*)",
+      "Bash(git clean -fd:*)",
+      "Bash(git branch -D:*)",
+      "Read(**/.env*)",
+      "Write(**/.env*)",
+      "Edit(**/.env*)"
+    ]
+  }
+}
