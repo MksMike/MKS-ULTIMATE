@@ -1,0 +1,47 @@
+# Arquivos compilados MQL5
+*.ex4
+*.ex5
+
+# Arquivos temporários do MetaTrader
+*.log
+Files/
+
+# Windows
+Thumbs.db
+desktop.ini
+$RECYCLE.BIN/
+
+# VS Code (configurações pessoais; extensões recomendadas ficam)
+.vscode/*
+!.vscode/extensions.json
+!.vscode/tasks.json
+
+# Outras IDEs
+.idea/
+
+# Node.js (caso tooling seja adicionado)
+node_modules/
+
+# Python (caso scripts de análise sejam adicionados)
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Backups e temporários
+*.bak
+*.tmp
+*~
+.DS_Store
+
+# Secrets
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+
+# Dados de teste pesados
+data/raw/
+data/processed/
+*.csv.backup
