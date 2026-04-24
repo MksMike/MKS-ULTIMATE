@@ -1,5 +1,16 @@
 # CLAUDE.md — Contexto persistente para Claude Code neste projeto
 
+## Ordem de leitura em sessões novas
+
+Ao iniciar uma sessão neste projeto, ler nesta ordem:
+1. Este arquivo (CLAUDE.md) — panorama
+2. docs/Projeto.md — contexto e visão
+3. docs/REGRAS.md — regras de conduta
+4. docs/ROADMAP.md — fase atual do projeto e próxima a executar
+5. docs/ARCHITECTURE.md — decisões arquiteturais (ADRs) aceitas
+6. docs/PROTOCOLOS.md — checklists aplicáveis à tarefa atual
+7. CHANGELOG.md — o que mudou recentemente
+
 ## Projeto
 **MKS-ULTIMATE** — Framework de trading automatizado baseado em Renko para MetaTrader 5.
 
@@ -32,3 +43,13 @@ Existe também um fork do projeto **Median-and-Turbo-Renko-indicator-bundle** (A
 - Defines de versão: `MKS_ULTIMATE_VERSION_MAJOR`, `MKS_ULTIMATE_VERSION_MINOR`, `MKS_ULTIMATE_VERSION_PATCH`, `MKS_ULTIMATE_VERSION_STR`
 
 ## Estrutura prevista (a ser construída)
+
+## Documentos de referência
+Todos os documentos abaixo existem em `docs/` e devem ser consultados:
+
+- `docs/Projeto.md` — visão, escopo, glossário, decisões-chave
+- `docs/REGRAS.md` — regras de conduta do assistente e do dono
+- `docs/ROADMAP.md` — fases de construção em ordem
+- `docs/ARCHITECTURE.md` — decisões arquiteturais (ADRs)
+- `docs/PROTOCOLOS.md` — checklists para momentos de risco
+- `docs/CHEATSHEET.md` — referência rápida de comandos
