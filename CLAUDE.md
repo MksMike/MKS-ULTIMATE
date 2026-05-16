@@ -8,9 +8,10 @@ Ao iniciar uma sessão neste projeto, ler nesta ordem:
 3. docs/REGRAS.md — regras de conduta
 4. docs/ROADMAP.md — fase atual do projeto e próxima a executar
 5. docs/ARCHITECTURE.md — decisões arquiteturais (ADRs) aceitas
-6. docs/PROTOCOLOS.md — checklists aplicáveis à tarefa atual
-7. CHANGELOG.md — o que mudou recentemente
-8. docs/TOM-E-CHATS.md — tom de voz, regras de confronto e modos de chat
+6. docs/V5-POSTMORTEM.md — análise de causa-raiz do V5 (referência negativa)
+7. docs/PROTOCOLOS.md — checklists aplicáveis à tarefa atual
+8. CHANGELOG.md — o que mudou recentemente
+9. docs/TOM-E-CHATS.md — tom de voz, regras de confronto e modos de chat
 
 ## Projeto
 **MKS-ULTIMATE** — Framework de trading automatizado baseado em Renko para MetaTrader 5.
@@ -22,7 +23,7 @@ Ao iniciar uma sessão neste projeto, ler nesta ordem:
 Backtest e live devem produzir resultados idênticos, bit-a-bit, na mesma janela temporal, dado o mesmo feed de ticks. Paridade é requisito do projeto, não objetivo distante.
 
 ## Histórico relevante
-A versão anterior (V5, repo `MKS-Framework-Renko`) quebrou a conta em 4 horas de operação live após backtests aparentemente excelentes. A causa-raiz foi divergência silenciosa entre backtest e live. Esse problema não pode se repetir no MKS-ULTIMATE.
+A versão anterior (V5, repo `MKS-Framework-Renko`) quebrou a conta em 4 horas de operação live após backtests aparentemente excelentes. A divergência entre backtest e live foi o sintoma; a causa-raiz é estrutural, com quatro eixos, e está documentada em `docs/V5-POSTMORTEM.md`. Resumo: a estratégia operava sobre o `close` matemático do brick (não sobre preço observado), backtest e live produziam bricks por caminhos diferentes, o custo de execução não afetava o equity do backtest, e um input bifurcava a lógica entre os dois ambientes. Essa classe de problema não pode se repetir no MKS-ULTIMATE. O `docs/V5-POSTMORTEM.md` é leitura obrigatória antes de qualquer decisão de arquitetura.
 
 Existe também um fork do projeto **Median-and-Turbo-Renko-indicator-bundle** (AzInvest) que foi usado como referência de arquitetura para análise crítica — ele NÃO é base deste projeto. Nenhum nome, namespace, classe, comentário ou identificador do MKS-ULTIMATE deve conter "AzInvest" ou derivados.
 

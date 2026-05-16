@@ -78,12 +78,14 @@ Versão e data de modificação **não entram no header** — o git cuida disso.
 
 ### 1.7 Paridade backtest/live não é negociável
 
-Código não pode bifurcar comportamento lógico entre backtest e live. Especificamente:
+Código não pode bifurcar comportamento lógico entre backtest e live. A regra é mais ampla do que a proibição de uma função específica:
 
-- Proibido `if(MQLInfoInteger((int)MQL5_TESTING))` dentro da lógica de estratégia, risk management, ou execução de ordens.
-- Permitido apenas em pontos de composição (onde decidimos qual `IBroker` instanciar, qual `ITickSource` usar). Esse ponto fica isolado na fábrica/composition root.
+- **Proibido qualquer condicional de ambiente na lógica de trading.** Isso inclui `if(MQLInfoInteger((int)MQL5_TESTING))`, mas não se limita a ele. Um input que liga/desliga um caminho de execução, uma compilação condicional (`#ifdef`), uma flag global setada de formas diferentes em cada ambiente — tudo isso é a mesma violação. O gatilho da bifurcação é irrelevante; o que se proíbe é a *existência* de um caminho de lógica de trading que só roda em um dos ambientes.
+- **A diferença backtest/live vive exclusivamente no composition root.** A única coisa que muda entre os dois ambientes é qual implementação de interface (`IBroker`, `ITickSource`, `IClock`, `ILogger`) é instanciada e injetada. A estratégia, o risk management e a execução de ordens rodam byte a byte o mesmo código, sem saber em qual ambiente estão.
 
-Quando em dúvida se um `if(MQL5_TESTING)` é legítimo, traga a questão à tona — não pressuponha.
+Por que a regra é assim: no V5, a simulação de custos era ativada por um input (`InpUseStressLab`), não por `if(MQL5_TESTING)`. Pela letra de uma regra que só proibisse `MQL5_TESTING`, o V5 estaria em conformidade — e quebrou a conta mesmo assim. Backtest e live eram programas funcionalmente diferentes. Ver `docs/V5-POSTMORTEM.md`, eixo 4.
+
+Quando em dúvida se uma diferença entre ambientes é legítima, traga a questão à tona — não pressuponha. A pergunta-teste: *"isso é uma escolha de qual implementação injetar, ou é um caminho de lógica que só existe num ambiente?"* Só a primeira é permitida.
 
 ### 1.8 Testes antes de EA
 

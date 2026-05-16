@@ -21,9 +21,14 @@
 
 O MKS-ULTIMATE é a sucessão do projeto MKS-FRAMEWORK-RENKO (doravante "V5"), abandonado em abril de 2026 após um incidente crítico: uma estratégia que apresentou backtests excepcionais quebrou a conta do operador em aproximadamente 4 horas de operação em ambiente real.
 
-A causa-raiz identificada foi **divergência silenciosa entre backtest e live**. A arquitetura do V5 não garantia paridade — backtest e live seguiam caminhos de código diferentes em pontos críticos do fluxo de execução, modelagem de custos e construção de bricks Renko. O backtest, portanto, não era um preditor confiável do comportamento real.
+A divergência silenciosa entre backtest e live foi o **sintoma observável**. A revisão do código-fonte do V5 (registrada em `docs/V5-POSTMORTEM.md`) identificou que a causa-raiz é estrutural e se manifesta em quatro eixos simultâneos:
 
-O MKS-ULTIMATE nasce com a missão explícita de eliminar essa classe de problema pela raiz, não pela mitigação.
+1. **Espaço de preços fictício** — a estratégia decidia sobre o `close` matemático do brick Renko (`close = open ± brickSize`), nunca sobre o preço observado do tick que disparou o fechamento.
+2. **Produção de bricks divergente** — backtest e live geravam bricks por caminhos de código diferentes (ticks reais vs. OHLC de M1 sintetizado vs. amostragem por timer), produzindo sequências de bricks diferentes para o mesmo intervalo.
+3. **Custo de execução não aplicado** — a simulação de custos do V5 alimentava um relatório paralelo, mas não afetava o equity do backtest. O backtest era estruturalmente otimista.
+4. **Bifurcação de código** — um input ligava/desligava blocos inteiros de lógica de execução; backtest e live rodavam programas funcionalmente diferentes.
+
+O MKS-ULTIMATE nasce com a missão explícita de eliminar essa classe de problema pela raiz, não pela mitigação. O `docs/V5-POSTMORTEM.md` é a referência detalhada e deve ser lido por qualquer pessoa que vá tomar decisões de arquitetura neste projeto.
 
 ## 3. Princípio norteador
 
@@ -91,7 +96,13 @@ Permanece como **referência de análise** — útil para aprender o que funcion
 
 ### MKS-FRAMEWORK-RENKO (V5)
 
-Versão anterior, abandonada. Fica no repositório `MksMike/MKS-Framework-Renko` como **referência negativa** — exemplo concreto do que não repetir. Lições aprendidas devem ser capturadas no `ROADMAP.md` ou em documento dedicado de post-mortem.
+Versão anterior, abandonada. Fica no repositório `MksMike/MKS-Framework-Renko` como **referência negativa** — exemplo concreto do que não repetir.
+
+A análise de causa-raiz completa está em `docs/V5-POSTMORTEM.md`, baseada na leitura direta do código-fonte do V5. Pontos a destacar para evitar confusão histórica:
+
+- O V5 **tinha engine Renko própria**, escrita em casa (`MKS-Renko-Core.mqh`). Não dependia de indicador de caixa-preta — essa é uma característica do AzInvest, não do V5.
+- O V5 **tinha** simulação de spread, comissão, latência e rejeição, mas embutida em cada EA como bloco ativável por input, e essa simulação não afetava o equity do backtest — apenas alimentava um relatório.
+- A causa do colapso não foi um bug pontual, e sim a confusão entre o feed Renko desenhado e o ambiente de execução real.
 
 ## 7. Atores e responsabilidades
 

@@ -86,7 +86,7 @@ Este documento define **o que construir e em que ordem**. Cada fase tem entregá
 - Determinismo validado: mesmo tick stream produz mesmos bricks, sempre
 - Fase 3 (testes) cobre todos os casos listados
 
-**Por que importa:** Renko é o dado base de todo o framework. Se o builder não é determinístico e auditável, tudo que vier depois é areia movediça. Esse foi o ponto mais grave do V5 — dependia de indicador de caixa-preta.
+**Por que importa:** Renko é o dado base de todo o framework. Se o builder não é determinístico e auditável, tudo que vier depois é areia movediça. No V5, o builder em si era correto — o problema foi haver múltiplos caminhos de produção de bricks (ticks reais no backtest, OHLC de M1 no live) que geravam sequências diferentes para o mesmo intervalo. Ver `docs/V5-POSTMORTEM.md`, eixo 2.
 
 **Riscos:**
 - **R2.1:** Performance. MQL5 é single-threaded e o `OnTick` é chamado por cada tick. O builder precisa ser barato.
@@ -275,11 +275,16 @@ Tudo aqui entra no ROADMAP formal quando for priorizado. Por enquanto, ficam reg
 
 ## Lições aprendidas do V5 (para não esquecer)
 
-- **Caminho de código único.** Bifurcar live/backtest foi letal.
-- **Modelar custos desde o início.** Assumir zero slippage/comissão em backtest mente grandiosamente.
+Estas lições vêm da análise de causa-raiz documentada em `docs/V5-POSTMORTEM.md`, baseada na leitura do código-fonte do V5. Cada uma corresponde a um eixo da falha real:
+
+- **A estratégia opera sobre preço observado, não sobre o close matemático do brick.** No V5, o `close` do brick era `open ± brickSize` — um valor calculado, sem relação com o tick que disparou o fechamento. A estratégia raciocinava num espaço de preços fictício.
+- **Um único produtor de bricks.** O V5 tinha quatro caminhos diferentes de gerar bricks (ticks reais, OHLC de M1, amostragem por timer). Backtest e live nunca viram a mesma sequência.
+- **Custo de execução é aplicado ao trade, não somado num relatório.** A simulação de custos do V5 alimentava contadores que só apareciam no relatório final — o equity do backtest nunca foi tocado por eles.
+- **Caminho de código único.** Bifurcar live/backtest foi letal. E o gatilho da bifurcação é irrelevante: no V5 era um input, não um `if(MQL5_TESTING)` — e quebrou do mesmo jeito.
+- **Reconstrução de estado é completa ou não acontece.** O `SyncWithExisting` do V5 restaurava o estado pela metade a cada restart.
 - **Testes antes de estratégia.** Sem cobertura do core, toda estratégia é construída sobre incerteza.
 - **Risk manager como middleware, não como lembrete.** "Vou lembrar de colocar stop" é ilusão.
 - **Logging estruturado, não Print.** Em live sem log comparável, debug vira arqueologia.
-- **Renko em casa.** Dependência de indicador de caixa-preta é dependência de caixa-preta.
+- **Renko em casa.** O V5 já fazia isso corretamente — engine própria, sem indicador de caixa-preta. Mantemos.
 
-Essas lições são permanentes. Cada violação futura deve ser comparada contra esta lista.
+Essas lições são permanentes. Cada violação futura deve ser comparada contra esta lista e contra o `docs/V5-POSTMORTEM.md`.
