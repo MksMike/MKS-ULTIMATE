@@ -299,6 +299,45 @@ A ADR-010 não é alterada; esta nota registra o alinhamento entre o texto da de
 
 ---
 
+### ADR-011: Tratamento de cruzamento multi-threshold no RenkoBuilder
+
+**Data:** 2026-05-17
+**Status:** Aceita
+
+**Contexto:**
+O `CMksRenkoBuilder` é dirigido pelo preço médio (mid), conforme a ADR-010. Entre dois ticks consecutivos, o mid pode saltar o suficiente para cruzar mais de um threshold de brick de uma só vez — um spike rápido, um momento de baixa liquidez. O builder precisa de uma regra explícita para esse caso antes de ser escrito; sem ela, a regra fica implícita no código, exatamente o tipo de decisão tácita que o projeto recusa. O desenho ingênuo — emitir N bricks intermediários para preencher o salto — recria o eixo 1 do colapso do V5: a estratégia passa a raciocinar sobre eventos de brick em níveis de preço onde nenhum tick passou. Esses bricks intermediários não têm tick de gatilho próprio; atribuir-lhes identidade (timestamp, `seq`) é fabricá-la, e fabricação fere os invariantes de determinismo (§1) e de auditabilidade (ADR-010 §5, "cada brick emitido grava o tick disparador"). O ROADMAP da Fase 2 lista "Gaps (preço salta mais de um brick)" como caso de tratamento explícito, e a ADR-008 (reabertura de mercado) depende desta decisão. O caso do tick de volume zero — phantom *tick* — é concern distinto, reservado à ADR-006.
+
+**Decisão:**
+Um tick que cruza mais de um threshold de brick produz um único `MksBrick` honesto. O builder não cria bricks intermediários ("phantom bricks").
+
+1. **Um brick por movimento.** Um tick que cruza M thresholds (com 1 ≤ M ≤ K) produz exatamente um `MksBrick`. O `open` é o `close` do brick anterior; o `close` é o preço do M-ésimo threshold cruzado; `triggerPrice` recebe o mid do tick disparador e `triggerTickId` o referencia; `Overshoot()` mede a distância do `triggerPrice` ao M-ésimo threshold. O brick é, em todos os campos, um brick normal — exceto pelo tamanho, que abrange M degraus. O invariante de auditabilidade (ADR-010 §5) vale sem exceção: todo brick emitido tem um tick de gatilho real.
+
+2. **Marcação por inteiro.** O `MksBrick` ganha um campo inteiro — `thresholdsCrossed` — com valor 1 para um brick normal e M para um brick formado por cruzamento multi-threshold. É inteiro, não booleano: um booleano responderia apenas "é phantom?", enquanto o inteiro responde "quantos thresholds?", subsume o booleano e carrega a informação que uma estratégia baseada em contagem de bricks precisa. Nenhum consumidor de brick é obrigado a ser phantom-aware — quem assume tamanho uniforme checa o campo, quem não assume o ignora.
+
+3. **A contagem de M respeita a geometria.** M é obtido caminhando a escada de thresholds a partir do `close` do brick anterior. Se o movimento é de reversão, o primeiro degrau está à distância de reversão (`revSizeRatio` da `MksRenkoGeometry`) e os demais à distância de continuação. M não é uma divisão simples do salto pelo tamanho-base do brick.
+
+4. **Limiar K como guarda de corrupção.** Existe um limite configurável K. Um tick com M > K não produz brick: o builder não emite e devolve um `MksError`. Isto é guarda de corrupção, não política de caminho normal — um tick que cruza um número muito grande de thresholds no XAUUSD é quase certamente um tick corrompido, não um movimento real, e emitir bricks a partir dele lavaria dado podre para dentro da estratégia. O valor default de K e a forma de configurá-lo são decisão de implementação do `CMksRenkoBuilder`, registrada quando a classe for escrita; esta ADR fixa que K existe e que a resposta acima do limiar é erro, não emissão.
+
+5. **O builder emite a representação primária.** O brick único é a representação sem perda do movimento. A reconstrução de N sub-bricks de tamanho uniforme — caso uma estratégia ou um renderer futuro precise da vista Renko clássica — é uma transformação derivada e determinística a partir de `open`, `close`, direção, `thresholdsCrossed` e da geometria. Não é responsabilidade do builder. Vistas uniformes derivam do brick honesto, nunca o contrário.
+
+**Alternativas consideradas:**
+- **N bricks de tamanho de geometria, sem marca:** rejeitada. Os bricks intermediários não têm tick de gatilho; referenciá-los a um tick fabricado, ou ao mesmo tick do primeiro brick, mente no rastro de auditoria. É o eixo 1 do V5 reembalado — a estratégia decide sobre eventos de brick que correspondem a preços que o mercado nunca imprimiu. E é silencioso: um backtest não distingue uma rajada multi-threshold de uma sequência limpa de bricks.
+- **N bricks com os intermediários marcados como anomalia:** rejeitada. Marcar torna a fabricação honesta, não a elimina — ainda é preciso fabricar `timestamp` e `seq` determinísticos para bricks sem tick. É uma vista com perda em relação ao brick único: fabricada a identidade, "isto foi um tick só" deixa de ser recuperável. Empurra complexidade para todo consumidor de brick. E o único ganho aparente — a estratégia "ver" os eventos intermediários — é oco: esses eventos chegam todos no mesmo instante, ao mesmo preço real, e não são acionáveis.
+- **Campo booleano de phantom em vez do inteiro `thresholdsCrossed`:** rejeitada. O booleano descarta a contagem; o inteiro a preserva sem custo de espaço relevante e é estritamente mais informativo.
+- **Resposta uniforme a qualquer magnitude, sem o limiar K:** rejeitada. Cruzar dois thresholds é movimento rápido normal; interromper nisso inutilizaria o builder. Cruzar centenas é quase certamente corrupção de feed; emitir bricks a partir disso seria gambiarra silenciosa. A resposta tem de ser graduada.
+
+**Consequências:**
+- O `MksBrick` ganha o campo `thresholdsCrossed`. O `Brick.mqh` da Fase 1 é alterado — mudança feita após o aceite desta ADR, não antes.
+- O tamanho do brick Renko deixa de ser estritamente uniforme: um brick multi-threshold é maior que o nominal. Qualquer indicador ou estratégia que assuma tamanho de brick fixo precisa checar `thresholdsCrossed` e ser magnitude-aware. É um custo real; a mitigação é que a não-uniformidade fica explícita e detectável no campo, nunca silenciosa.
+- O invariante de auditabilidade vale sem exceção — todo brick referencia um tick de gatilho real. O problema de identidade sintética para bricks sem tick é eliminado, não resolvido: o builder simplesmente nunca cria um brick desses.
+- O enum `ENUM_MKS_ERROR_CODE` (`Error.mqh`) ganha um código novo na faixa RenkoBuilder para o estouro do limiar K, na sequência de `MKS_ERR_RENKO_INVALID_GEOMETRY` (100) e `MKS_ERR_RENKO_INVALID_BRICK_SIZE` (101) — proposto como `MKS_ERR_RENKO_THRESHOLD_LIMIT_EXCEEDED`, código 102.
+- Um parâmetro K entra na configuração do `CMksRenkoBuilder`; default e forma de configuração ficam para a implementação da classe.
+- O estouro do limiar K em live é um `MksError` reportado pelo builder. O que o EA faz com esse erro — continuar, parar, notificar — pertence à camada de EA e ao Protocolo 7, não ao builder. Esta ADR garante apenas que o builder reporta em vez de emitir.
+- Fronteira com a ADR-008: esta ADR cobre o cruzamento multi-threshold como mecanismo, independente da causa. A ADR-008 (reabertura de mercado) decide se o gap de fim de semana chega ao builder; se chegar, é este mecanismo que o processa.
+- A questão das phantom bars da ADR-006 pendente — tick de volume zero — permanece concern separado. Esta ADR resolve o cruzamento multi-threshold eliminando os phantom bricks: na MKS-ULTIMATE não existe brick sem tick de gatilho.
+
+---
+
 ## 4. Decisões pendentes
 
 Pontos que precisam virar ADR assim que forem enfrentados:
