@@ -70,20 +70,23 @@ Evidência adicional de que o próprio V5 sabia disso, sem tratar: `MKS-EA-CE-PR
 
 ### 3.2 Eixo 2 — Bricks produzidos por caminhos diferentes em backtest e em live
 
-O Core (`CMKSRenkoCore::ProcessPrice`) é um motor único e determinístico. Mas ele é alimentado por **quatro produtores diferentes**, e os quatro veem dados diferentes:
+O Core (`CMKSRenkoCore::ProcessPrice`) é um motor único e determinístico. Mas ele é alimentado por **cinco produtores diferentes**, e os cinco veem dados diferentes:
 
 | Caminho | Origem dos dados | Granularidade |
 |--|--|--|
-| A — Generator | `CopyTicksRange`, dia a dia | Todos os ticks reais |
-| B — LiveEngine: `GenerateQuickHistory` | `CopyRates(M1)` | OHLC sintetizado, 4 pontos por minuto |
-| C — LiveEngine: `FillGap` | `CopyRates(M1)` quando detecta gap | OHLC sintetizado, 4 pontos por minuto |
-| D — LiveEngine: `OnTimer` | `SymbolInfoTick`, a cada 250 ms | 1 tick a cada 250 ms |
+| A — Generator: `ProcessTicks` | `CopyTicksRange`, dia a dia | Todos os ticks reais |
+| B — Generator: `ProcessM1` | `CopyRates(M1)` | OHLC sintetizado, 4 pontos por minuto |
+| C — LiveEngine: `GenerateQuickHistory` | `CopyRates(M1)` | OHLC sintetizado, 4 pontos por minuto |
+| D — LiveEngine: `FillGap` | `CopyRates(M1)` quando detecta gap | OHLC sintetizado, 4 pontos por minuto |
+| E — LiveEngine: `OnTimer` | `SymbolInfoTick`, a cada 250 ms | 1 tick a cada 250 ms |
 
-(`MKS-Renko-Generator.mq5` linhas 150-252; `MKS-Renko-LiveEngine.mq5` linhas 204-286, 372-439, 868-916.)
+(`MKS-Renko-Generator.mq5`: `ProcessTicks` linhas 151-252, `ProcessM1` linhas 255-308, `LoadAndProcess` linhas 312-349; `MKS-Renko-LiveEngine.mq5` linhas 204-286, 372-439, 868-916.)
 
-O backtest da estratégia rodava sobre o Custom Symbol gerado pelo caminho A (ticks reais). Em live, o histórico inicial era reconstruído pelo caminho B (M1 OHLC, 4 pontos/minuto) e a operação corrente rodava pelo caminho D (1 tick a cada 250 ms — todos os ticks entre duas execuções do timer são ignorados).
+O Generator não é um produtor de caminho único. `LoadAndProcess` despacha entre os dois caminhos: com `InpDataSource = MKS_SOURCE_TICKS` (o padrão) roda `ProcessTicks`; mas se os ticks do broker cobrem menos da metade dos dias pedidos, executa `core.Reset()` e reconstrói o Custom Symbol inteiro pelo caminho B (M1 OHLC). O fallback é silencioso — só uma linha `Warn` no log o registra. Logo, **não se pode afirmar com certeza** que o backtest rodou sobre ticks reais: o Custom Symbol pode ter saído do caminho A ou do B conforme a cobertura de tick history do broker no momento da geração, não uma decisão registrada.
 
-**Consequência:** dado o mesmo símbolo, o mesmo intervalo e a mesma configuração, os quatro caminhos produzem **quatro sequências de bricks diferentes**. Não há paridade nem entre os caminhos internos do LiveEngine, muito menos entre LiveEngine e Generator. A estratégia foi calibrada sobre uma sequência de bricks e operada sobre outra.
+Em live, o histórico inicial era reconstruído pelo caminho C (M1 OHLC, 4 pontos/minuto) e a operação corrente rodava pelo caminho E (1 tick a cada 250 ms — todos os ticks entre duas execuções do timer são ignorados).
+
+**Consequência:** dado o mesmo símbolo, o mesmo intervalo e a mesma configuração, os cinco caminhos produzem **cinco sequências de bricks diferentes**. Não há paridade nem entre os caminhos internos do LiveEngine, muito menos entre LiveEngine e Generator. A estratégia foi calibrada sobre uma sequência de bricks e operada sobre outra — e a própria origem do lado da calibração não era garantida.
 
 ### 3.3 Eixo 3 — O custo de execução era contabilizado, não aplicado
 
@@ -172,3 +175,5 @@ Este post-mortem motivou as seguintes correções, registradas no `CHANGELOG.md`
 Post-mortem **fechado**. A causa-raiz foi determinada a partir de evidência de código, não de memória. Não há análise pendente.
 
 Se, no futuro, surgir acesso a outros artefatos do V5 (logs do dia da quebra, EAs não auditados), eles podem ser anexados como evidência adicional — mas não é esperado que mudem a conclusão.
+
+**Revisão 2026-05-17.** A tabela do Eixo 2 (§3.2) foi corrigida. A leitura completa de `MKS-Renko-Generator.mq5` mostrou que o Generator tem dois caminhos produtores — `ProcessTicks` (ticks reais) e `ProcessM1` (M1 OHLC), este último acionado também como fallback silencioso por `LoadAndProcess` —, totalizando cinco produtores, não quatro. A conclusão do post-mortem não muda: o Eixo 2 sai reforçado, porque nem a origem do Custom Symbol do backtest é garantida.
