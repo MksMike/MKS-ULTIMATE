@@ -20,7 +20,7 @@ Protocolos existem porque decisões de risco tomadas por memória ou intuição 
 Aplicável quando um módulo novo (ex: `CMksRenkoBuilder`) está para ter status alterado de "em desenvolvimento" para "pronto" no ROADMAP.
 
 - [ ] Código compila sem warnings no MetaEditor
-- [ ] Header do arquivo está no formato padrão (`@file`, `@project`, `@module`, `@responsibility`, `@install_path`)
+- [ ] Header do arquivo está no formato padrão (`@file`, `@project`, `@module`, `@responsibility`, `@depends_on`, `@install_path`)
 - [ ] Classe tem doc-comment na declaração explicando responsabilidade
 - [ ] Métodos públicos têm doc-comment quando não forem auto-evidentes
 - [ ] Nenhuma bifurcação `if(MQL5_TESTING)` na lógica do módulo

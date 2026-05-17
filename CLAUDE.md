@@ -34,7 +34,7 @@ Existe também um fork do projeto **Median-and-Turbo-Renko-indicator-bundle** (A
 3. **Nunca gerar código que não compila.** Se há dúvida sobre uma API MQL5, verificar antes (via docs ou pergunta), não chutar.
 4. **Arquitetura limpa acima de tudo.** OOP, responsabilidade única por classe, interfaces antes de implementações concretas.
 5. **Comentários explicam *por quê*, não *o quê*.** Código autodocumentado nos nomes. Comentários redundantes são poluição.
-6. **Headers enxutos em cada arquivo** com: `@file`, `@project`, `@module`, `@responsibility`, `@install_path`. Versão e data ficam no git, não em cada arquivo.
+6. **Headers enxutos em cada arquivo** com: `@file`, `@project`, `@module`, `@responsibility`, `@depends_on`, `@install_path`. Versão e data ficam no git, não em cada arquivo.
 7. **Backtest e live compartilham o mesmo caminho de código.** Nada de `if(MQLInfoInteger(MQL5_TESTING))` bifurcando comportamento. Broker e tick source são abstraídos via interfaces.
 8. **Testes antes de EA.** Nenhuma estratégia é construída antes do core ter cobertura de testes.
 
@@ -44,7 +44,9 @@ Existe também um fork do projeto **Median-and-Turbo-Renko-indicator-bundle** (A
 - Header de versão único: `MQL5/Include/MKS-ULTIMATE/Core/Version.mqh`
 - Defines de versão: `MKS_ULTIMATE_VERSION_MAJOR`, `MKS_ULTIMATE_VERSION_MINOR`, `MKS_ULTIMATE_VERSION_PATCH`, `MKS_ULTIMATE_VERSION_STR`
 
-## Estrutura prevista (a ser construída)
+## Estrutura de diretórios
+
+A estrutura-alvo do projeto está em `docs/ARCHITECTURE.md` §2, e cresce conforme as fases do `ROADMAP.md` avançam.
 
 ## Documentos de referência
 Todos os documentos abaixo existem em `docs/` e devem ser consultados:

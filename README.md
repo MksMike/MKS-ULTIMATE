@@ -12,14 +12,16 @@ Backtest e live devem produzir resultados idênticos, bit-a-bit, na mesma janela
 
 ## Documentação
 
-Documentos principais (a serem criados na próxima fase):
+Documentos principais:
 
 - `docs/Projeto.md` — contexto e visão
 - `docs/REGRAS.md` — regras de desenvolvimento
 - `docs/ROADMAP.md` — roteiro de features
 - `docs/ARCHITECTURE.md` — arquitetura do sistema
+- `docs/V5-POSTMORTEM.md` — post-mortem do V5 (referência negativa)
 - `docs/PROTOCOLOS.md` — checklists e protocolos
 - `docs/CHEATSHEET.md` — comandos essenciais
+- `docs/TOM-E-CHATS.md` — tom de voz e modos de chat
 - `CHANGELOG.md` — histórico de mudanças
 
 ## Licença

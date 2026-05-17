@@ -15,7 +15,7 @@ Este documento define **o que construir e em que ordem**. Cada fase tem entregá
 
 ## Fase 0 — Fundação documental
 
-**Status:** Em andamento
+**Status:** Concluída
 
 **Entregáveis:**
 - `README.md`
@@ -37,7 +37,7 @@ Este documento define **o que construir e em que ordem**. Cada fase tem entregá
 
 ## Fase 1 — Abstrações do core (interfaces)
 
-**Status:** Não iniciada
+**Status:** Concluída
 
 **Entregáveis:**
 - `Core/Version.mqh` — definições de versão única do framework
@@ -66,7 +66,7 @@ Este documento define **o que construir e em que ordem**. Cada fase tem entregá
 
 ## Fase 2 — RenkoBuilder (coração do framework)
 
-**Status:** Não iniciada
+**Status:** Em andamento
 
 **Entregáveis:**
 - `Core/RenkoBuilder/CMksRenkoBuilder.mqh` — classe que consome ticks e emite bricks

@@ -27,6 +27,7 @@ O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/) e es
 - `docs/ROADMAP.md` — removida afirmação incorreta de que o V5 dependia de indicador de caixa-preta; seção "Lições aprendidas do V5" reescrita com base nos quatro eixos do post-mortem.
 - `docs/REGRAS.md` §1.7 — regra de paridade backtest/live ampliada: de proibição de `if(MQL5_TESTING)` para proibição de qualquer condicional de ambiente na lógica de trading.
 - `docs/ARCHITECTURE.md` §4 — entrada "ADR-004 (pendente)" removida da fila de decisões pendentes (decisão registrada na seção 3).
+- Documentação sincronizada com o estado real do projeto: status das fases no `ROADMAP.md` (Fases 0 e 1 concluídas, Fase 2 em andamento), seção de estrutura do `CLAUDE.md` apontando para `ARCHITECTURE.md` §2, lista de documentos do `README.md` completada, campo `@depends_on` adicionado ao formato de header em `CLAUDE.md` e `PROTOCOLOS.md`, e comentários da árvore de diretórios em `ARCHITECTURE.md` §2.
 
 ## [6.0.0-alpha] - 2026-04-24
 
