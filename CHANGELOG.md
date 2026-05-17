@@ -13,6 +13,7 @@ O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/) e es
 - `docs/ARCHITECTURE.md` §5 — Convenções de nomenclatura registradas: sistema de prefixos `I` (interfaces), `CMks` (classes com estado), `Mks` (structs/tipos primitivos POD) e `ENUM_MKS_` (enums internos).
 - `MQL5/Include/MKS-ULTIMATE/Core/Version.mqh` — versão única do framework em defines SemVer (`MAJOR`/`MINOR`/`PATCH`/`STR`), conforme ADR-001.
 - `MQL5/Include/MKS-ULTIMATE/Core/Interfaces/` — cinco interfaces do core (`IBroker`, `ITickSource`, `IClock`, `ILogger`, `IRenkoSink`), classes abstratas com métodos virtuais puros conforme ADR-004.
+- `docs/ARCHITECTURE.md` §3 — nota de esclarecimento da convenção 7 da ADR-004: out-params por referência não-const são permitidos.
 
 ### Changed
 - `docs/Projeto.md` §2 — causa-raiz do V5 reescrita: de "divergência silenciosa entre backtest e live" (sintoma) para a causa estrutural de quatro eixos.

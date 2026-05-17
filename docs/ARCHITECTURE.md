@@ -175,6 +175,10 @@ Sete convenções operacionais — qualquer interface do core respeita todas, e 
 
 ---
 
+**Nota de esclarecimento — alcance da convenção 7 da ADR-004** (2026-05-17)
+
+A convenção 7 da ADR-004 ("argumentos de tipo objeto por `const&` ou ponteiro") regula argumentos de *entrada*. Parâmetros de *saída* por referência não-const — out-params — não são cobertos por ela e são permitidos. Caso concreto no core: `ITickSource::Next(MksTick &tick)`, em que a referência não-const é o canal de retorno do tick lido. A ADR-004 não é alterada; esta nota apenas registra a interpretação.
+
 ## 4. Decisões pendentes
 
 Pontos que precisam virar ADR assim que forem enfrentados:
