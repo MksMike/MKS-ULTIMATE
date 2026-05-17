@@ -3,6 +3,7 @@ import random
 import sys
 import os
 import subprocess
+import hashlib
 from datetime import datetime
 
 # =====================================================================
@@ -37,212 +38,206 @@ except ImportError:
 console = Console()
 
 # =====================================================================
-# HISTÓRICOS DOS GRÁFICOS (Para criar o efeito de linha contínua)
+# BANCO DE DADOS E HISTÓRICOS DE ROLAGEM REAL (SCROLLING MEMORY)
 # =====================================================================
-cpu_history = [random.randint(40, 70) for _ in range(25)]
-ram_history = [random.randint(50, 80) for _ in range(25)]
-traffic_history = [random.randint(30, 60) for _ in range(25)]
+# Iniciando com 45 pontos para preencher toda a largura da janela de forma suave
+GRAPH_WIDTH = 45
+cpu_history = [random.randint(40, 60) for _ in range(GRAPH_WIDTH)]
+ram_history = [random.randint(65, 75) for _ in range(GRAPH_WIDTH)]
+traffic_history = [random.randint(30, 50) for _ in range(GRAPH_WIDTH)]
 
-# Banco de dados de logs para a esteira inferior
 OLD_TERMINAL_LOGS = [
-    "[INFO] Sincronizando clock do servidor com a Bolsa de Valores (B3/NYSE)...",
-    "[SUCCESS] Canal de comunicação IPC (Inter-Process Communication) estabelecido.",
-    "[WARN] Anomalia de spread detectada no par XAUUSD. Recalibrando ordens...",
-    "[DECRYPT] Abrindo túnel criptografado SSH-256 com o Broker...",
-    "[SECURITY] Firewall ativado. Varredura de antilatência concluída. Ping: 0.23ms",
-    "[ALGO] Otimizando pesos neurais usando algoritmo genético adaptativo...",
-    "[SYS] Desalocando buffers antigos de memória RAM do MetaTrader 5...",
-    "[INJECT] Injetando ordens fantasmas (HFT Spoofing Detection active)...",
-    "LOAD_FILE -> Kernel_MT5_Bridge.dll [====================] 100% - OK",
-    "LOAD_FILE -> Strategy_Quantum_V4.mqh [====================] 100% - OK",
-    "LOAD_FILE -> Indicator_Neural_Net.ex5 [====================] 100% - OK",
-    "bash-5.2# rm -rf /tmp/cache_buffers/old_ticks.bin && mkdir -p /var/log/mt5",
-    "bash-5.2# python3 -m framework.core.optimizer --generations=100 --pop=500"
+    "📌 [SYS_INIT] Initializing IPC Core Bridge via socket descriptor #4092...",
+    "🚀 [SUCCESS] MT5 Bridge API connection verified. Latency: 0.12ms.",
+    "⚠️ [METRICS] Spread variance anomaly on XAUUSD -> Recalibrating order pool.",
+    "🔒 [SECURE] Tuning SSH-256 encrypted tunnel with Singapore Broker cluster...",
+    "🛡️ [FIREWALL] Antilatency filter engaged. Deep Packet Inspection active.",
+    "🧠 [NEURAL] Retraining LSTM genetic weights. Mutation pool ratio: 0.14",
+    "🧹 [GC] Flushed 142MB of orphaned MetaTrader 5 memory buffers.",
+    "🔥 [INJECT] High-Frequency Trading (HFT) Spoofing loop engaged.",
+    "📁 [LOAD] Imported symbols matrix -> Kernel_MT5_Bridge.dll successfully.",
+    "🤖 [ALGO] Strategy_Quantum_V5.mqh execution hook deployed natively.",
+    "💻 bash-5.2# rm -rf /tmp/cache_buffers/ && mkdir -p /var/log/mt5_core",
+    "💻 bash-5.2# python3 -m framework.core.optimizer --hft-mode=enabled"
 ]
 
 # =====================================================================
-# FUNÇÃO AUXILIAR: DESENHAR GRÁFICOS DE LINHA EM TEXTO
+# FUNÇÃO AVANÇADA: DESENHAR GRÁFICOS COM DEGRADÊ E SCROLLING REAL
 # =====================================================================
-def render_line_chart(history_list, is_overloaded=False):
-    # Caracteres Unicode para subida de blocos/linhas
+def render_smooth_chart(history_list):
+    # Caracteres de bloco vertical Unicode para criar a onda contínua
     chars = [" ", "▂", "▃", "▄", "▅", "▆", "▇", "█"]
     rendered_str = ""
     
     for val in history_list:
-        # Mapeia valores de 0-100 para o índice dos caracteres (0 a 7)
         idx = int((val / 100) * 7)
         idx = max(0, min(idx, 7))
         
-        # Se estiver muito alto (sobrecarga), plota em vermelho piscante/negrito
-        if val >= 85 and is_overloaded:
-            rendered_str += f"[bold red]{chars[idx]}[/bold red]"
-        elif val >= 70:
-            rendered_str += f"[bold yellow]{chars[idx]}[/bold yellow]"
+        # Sistema de cores sofisticado baseado em zonas reais de estresse
+        if val >= 90:
+            rendered_str += f"[bold red]{chars[idx]}[/bold red]"       # Crítico (Vermelho Puro)
+        elif val >= 75:
+            rendered_str += f"[bold color(202)]{chars[idx]}[/bold color(202)]" # Sobrecarga (Laranja)
+        elif val >= 55:
+            rendered_str += f"[bold yellow]{chars[idx]}[/bold yellow]"    # Alerta (Amarelo)
         else:
-            rendered_str += f"[bold green]{chars[idx]}[/bold green]"
+            rendered_str += f"[color(34)]{chars[idx]}[/color(34)]"       # Normal (Verde Escuro)
             
     return rendered_str
 
 # =====================================================================
-# GERADORES DE DADOS DO DASHBOARD SUPERIOR
+# GERADORES DE COMPONENTES VISUAIS
 # =====================================================================
 def get_header():
-    now = datetime.now().strftime("%H:%M:%S")
+    now = datetime.now().strftime("%H:%M:%S.%f")[:-4] # Inclui milissegundos para realismo
+    status = "[bold blink red]OVERLOADED[/bold blink red]" if cpu_history[-1] > 85 else "[bold color(208)]STRESSED[/bold color(208)]"
     return Panel(
-        f"[bold green]CYBERHACK DASHBOARD[/bold green] | FRAMEWORK MKS v5.0"
-        f"[align right][bold cyan]STATUS:[/bold cyan] OVERLOADED  "
-        f"[bold red]ALERTS: ACTIVE[/bold red]  "
-        f"[bold cyan]TIME:[/bold cyan] {now}[/align right]",
+        f"⚡ [bold green]MKS QUANTUM CONTROL TERMINAL v5.0[/bold green] | [dim]SYS_STATUS:[/dim] {status}  "
+        f"[align right][dim]IP:[/dim] 192.168.1.1  [dim]NODE:[/dim] SG-HFT-01  [dim]TICK:[/dim] [bold cyan]{now}[/bold cyan][/align right]",
         style="green",
-        border_style="green"
+        border_style="color(24)" # Borda azul-escura/cinza sofisticada
     )
 
-def generate_missions():
+def generate_operations():
     table = Table.grid(padding=1)
     table.add_column(style="green")
     
-    table.add_row("[bold]Operation Backdoor[/bold]")
-    table.add_row("[dim]Injecting bypass hooks into MT5 Core Executable[/dim]")
-    table.add_row(f"Status: [bold red]CRITICAL OVERLOAD[/bold red]")
+    # Adiciona um hash gerado dinamicamente que muda a cada frame simulando chaves de segurança
+    current_hash = hashlib.md5(str(time.time()).encode()).hexdigest()[:16].upper()
+    
+    table.add_row("💎 [bold]QUANTUM HFT PIPELINE[/bold]")
+    table.add_row(f"[dim]Memory Tunneling Mode:[/dim] [bold red]CRITICAL THROTTLING[/bold red]")
+    table.add_row(f"[dim]Active Cipher Key:[/dim] [cyan]0x{current_hash}[/cyan]")
     table.add_row("")
-    table.add_row("[bold]Data Exfiltration[/bold]")
-    table.add_row("[dim]Streaming tick_history_2026.bin via proxy grid[/dim]")
-    table.add_row("Status: [bold green]Active HFT Loop[/bold green]")
+    table.add_row("📡 [bold]REALTIME TELEMETRY STREAM[/bold]")
+    table.add_row("[dim]Exfiltrating packet stream to target silo:[/dim] [bold green]tick_history_2026.bin[/bold green]")
     
-    return Panel(table, title="[bold green]Active Operations[/bold green]", border_style="green")
+    return Panel(table, title="⚙️ [bold color(46)]Core Engine Status[/bold color(46)]", border_style="color(28)")
 
-def generate_system_status():
-    table = Table(show_header=False, expand=True, border_style="green")
+def generate_hardware_matrix():
+    table = Table(show_header=False, expand=True, border_style="color(28)")
     table.add_column()
     table.add_column()
     
-    # Valores sempre altos refletindo o estresse do PC
-    cpu = f"[bold red]{cpu_history[-1]}%[/bold red]"
-    ram = f"[bold yellow]{(ram_history[-1] * 16 / 100):.2f} / 16.0 GB[/bold yellow]"
-    traffic = f"[bold red]{(traffic_history[-1] * 12.5 / 100):.1f} MB/s[/bold red]"
-    conn = f"[bold cyan]{random.randint(180, 245)} active[/bold cyan]"
+    # Sincroniza os valores textuais exatamente com a última posição do histórico do gráfico
+    cpu_val = cpu_history[-1]
+    ram_val = ram_history[-1]
+    traffic_val = traffic_history[-1]
     
-    table.add_row(Panel(f"[bold green]Core CPU Temp[/bold green]\n{cpu} [dim](CRIT)[/dim]", border_style="green"), 
-                  Panel(f"[bold green]RAM Commitment[/bold green]\n{ram}", border_style="green"))
-    table.add_row(Panel(f"[bold green]Network Outflow[/bold green]\n{traffic}", border_style="green"), 
-                  Panel(f"[bold green]Sockets Closed/s[/bold green]\n{conn}", border_style="green"))
+    cpu_style = "bold red" if cpu_val > 85 else "bold yellow"
+    traffic_style = "bold red" if traffic_val > 85 else "bold yellow"
     
-    return Panel(table, title="[bold green]System Hardware Matrix[/bold green]", border_style="green")
+    table.add_row(Panel(f"[dim]Processor Load[/dim]\n[{cpu_style}]{cpu_val}% [dim]CRIT_ZONE[/dim]", border_style="color(239)"), 
+                  Panel(f"[dim]RAM Allocation[/dim]\n[bold color(220)]{(ram_val * 16 / 100):.2f} / 16.0 GB[/bold color(220)]", border_style="color(239)"),)
+    table.add_row(Panel(f"[dim]BGP Link Pipeline[/dim]\n[{traffic_style}]{(traffic_val * 14.2 / 100):.1f} MB/s[ /]", border_style="color(239)"), 
+                  Panel(f"[dim]API Requests / Sec[/dim]\n[bold cyan]{random.randint(1420, 1890)} req/s[/bold cyan]", border_style="color(239)"))
+    
+    return Panel(table, title="📊 [bold color(46)]Hardware Telemetry Matrix[/bold color(46)]", border_style="color(28)")
 
-# NOVO BLOCO: Gráficos de Linha de CPU e Memória Estilo Grafana
-def generate_hardware_load_charts():
-    # Atualiza histórico simulando carga pesada (40% a 100%)
+# SEÇÃO DE MONITORAMENTO DE HARDWARE (ROLAGEM REAL ESTILO GRAFANA)
+def generate_hardware_charts():
+    # Desloca a fila para a esquerda e insere um dado novo na ponta direita
     cpu_history.pop(0)
-    cpu_history.append(random.randint(45, 100) if random.random() > 0.3 else random.randint(85, 100))
+    cpu_history.append(random.randint(50, 100) if random.random() > 0.2 else random.randint(88, 100))
     
     ram_history.pop(0)
-    ram_history.append(random.randint(60, 95))
+    ram_history.append(random.randint(70, 95))
     
-    cpu_chart = render_line_chart(cpu_history, is_overloaded=True)
-    ram_chart = render_line_chart(ram_history, is_overloaded=False)
+    cpu_chart = render_smooth_chart(cpu_history)
+    ram_chart = render_smooth_chart(ram_history)
     
-    content = f"[bold white]CPU Utilization Line (40% - 100%):[/bold white]\n{cpu_chart} [bold red]{cpu_history[-1]}%[/bold red]\n\n"
-    content += f"[bold white]Memory Allocation Line (60% - 100%):[/bold white]\n{ram_chart} [bold yellow]{ram_history[-1]}%[/bold yellow]"
+    content = f"📈 [bold white]CPU Utilization Line History[/bold white]\n{cpu_chart} [bold red]{cpu_history[-1]}%[/bold red]\n\n"
+    content += f"📟 [bold white]Memory Paging Buffer History[/bold white]\n{ram_chart} [bold yellow]{ram_history[-1]}%[/bold yellow]"
     
-    return Panel(content, title="[bold green]SYSTEM HARDWARE LOAD (HISTORICAL)[/bold green]", border_style="green")
+    return Panel(content, title="📈 [bold color(46)]Grafana Engine Analytics (Live Timeline)[/bold color(46)]", border_style="color(28)")
+
+# SEÇÃO DE TRÁFEGO DE REDE (ROLAGEM REAL COM DETECÇÃO DE QUEDA DE PACOTE)
+def generate_traffic_monitor():
+    traffic_history.pop(0)
+    # Gera picos violentos propositais batendo em 98%-100%
+    traffic_history.append(random.randint(60, 100) if random.random() > 0.15 else random.randint(95, 100))
+    
+    traffic_chart = render_smooth_chart(traffic_history)
+    alert_msg = "[bold blink red]⚠️ INTERNET PIPELINE SATURATED[/bold blink red]" if traffic_history[-1] > 92 else "[dim]Channel bandwidth stability: NOMINAL[/dim]"
+    
+    content = f"📉 [bold white]Network Outflow Throughput Variance[/bold white]\n{traffic_chart} [bold red]MAX OVERFLOW[/bold red]\n\n"
+    content += f"{alert_msg}"
+    
+    return Panel(content, title="🌐 [bold color(46)]B3/NYSE Dedicated Gateway Pipeline[/bold color(46)]", border_style="color(28)")
 
 def generate_health_monitor():
     chars = [" ", " ", "▂", "▃", "▄", "▅", "▆", "▇", "█"]
-    graph = ""
-    for _ in range(32):
-        val = random.randint(0, 8)
-        if val > 5:
-            graph += f"[bold red]{chars[val]}[/bold red]"  
-        else:
-            graph += f"[bold green]{chars[val]}[/bold green]"
-            
-    content = f"[dim]Anomalies on Liquidity Providers streams[/dim]\n\n{graph}\n"
-    content += "[dim]T-45       T-30       T-15       T-5        NOW[/dim]"
-    return Panel(Align.center(content), title="[bold green]MT5 API HEALTH MONITOR[/bold green]", border_style="green")
+    graph = "".join([f"[bold red]{random.choice(chars)}[/bold red]" if random.random() > 0.7 else f"[color(34)]{random.choice(chars)}[/color(34)]" for _ in range(45)])
+    
+    content = f"[dim]Asynchronous spread jitter mapping / execution queues[/dim]\n\n{graph}\n"
+    content += "[dim]T-60s      T-45s      T-30s      T-15s      NOW[/dim]"
+    return Panel(Align.center(content), title="📡 [bold color(46)]Asynchronous Socket Thread Jitter[/bold color(46)]", border_style="color(28)")
 
 def generate_network_indicators():
     progress = Progress(
         TextColumn("[bold green]{task.description}"),
-        BarColumn(bar_width=20, complete_style="red" if random.random() > 0.5 else "yellow", finished_style="bold red"),
+        BarColumn(bar_width=24, complete_style="color(196)" if random.random() > 0.4 else "color(214)", finished_style="bold red"),
         TextColumn("[cyan]{task.percentage:>3.0f}%"),
     )
-    progress.add_task("SOCKET FLOOD   ", total=100, completed=random.randint(90, 100))
-    progress.add_task("BGP PACKETS    ", total=100, completed=random.randint(75, 88))
-    progress.add_task("SSL PROXY LAYER", total=100, completed=random.randint(80, 95))
+    progress.add_task("SOCKET INJECTION ", total=100, completed=random.randint(92, 100))
+    progress.add_task("TCP FLOOD BUFFER ", total=100, completed=random.randint(80, 95))
+    progress.add_task("TLS HANDSHAKE   ", total=100, completed=random.randint(85, 99))
     
-    return Panel(Layout(progress), title="[bold green]BUFFER NETWORK PACKETS[/bold green]", border_style="green")
+    return Panel(Layout(progress), title="🛡️ [bold color(46)]HFT Proxy Packets Anti-Throttling[/bold color(46)]", border_style="color(28)")
 
 log_history = []
 def generate_activity_log():
     now = datetime.now().strftime("%H:%M:%S")
     events = [
-        ("[bold green]>>> ACCESS GRANTED: SYSTEM_KERNEL.SECURE <<<[/bold green]", "green"),
-        ("[bold red]>>> ACCESS DENIED: ROOT_BUFFER.ACCESS_DENIED <<<[/bold red]", "red"),
-        ("[bold red]>>> WARNING: NETWORK BANDWIDTH OVER 90% <<<[/bold red]", "red"),
-        ("[bold green]>>> ACCESS GRANTED: DATA_SILO.SECURE <<<[/bold green]", "green"),
-        ("[bold yellow]>>> WARNING: HIGH SLIPPAGE DETECTED IN ORDER INJECTOR <<<[/bold yellow]", "yellow"),
+        ("[bold color(46)]>>> SECURITY ACCESS GRANTED: KERNEL_RING_0.SYS <<<[/bold color(46)]", "green"),
+        ("[bold red]>>> ERR_CODE 429: SERVER BUFFER OVERFLOW DETECTED <<<[/bold red]", "red"),
+        ("[bold red]>>> CRITICAL: HIGH SLIPPAGE ON ORDER INJECTOR CORE <<<[/bold red]", "red"),
+        ("[bold color(46)]>>> INTEGRITY VERIFIED: DATA_SILO_RECONCILIATION_OK <<<[/bold color(46)]", "green"),
+        ("[bold yellow]>>> WARNING: PACKET DROP RATE REACHED 4.2% ON PROXY #04 <<<[/bold yellow]", "yellow"),
     ]
     if len(log_history) == 0 or random.random() > 0.4:
-        evt = random.choice(events)
-        log_history.append(f"[{now}] {evt}")
+        log_history.append(f"[{now}] {random.choice(events)}")
         if len(log_history) > 4:  
             log_history.pop(0)
             
-    return Panel("\n".join(log_history), title="[bold green]Critical Security Log[/bold green]", border_style="green")
-
-# NOVO BLOCO (Substituindo o Quick Access): Monitor de Tráfego de Rede com Sobrecarga
-def generate_traffic_monitor():
-    # Simula tráfego violento batendo nos 100%
-    traffic_history.pop(0)
-    traffic_history.append(random.randint(55, 100) if random.random() > 0.2 else random.randint(90, 100))
-    
-    traffic_chart = render_line_chart(traffic_history, is_overloaded=True)
-    
-    content = f"[bold white]Bandwidth Throughput Variance:[/bold white]\n{traffic_chart} [bold red]MAX CRIT[/bold red]\n"
-    content += f"[bold red]ALERT:[/bold red] Network pipeline saturated. [blink]DROP PACKETS ACTIVE[/blink]"
-    
-    return Panel(content, title="[bold green]TRAFFIC NETWORK MONITOR[/bold green]", border_style="green")
-
-def generate_rsi_stream():
-    chars = [" ", "▂", "▃", "▄", "▅", "▆", "▇", "█"]
-    stream = " ".join([f"[bold red]{random.choice(chars)}[/bold red]" if random.random() > 0.7 else f"[bold green]{random.choice(chars)}[/bold green]" for _ in range(16)])
-    return Panel(Align.center(f"{stream}\n[dim]T-0   T-5   T-10   T-55   T-100[/dim]"), title="[bold green]QUANTUM VOLATILITY STREAM[/bold green]", border_style="green")
+    return Panel("\n".join(log_history), title="🚨 [bold color(46)]Security Event Handler Interceptor[/bold color(46)]", border_style="color(28)")
 
 # =====================================================================
-# GERADOR DO FLUXO DO TERMINAL INFERIOR (EXPANDIDO)
+# GERADOR DO FLUXO DO TERMINAL INFERIOR (VERSÃO ANTIGA EXPANDIDA)
 # =====================================================================
 bottom_terminal_lines = []
 def generate_bottom_terminal():
-    if random.random() > 0.3:
+    if random.random() > 0.25:
         log = random.choice(OLD_TERMINAL_LOGS)
         if "[SUCCESS]" in log or "100%" in log:
-            line = f"[bold green]{log}[/bold green]"
-        elif "[WARN]" in log or "WARNING" in log:
-            line = f"[bold yellow]{log}[/bold yellow]"
+            line = f"[bold color(46)]{log}[/bold color(46)]"
+        elif "[WARN]" in log or "CRITICAL" in log or "WARNING" in log:
+            line = f"[bold color(202)]{log}[/bold color(202)]"
         elif "bash" in log:
-            line = f"[bold white]{log}[/bold white]"
+            line = f"[bold color(250)]{log}[/bold color(250)]"
         else:
-            line = f"[bold cyan]{log}[/bold cyan]"
+            line = f"[bold color(38)]{log}[/bold color(38)]"
         bottom_terminal_lines.append(line)
     else:
-        hex_data = " ".join([f"{random.randint(0, 255):02X}" for _ in range(14)])
-        line = f"[green]MEM_DUMP [0x{random.randint(1000, 9999)}FFF] -> {hex_data} | [bold red]OVERFLOW_WARN[/bold red][/green]"
+        # Gera Dumps hexadecimais complexos e realistas
+        hex_data = " ".join([f"{random.randint(0, 255):02X}" for _ in range(16)])
+        addr = f"0x{random.randint(0x1000, 0x9FFF):04X}8F"
+        line = f"[color(240)]MEM_DUMP[/color(240)] [bold color(34)]{addr}[/bold color(34)] -> {hex_data} | [bold red]EIP_OVERFLOW[/bold red]"
         bottom_terminal_lines.append(line)
         
-    # Limite aumentado para 12 linhas aproveitando o espaço do terminal expandido
-    if len(bottom_terminal_lines) > 12:
+    if len(bottom_terminal_lines) > 13: # Ajustado milimetricamente para o tamanho do painel expandido
         bottom_terminal_lines.pop(0)
         
-    return Panel("\n".join(bottom_terminal_lines), title="[bold green]MKS_ULTIMATE_FRAMEWORK v1.0 - CORES LIVE DOWNSTREAM[/bold green]", border_style="green")
+    return Panel("\n".join(bottom_terminal_lines), title="💻 [bold color(46)]MKS_ULTIMATE_CORE_DOWNSTREAM_DEBUGGER v1.0.4[/bold color(46)]", border_style="color(24)")
 
 # =====================================================================
-# ESTRUTURAÇÃO DO LAYOUT (PROPORÇÕES ATUALIZADAS)
+# ESTRUTURAÇÃO DO LAYOUT EM PROPORÇÕES CINEMATOGRÁFICAS
 # =====================================================================
 layout = Layout()
 layout.split(
     Layout(name="header", size=3),
-    Layout(name="body", ratio=3),            # Dashboard Superior
-    Layout(name="old_terminal", ratio=2)     # TERMINAL INFERIOR EXPANDIDO (Ganhou mais espaço de tela)
+    Layout(name="body", ratio=3),            # Dashboard Superior Estilo Grafana
+    Layout(name="old_terminal", ratio=2)     # Terminal Inferior Gigante de Logs Brutos
 )
 
 layout["body"].split_row(
@@ -252,7 +247,7 @@ layout["body"].split_row(
 
 layout["left_col"].split(
     Layout(name="missions", ratio=2),
-    Layout(name="hardware_charts", ratio=3), # Inserção do painel duplo de CPU/RAM Grafana
+    Layout(name="hardware_charts", ratio=3), # Linhas de processamento
     Layout(name="activity", ratio=2),
     Layout(name="rsi", size=4)
 )
@@ -260,28 +255,28 @@ layout["left_col"].split(
 layout["right_col"].split(
     Layout(name="status", ratio=3),
     Layout(name="indicators", ratio=2),
-    Layout(name="traffic", ratio=2)          # Inserção do Monitor de Tráfego no lugar do Quick Access
+    Layout(name="traffic", ratio=2)          # Tráfego saturado
 )
 
 # =====================================================================
-# LOOP DE EXECUÇÃO
+# LOOP DE EXECUÇÃO EM ALTA VELOCIDADE (SENSATION ENGINE)
 # =====================================================================
 if __name__ == "__main__":
-    with Live(layout, refresh_per_second=5, screen=True) as live:
+    with Live(layout, refresh_per_second=6, screen=True) as live:
         try:
             while True:
                 layout["header"].update(get_header())
-                layout["missions"].update(generate_missions())
-                layout["hardware_charts"].update(generate_hardware_load_charts())
+                layout["missions"].update(generate_operations())
+                layout["hardware_charts"].update(generate_hardware_charts())
                 layout["activity"].update(generate_activity_log())
-                layout["rsi"].update(generate_rsi_stream())
+                layout["rsi"].update(generate_health_monitor())
                 
-                layout["status"].update(generate_system_status())
+                layout["status"].update(generate_hardware_matrix())
                 layout["indicators"].update(generate_network_indicators())
                 layout["traffic"].update(generate_traffic_monitor())
                 
                 layout["old_terminal"].update(generate_bottom_terminal())
                 
-                time.sleep(0.15)
+                time.sleep(0.12) # Ritmo frenético de trading quantitativo de alta frequência
         except KeyboardInterrupt:
             pass
