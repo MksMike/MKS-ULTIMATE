@@ -16,6 +16,7 @@ O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/) e es
 - `docs/ARCHITECTURE.md` §3 — nota de esclarecimento da convenção 7 da ADR-004: out-params por referência não-const são permitidos.
 - `docs/ARCHITECTURE.md` §3 — ADR-009 aceita: modelo de erro — tipo estruturado retornável, separado do logging, com localização automática via macro e códigos de erro particionados por faixa de módulo.
 - `docs/ARCHITECTURE.md` §3 — ADR-010 aceita: arquitetura de parametrização do RenkoBuilder (geometria como valor via `MksRenkoGeometry`, tamanho via interface `IBrickSizer`) e escolha do mid como preço-condutor do motor.
+- `MQL5/Include/MKS-ULTIMATE/Core/Types/Error.mqh` — tipo de erro `MksError` (estruturado, retornável, separado do logging), enum `ENUM_MKS_ERROR_CODE` particionado por faixa de módulo, e a macro `MKS_SET_ERROR` de captura automática de localização. Implementa a ADR-009.
 
 ### Changed
 - `docs/Projeto.md` §2 — causa-raiz do V5 reescrita: de "divergência silenciosa entre backtest e live" (sintoma) para a causa estrutural de quatro eixos.
