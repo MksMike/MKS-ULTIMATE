@@ -1,0 +1,18 @@
+# Normalização de fim de linha — fixa a convenção por tipo de arquivo,
+# independente da config de core.autocrlf de cada máquina.
+
+# Padrão: o Git decide texto vs binário e normaliza para LF no repositório.
+* text=auto
+
+# Código MQL5 — ecossistema Windows/MetaEditor. CRLF no working tree.
+*.mq5  text eol=crlf
+*.mqh  text eol=crlf
+
+# Arquivos de tooling e documentação — LF.
+*.md       text eol=lf
+*.json     text eol=lf
+*.gitignore text eol=lf
+*.gitattributes text eol=lf
+
+# Binários — sem normalização.
+*.ex5 binary
