@@ -33,6 +33,7 @@ venv/
 *.tmp
 *~
 .DS_Store
+_compile_check.mq5
 
 # Secrets
 .env

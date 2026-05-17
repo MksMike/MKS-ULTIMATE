@@ -12,6 +12,7 @@ O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/) e es
 - `MQL5/Include/MKS-ULTIMATE/Core/Types/` — quatro tipos primitivos do core, autocontidos: `MksTick` (com `seq` como fonte de verdade do determinismo), `MksBrick` (com `triggerPrice`, `triggerTickId` e `Overshoot()` — resposta direta ao eixo 1 do V5-POSTMORTEM), `MksOrderRequest` e `MksExecutionResult` (preço real de preenchimento, não fictício).
 - `docs/ARCHITECTURE.md` §5 — Convenções de nomenclatura registradas: sistema de prefixos `I` (interfaces), `CMks` (classes com estado), `Mks` (structs/tipos primitivos POD) e `ENUM_MKS_` (enums internos).
 - `MQL5/Include/MKS-ULTIMATE/Core/Version.mqh` — versão única do framework em defines SemVer (`MAJOR`/`MINOR`/`PATCH`/`STR`), conforme ADR-001.
+- `MQL5/Include/MKS-ULTIMATE/Core/Interfaces/` — cinco interfaces do core (`IBroker`, `ITickSource`, `IClock`, `ILogger`, `IRenkoSink`), classes abstratas com métodos virtuais puros conforme ADR-004.
 
 ### Changed
 - `docs/Projeto.md` §2 — causa-raiz do V5 reescrita: de "divergência silenciosa entre backtest e live" (sintoma) para a causa estrutural de quatro eixos.
