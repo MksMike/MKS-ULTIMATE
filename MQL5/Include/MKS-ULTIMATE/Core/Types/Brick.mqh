@@ -3,7 +3,7 @@
 //| @project        : MKS-ULTIMATE
 //| @module         : Core / Types
 //| @responsibility : Estrutura MksBrick — brick Renko fechado, carregando
-//|                   triggerPrice/triggerTickId/overshoot para paridade.
+//|                   triggerPrice e triggerTickId para paridade.
 //| @depends_on     : Nenhuma (autocontido)
 //| @install_path   : MQL5/Include/MKS-ULTIMATE/Core/Types/Brick.mqh
 //+------------------------------------------------------------------+
