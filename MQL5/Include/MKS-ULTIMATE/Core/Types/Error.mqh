@@ -22,6 +22,8 @@ enum ENUM_MKS_ERROR_CODE
    MKS_ERR_RENKO_INVALID_GEOMETRY = 100,   // triplo (PO,PRO,revSizeRatio) inválido
    MKS_ERR_RENKO_INVALID_BRICK_SIZE = 101, // tamanho de brick inválido (<= 0)
    MKS_ERR_RENKO_THRESHOLD_LIMIT_EXCEEDED = 102, // cruzamento acima do limiar K (ADR-011)
+   MKS_ERR_RENKO_INVALID_TICK = 103,        // tick reprovado por IsValid() (ADR-006)
+   MKS_ERR_RENKO_TICK_STREAM_CORRUPT = 104, // L ticks inválidos consecutivos (ADR-006)
 
    //--- Broker 200–299, Trade 300–399, Risk 400–499,
    //    StressLab 500–599, Log 600–699, Testing 700–799 — ver ADR-009
