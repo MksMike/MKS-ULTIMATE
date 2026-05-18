@@ -19,6 +19,7 @@
 #include <MKS-ULTIMATE/Core/Types/RenkoGeometry.mqh>
 #include <MKS-ULTIMATE/Core/Types/Tick.mqh>
 #include <MKS-ULTIMATE/Core/Types/Brick.mqh>
+#include <MKS-ULTIMATE/Core/Types/FormingBrick.mqh>
 #include <MKS-ULTIMATE/Core/Types/Error.mqh>
 
 // Motor de construção de bricks Renko (ADR-010). Consome ticks via
@@ -266,6 +267,22 @@ public:
       if(mid > m_formingHigh) m_formingHigh = mid;
       if(mid < m_formingLow)  m_formingLow  = mid;
       return true;
+   }
+
+   // Snapshot do brick em formação (ADR-010 §6). Não emite evento;
+   // chamador consulta sob demanda. Antes do primeiro tick válido,
+   // o snapshot retorna com hasData = false.
+   MksFormingBrick GetFormingBrick() const
+   {
+      MksFormingBrick fb;
+      if(!m_initialized)
+         return fb;
+      fb.open = m_lastClose;
+      fb.high = m_formingHigh;
+      fb.low = m_formingLow;
+      fb.direction = m_lastDirection;
+      fb.hasData = true;
+      return fb;
    }
 };
 

@@ -26,7 +26,7 @@ struct MksBrick
 
    ENUM_MKS_BRICK_DIR direction;
 
-   double triggerPrice;   // preço real do tick que disparou o fechamento
+   double triggerPrice;   // mid do tick disparador (ADR-010 §5)
    ulong  triggerTickId;  // seq do MksTick disparador
 
    long   closeTimeMsc;   // timeMsc do tick disparador
