@@ -21,6 +21,7 @@ enum ENUM_MKS_ERROR_CODE
    //--- RenkoBuilder: faixa 100–199 ---
    MKS_ERR_RENKO_INVALID_GEOMETRY = 100,   // triplo (PO,PRO,revSizeRatio) inválido
    MKS_ERR_RENKO_INVALID_BRICK_SIZE = 101, // tamanho de brick inválido (<= 0)
+   MKS_ERR_RENKO_THRESHOLD_LIMIT_EXCEEDED = 102, // cruzamento acima do limiar K (ADR-011)
 
    //--- Broker 200–299, Trade 300–399, Risk 400–499,
    //    StressLab 500–599, Log 600–699, Testing 700–799 — ver ADR-009

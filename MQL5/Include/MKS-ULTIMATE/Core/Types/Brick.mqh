@@ -31,6 +31,8 @@ struct MksBrick
 
    long   closeTimeMsc;   // timeMsc do tick disparador
    long   volume;         // volume agregado dos ticks; 0 = candidato a phantom (ADR-006)
+   int    thresholdsCrossed; // nº de thresholds cruzados; 1 = normal,
+                             // >1 = brick multi-threshold (ADR-011)
 
    MksBrick()
    {
@@ -40,6 +42,7 @@ struct MksBrick
       triggerTickId = 0;
       closeTimeMsc = 0;
       volume = 0;
+      thresholdsCrossed = 1;   // um brick cruza no mínimo um threshold
    }
 
    bool   IsBull()    const { return direction == MKS_BRICK_BULL; }
