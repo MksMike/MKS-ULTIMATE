@@ -384,6 +384,59 @@ A ADR-006 trata da validade do tick na entrada do `CMksRenkoBuilder`, não de vo
 
 ---
 
+### ADR-012: Fonte de dados histórica de ticks e contrato de integridade do feed
+
+**Data:** 2026-05-18
+**Status:** Proposta
+
+**Contexto:**
+A implementação de backtest da `ITickSource` lê ticks de uma fonte histórica. A `ITickSource` já garante o caminho de código único — em live lê do broker, em backtest lê de arquivo — e essa decisão não é reaberta aqui. O que falta decidir é o que alimenta a implementação de backtest: de onde vêm os ticks, de qual broker, em que formato são gravados, e qual o contrato de integridade entre o que se grava e o que se consome.
+
+A ADR-006, na sua última cláusula de Consequências, registrou esta dívida explicitamente: a paridade da guarda de validade de tick só vale se a fonte histórica e o feed live entregarem ticks crus, sem pré-filtragem; se o arquivo histórico for gravado já sem ticks inválidos, o builder em backtest nunca exercita a guarda que o builder em live exercita. A ADR-006 declarou isso "decisão de Renko engine ainda em aberto, não desta ADR". Esta ADR-012 quita essa dívida.
+
+A decisão tem duas faces que não podem ser colapsadas. **Aquisição** — como os ticks são obtidos e gravados — é engenharia de dados. **Contrato de integridade** — o que a fonte garante sobre o que entrega — é arquitetura, e é o que toca a paridade. Decidir "qual broker" sem decidir o contrato resolve a face fácil e deixa a perigosa implícita. O contrato é fixado primeiro; a aquisição se conforma a ele.
+
+O risco a neutralizar não é múltiplos caminhos de código — a `ITickSource` já o eliminou. É múltiplas fontes de proveniências diferentes alimentando o mesmo caminho: divergência reintroduzida pelos dados em vez de pelo código. Foi por uma porta análoga — `CopyRates(M1)` sintetizando OHLC contra `CopyTicksRange` lendo ticks reais — que o eixo 2 do colapso do V5 entrou.
+
+**Decisão:**
+A fonte de dados histórica de ticks do MKS-ULTIMATE assenta sobre um contrato de integridade explícito, e a aquisição se conforma a ele.
+
+1. **O arquivo histórico grava ticks crus.** O arquivo contém os ticks exatamente como o broker os entregou, inclusive os inválidos pelo critério da ADR-006 (`bid <= 0`, `ask <= 0`, `ask < bid`). A gravação não filtra. A limpeza, quando houver, é responsabilidade do consumidor — o `CMksRenkoBuilder` aplica a guarda `IsValid()` da ADR-006 — nunca da gravação. É o que faz o builder em backtest exercitar a mesma guarda que exercita em live: os ticks inválidos chegam ao builder pela mesma porta nos dois modos. Gravar cru é também irreversível-seguro — um tick descartado na captura não se recupera; um tick gravado sempre pode ser filtrado depois.
+
+2. **A fonte é broker-locked, com paridade backtest/live condicional.** O framework permite arquivos históricos de brokers diferentes. A paridade backtest/live, porém, só é garantida quando o broker da captura histórica é o mesmo da conta live: o bid/ask e o volume de tick do XAUUSD divergem entre brokers, e um backtest sobre dados de outro broker produz uma sequência de bricks que não corresponde à realidade da conta de execução. Para que essa condição não seja uma garantia que ninguém verifica — a anatomia do eixo 2 do V5 —, ela é acoplada a um mecanismo de proveniência (cláusula 3).
+
+3. **Todo arquivo histórico carrega um header de proveniência.** O header registra, no mínimo: identificador do broker, símbolo, range temporal coberto e versão do formato binário. Um arquivo sem header de proveniência válido não é consumível — a implementação de backtest da `ITickSource` recusa abri-lo. Quando o backtest roda, a proveniência do arquivo é comparável contra a conta corrente; broker do arquivo diferente do broker da conta não é erro fatal — a cláusula 2 permite a divergência — mas é reportado, não silenciado. A proveniência aparece no rastro de auditoria do backtest, de modo que um resultado possa declarar de qual broker saíram seus dados.
+
+4. **Os flags de tick são preservados.** O MT5 entrega cada tick com flags (`TICK_FLAG_BID`, `TICK_FLAG_ASK`, `TICK_FLAG_LAST`, `TICK_FLAG_VOLUME`) que dizem qual faceta mudou naquele tick. Essa informação é gravada no arquivo e preservada no `MksTick`. Descartá-la é destruir dado de auditoria que não se recupera. Consequência: o `MksTick` ganha um campo de flags — alteração de tipo do core tratada na seção Consequências.
+
+5. **O formato de armazenamento é binário próprio, com header versionado.** Layout de campos fixo, larguras e ordem de bytes definidas pelo projeto. O determinismo byte-a-byte da leitura — mesmo arquivo produz o mesmo stream de `MksTick`, incluindo `seq` — é uma propriedade do código do próprio framework, não de terceiros. O header inclui um número de versão do formato desde a primeira versão, para que uma futura mudança de layout não quebre arquivos antigos em silêncio.
+
+6. **Captura e consumo são artefatos separados.** A captura de ticks históricos — que toca a rede e o broker — é um script à parte, que escreve o arquivo. O backtest apenas lê o arquivo. São dois artefatos distintos, não dois modos de um mesmo binário. Isso garante a reprodutibilidade offline exigida pela Renko engine: o backtest roda sem conexão ao broker, e o caminho de backtest não tem como tocar a rede.
+
+**Alternativas consideradas:**
+- **Limpar os ticks na gravação (arquivo histórico sem ticks inválidos):** rejeitada. O builder em backtest nunca exercitaria a guarda `IsValid()` da ADR-006 que exercita em live — a paridade da guarda viraria ficção. O único ganho seria economia de espaço, irrelevante para o volume de ticks inválidos do XAUUSD. Há ainda o risco de a limpeza confundir tick malformado com tick legitimamente parcial (só `TICK_FLAG_BID` atualizado), descartando dado bom.
+- **Broker-locked com paridade incondicional (broker de captura obrigatoriamente igual ao da conta live):** rejeitada como restrição dura. Amarraria o framework a um único broker para sempre — uma troca de broker por razão comercial invalidaria todo o corpus histórico. A cláusula 2 mantém a flexibilidade e move o custo para a disciplina de verificar a condição (cláusula 3), em vez de proibir a divergência.
+- **Permitir múltiplos brokers sem mecanismo de proveniência (apenas uma nota declarando a condição):** rejeitada. Uma garantia condicional cuja condição ninguém verifica degrada para nenhuma garantia — foi assim que o eixo 2 do V5 se instalou. O header de proveniência e a comparação em runtime são o que distingue esta opção de uma omissão.
+- **Formato CSV:** rejeitada. Ponto flutuante em texto não tem round-trip determinístico garantido sem cuidado de precisão; parsing é lento; arquivo é grande. A única vantagem — legibilidade humana — não compensa o risco ao determinismo byte-a-byte.
+- **Formato `.tks` nativo do MT5:** rejeitada. É um formato cuja leitura depende de implementação fechada de terceiro. Se o `.tks` alimenta o builder, código fechado entra no caminho de construção de brick — violação direta do princípio invariante 5 da §1 ("zero dependência de código fechado para construção de bricks Renko").
+- **Descartar os flags de tick:** rejeitada. Os flags são informação de auditoria — qual faceta do preço disparou um brick — que não se reconstrói depois. O custo de preservá-los (um campo no `MksTick`) é pequeno e assumido.
+- **Captura e consumo no mesmo binário:** rejeitada. Abriria caminho para o backtest tocar a rede, comprometendo a reprodutibilidade offline. A separação física é a garantia.
+
+**Consequências:**
+- O contrato de integridade da fonte histórica fica fixado: ticks crus, broker-locked, proveniência rastreável. A `ITickSource` de backtest e o script de captura nascem sob esse contrato.
+- **Emenda de tipo do core:** o `MksTick` (`Core/Types/Tick.mqh`, Fase 1) ganha um campo para os flags de tick (bitmask dos `TICK_FLAG_*`). É alteração de um tipo do core já aceito — força recompilação de todo arquivo que o inclui. A alteração do `Tick.mqh` é trabalho à parte, em ciclo próprio, feito após o aceite desta ADR — não antes e não no mesmo commit — seguindo o padrão da ADR-006 (comentários "phantom") e da ADR-011 (campo `thresholdsCrossed`).
+- **Dívida de implementação assumida:** o mecanismo de comparação de proveniência em runtime (cláusula 3) toca a implementação da `ITickSource` de backtest e precisa conhecer o broker da conta corrente, o que cruza com a camada de Broker (eixo 3). Esta ADR fixa a obrigação — header obrigatório, comparação reportada, proveniência no rastro de auditoria — mas a implementação do mecanismo é trabalho posterior, registrado aqui como dívida com dono definido: a classe de `ITickSource` de backtest, quando for escrita.
+- O `enum ENUM_MKS_ERROR_CODE` (`Error.mqh`) precisará de ao menos um código novo — para arquivo histórico sem header de proveniência válido, e possivelmente para incompatibilidade de versão de formato. A faixa RenkoBuilder vai até 104; a fonte de dados é outro módulo, então o código pertence provavelmente a outra faixa. O número e a faixa exatos são definidos quando o `ITickSource` de backtest e o serializador forem implementados — esta ADR registra a necessidade sem fixar o número no vazio.
+- O serializador/desserializador binário é código novo a manter, e exige teste golden-file próprio: escrever, ler e reescrever produz bytes idênticos.
+- Trabalho de aquisição decorrente, fora do escopo desta ADR: definir a origem concreta dos ticks (qual broker para a captura inicial), a estratégia de chunking por volume de dados, e o uso de `CopyTicksRange` com o flag de cópia que preserva todos os ticks. São itens de engenharia de dados, executados sob o contrato que esta ADR fixa.
+
+**Fronteiras:**
+- Não é a guarda de validade do tick (ADR-006, aceita) — é a fonte que a ADR-006 pressupõe.
+- Não é o desenho do `CMksRenkoBuilder` (ADR-010, ADR-011).
+- Não é o módulo de simulação de backtesting — spread, slippage, comissão — que pertence à camada de Broker, eixo 3, decisão futura.
+
+---
+
 ## 4. Decisões pendentes
 
 Pontos que precisam virar ADR assim que forem enfrentados:
