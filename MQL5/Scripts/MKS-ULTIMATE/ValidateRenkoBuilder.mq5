@@ -16,6 +16,7 @@
 #include <MKS-ULTIMATE/Core/Types/RenkoGeometry.mqh>
 #include <MKS-ULTIMATE/Core/Types/Tick.mqh>
 #include <MKS-ULTIMATE/Core/Types/Brick.mqh>
+#include <MKS-ULTIMATE/Core/Types/FormingBrick.mqh>
 #include <MKS-ULTIMATE/Core/Types/Error.mqh>
 #include <MKS-ULTIMATE/Core/Interfaces/IRenkoSink.mqh>
 
@@ -80,6 +81,34 @@ void RunScenario(const string title, MksTick &ticks[])
 }
 
 //+------------------------------------------------------------------+
+//| Cenário de overshoot: 1º tick inicializa, 2º dispara brick e o   |
+//| forming brick é inspecionado via GetFormingBrick().              |
+//+------------------------------------------------------------------+
+void RunOvershootScenario(const string title, double initMid, double triggerMid)
+{
+   Print("");
+   Print("=== ", title, " ===");
+
+   CInspectorSink sink;
+   CMksFixedBrickSizer sizer(100.0);
+   MksRenkoGeometry geom = MksGeometryMedian();
+   CMksRenkoBuilder builder(geom, GetPointer(sizer), GetPointer(sink));
+
+   MksError err;
+   MksTick t1 = MakeTickByMid(initMid, 1, 1000);
+   builder.IngestTick(t1, err);
+
+   MksTick t2 = MakeTickByMid(triggerMid, 2, 2000);
+   builder.IngestTick(t2, err);
+
+   MksFormingBrick fb = builder.GetFormingBrick();
+   PrintFormat("FORMING open=%.2f high=%.2f low=%.2f direction=%s hasData=%s",
+               fb.open, fb.high, fb.low,
+               (fb.direction == MKS_BRICK_BULL ? "BULL" : "BEAR"),
+               (fb.hasData ? "true" : "false"));
+}
+
+//+------------------------------------------------------------------+
 void OnStart()
 {
    //----- Cenário 1: single-threshold continuação BULL
@@ -116,6 +145,18 @@ void OnStart()
       s4[3+i] = MakeTick(2000.0 + i, 1999.0 + i, (ulong)(4+i), (long)(4000+i*1000));
    s4[13] = MakeTickByMid(2100.0, 14, 14000);               // válido pós-corrupt → ainda 104
    RunScenario("CENÁRIO 4 — guarda de tick inválido (103 isolado, 104 stream corrupt)", s4);
+
+   //----- Cenário 5: overshoot single-threshold (mid salta 68 sobre threshold em 50)
+   // Esperado: BRICK BULL open=2000 close=2050 M=1 trigger=2068 overshoot=18
+   //           FORMING open=2050 high=2068 low=2050 direction=BULL hasData=true
+   RunOvershootScenario("CENÁRIO 5 — overshoot single-threshold (esperado: brick close=2050 overshoot=18; forming open=2050 high=2068 low=2050)",
+                        2000.0, 2068.0);
+
+   //----- Cenário 6: overshoot multi-threshold (mid salta 168 → M=3, overshoot além do 3º threshold)
+   // Esperado: BRICK BULL open=2000 close=2150 M=3 trigger=2168 overshoot=18
+   //           FORMING open=2150 high=2168 low=2150 direction=BULL hasData=true
+   RunOvershootScenario("CENÁRIO 6 — overshoot multi-threshold (esperado: brick close=2150 M=3 overshoot=18; forming open=2150 high=2168 low=2150)",
+                        2000.0, 2168.0);
 
    Print("");
    Print("=== validação concluída ===");
