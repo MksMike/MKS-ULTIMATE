@@ -338,12 +338,57 @@ Um tick que cruza mais de um threshold de brick produz um único `MksBrick` hone
 
 ---
 
+### ADR-006: Tratamento de tick inválido no RenkoBuilder
+
+**Data:** 2026-05-18
+**Status:** Proposta
+
+**Contexto:**
+O `ROADMAP.md` da Fase 2 lista "Volume zero (phantom candidate)" como caso de tratamento explícito do `CMksRenkoBuilder`, e a §4 deste documento reservou a ADR-006 para "phantom bars — ignorar, marcar como suspeito, ou interromper". Encarado o caso, a formulação herdada está errada e a primeira tarefa da ADR é corrigi-la. O termo "phantom bar" do glossário do `Projeto.md` solda três coisas distintas sob um rótulo só: volume de tick igual a zero (um metadado), tick de preço malformado (um perigo real) e gap de feed (concern da ADR-008). A ADR-011, já aceita, eliminou o "phantom *brick*" — brick sem tick de gatilho — e reservou à ADR-006 o "phantom *tick*". Esta ADR resolve o que sobra, e o que sobra não é volume.
+
+Volume não dirige o motor: a ADR-010 fixou o mid `(bid + ask) / 2` como preço-condutor. Um tick com `volume == 0` mas com bid e ask válidos tem um mid válido, move preço e pode fechar brick como qualquer outro. Volume zero também não é sinal confiável de anomalia: para XAUUSD o volume de tick é notoriamente inconsistente entre brokers — há brokers que jamais populam volume. Um critério de anomalia baseado em `volume == 0` classificaria, nesses brokers, todo tick como suspeito; um critério que dispara sempre não informa nada, e ainda deixaria uma propriedade dependente-de-broker decidir a estrutura do Renko — o eixo 2 do colapso do V5.
+
+O perigo real é outro e é ortogonal ao volume: um tick de preço malformado — `bid <= 0`, `ask <= 0` ou `ask < bid` — produz um mid lixo que desloca o motor para um nível de preço irreal. Esse tick pode ter qualquer volume. O tipo `MksTick` da Fase 1 já distingue exatamente esse caso, no método `IsValid()` (`bid > 0 && ask > 0 && ask >= bid`), que deliberadamente não olha volume. Falta a decisão arquitetural de quem aplica essa guarda e o que fazer com o tick reprovado — decisão que, sem ADR, ficaria tácita no código do builder, o tipo de decisão implícita que o projeto recusa.
+
+**Decisão:**
+A ADR-006 trata da validade do tick na entrada do `CMksRenkoBuilder`, não de volume. O escopo nominal herdado ("volume zero") é corrigido: volume zero não é anomalia.
+
+1. **Volume zero não é critério de validade.** Um `MksTick` com `volume == 0` e preço válido é um tick legítimo. Flui pelo caminho único — forma e fecha brick — como qualquer outro. O builder não inspeciona `volume` para decidir se processa um tick. O campo `volume` permanece sendo metadado agregado, sem semântica de suspeita.
+
+2. **A guarda de validade vive no builder.** A regra do que é um tick processável pertence a quem processa o tick. Pôr o filtro em cada implementação de `ITickSource` (live, arquivo, mock) faria cada uma reimplementar a regra, e implementações divergem — o eixo 2 do V5 em miniatura. O `CMksRenkoBuilder` aplica a guarda na ingestão de cada tick, num só lugar, no caminho único de backtest e live.
+
+3. **O critério de validade é `MksTick::IsValid()`.** Um tick é inválido quando `bid <= 0`, `ask <= 0` ou `ask < bid` — exatamente o que `IsValid()` já define. A ADR-006 promove esse método a guarda de entrada do builder. Volume não entra no predicado.
+
+4. **Tick inválido é descartado individualmente e reportado.** O builder não processa um tick inválido — não atualiza estado, não forma brick a partir dele — e devolve um `MksError` (modelo da ADR-009), com um código novo na faixa RenkoBuilder: `MKS_ERR_RENKO_INVALID_TICK`, proposto como código 103. Descarta-se o tick, não se interrompe o builder: um tick podre isolado no meio de um feed sadio não deve derrubar a sessão. O descarte é determinístico — mesmo tick inválido, mesmo descarte, mesmo erro reportado.
+
+5. **Guarda de corrupção graduada.** A resposta a um tick inválido é proporcional à magnitude, como o limiar K da ADR-011 é para o cruzamento multi-threshold. Um tick inválido isolado é ruído e é descartado (cláusula 4). Uma sequência de N ticks inválidos consecutivos não é ruído — é sinal de feed quebrado, e continuar seria fingir saúde. Atingido um limiar L de ticks inválidos consecutivos, o builder para de processar e devolve um `MksError` distinto — `MKS_ERR_RENKO_TICK_STREAM_CORRUPT`, proposto como código 104. O valor default de L e a forma de configurá-lo são decisão de implementação do `CMksRenkoBuilder`, registrada quando a classe for escrita; esta ADR fixa que a guarda existe e que a resposta acima do limiar é interrupção reportada, não emissão.
+
+6. **O que o EA faz com o erro não é do builder.** O builder reporta — tick descartado (103) ou feed corrupto (104). Continuar, parar ou notificar o operador pertence à camada de EA e ao Protocolo 7. Esta ADR garante que o builder reporta de forma determinística, nada além.
+
+**Alternativas consideradas:**
+- **Tratar `volume == 0` como o critério de phantom (a formulação herdada da §4 e do ROADMAP):** rejeitada. Volume zero é metadado, não anomalia; é comportamento normal do feed para XAUUSD em muitos brokers. Um critério baseado nele classificaria todo tick como suspeito nesses brokers — uma marca que dispara sempre não informa nada — e deixaria uma propriedade não-confiável e dependente-de-broker governar a estrutura do Renko, reintroduzindo o eixo 2 do V5. A pergunta da §4 estava mal formulada; esta ADR a corrige.
+- **Ignorar o tick de volume zero (não passá-lo ao motor):** rejeitada. Um tick de volume zero com preço válido carrega movimento de preço real; descartá-lo joga fora estrutura. E como o volume de tick difere entre brokers, o mesmo trecho de mercado gravado por dois brokers produziria sequências de bricks diferentes — a divergência que o eixo 2 do V5-POSTMORTEM proíbe.
+- **Marcar o brick formado por ticks de volume zero como suspeito:** rejeitada. A marca herdaria a premissa ruim — num broker sem volume, 100% dos bricks seriam marcados, e a marca vira ruído. Marca só com valor se o critério for preço malformado; e aí não é sobre volume, e o lugar da guarda é o tick na entrada, não o brick na saída.
+- **Filtrar o tick inválido no `ITickSource` em vez do builder:** rejeitada. Cada implementação de `ITickSource` reimplementaria a regra e elas divergiriam — múltiplos caminhos para uma mesma decisão, o eixo 2 do V5. A regra de validade pertence a quem consome o tick.
+- **Interromper o builder a cada tick inválido:** rejeitada. Desproporcional: um tick corrompido isolado no meio de um feed sadio não justifica derrubar a sessão. A interrupção fica reservada ao sinal de feed genuinamente quebrado — o limiar L da cláusula 5.
+- **Descartar ticks inválidos sem nenhuma guarda de corrupção:** rejeitada. Sem o limiar L, um feed inteiramente quebrado seria silenciosamente engolido tick a tick, sem brick e sem alarme — o builder fingiria operar. A resposta tem de ser graduada: descarte para o tick isolado, interrupção para a sequência.
+
+**Consequências:**
+- O `CMksRenkoBuilder` (Fase 2) nasce com a guarda `IsValid()` na ingestão de tick. Nenhuma estrutura de dados nova é criada por esta ADR.
+- O `enum ENUM_MKS_ERROR_CODE` (`Error.mqh`) ganha dois códigos na faixa RenkoBuilder, na sequência de `MKS_ERR_RENKO_INVALID_GEOMETRY` (100), `MKS_ERR_RENKO_INVALID_BRICK_SIZE` (101) e `MKS_ERR_RENKO_THRESHOLD_LIMIT_EXCEEDED` (102, proposto pela ADR-011): `MKS_ERR_RENKO_INVALID_TICK` (103) e `MKS_ERR_RENKO_TICK_STREAM_CORRUPT` (104).
+- Um parâmetro L — limiar de ticks inválidos consecutivos — entra na configuração do `CMksRenkoBuilder`; default e forma de configuração ficam para a implementação da classe.
+- Os comentários "phantom" da Fase 1 ficam factualmente incorretos com o aceite desta ADR e devem ser corrigidos: em `Brick.mqh`, o campo `volume` ("0 = candidato a phantom (ADR-006)"); em `Tick.mqh`, o campo `volume` ("necessário p/ detecção de phantom (ADR-006)"); no `Projeto.md` §8, a entrada de glossário "Phantom bar". A correção destes arquivos é trabalho à parte, em ciclo próprio, feita após o aceite desta ADR — não antes e não no mesmo commit.
+- Fica fora do escopo desta ADR a detecção de outlier de preço — um tick com bid e ask ambos positivos mas com mid implausível (spike de magnitude irreal num tick só). `IsValid()` não cobre esse caso e esta ADR não o resolve. É concern distinto; não recebe número de ADR aqui — registrar ADR no vazio é recusado pela §4 — e será enfrentado se e quando se mostrar necessário.
+- A paridade backtest/live desta regra depende de a fonte histórica de ticks e o feed live entregarem ticks crus, sem pré-filtragem. Se o arquivo histórico for gravado já sem ticks inválidos, o builder em backtest nunca exercita a guarda que o builder em live exercita. O descarte é determinístico dado o mesmo input; garantir o mesmo input é responsabilidade da fonte de dados, decisão de Renko engine ainda em aberto, não desta ADR — que aqui apenas registra a dependência.
+- O descarte de um tick inválido deixa o `seq` desse tick sem aparecer em nenhum brick. É auditável — o descarte é logado — mas o builder e os consumidores de brick não devem tratar `seq` não-contíguo como erro.
+
+---
+
 ## 4. Decisões pendentes
 
 Pontos que precisam virar ADR assim que forem enfrentados:
 
 - **ADR-005 (pendente):** Estrutura e execução dos testes unitários. Framework próprio mínimo ou adaptação de algo existente?
-- **ADR-006 (pendente):** Tratamento de phantom bars no `RenkoBuilder`. Ignorar, marcar como suspeito, ou interromper?
 - **ADR-007 (pendente):** Formato do log estruturado. JSON-line ou key=value? Volume de log esperado em live vs custo de parsing.
 - **ADR-008 (pendente):** Como tratar reabertura de mercado (segunda-feira) no RenkoBuilder. Gap vira brick? Vira múltiplos bricks? Vira nada?
 
