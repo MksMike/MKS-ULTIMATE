@@ -17,7 +17,7 @@ struct MksTick
    double bid;
    double ask;
    double last;       // 0 se o broker não popular; guardado fiel ao recebido
-   long   volume;     // volume do tick — necessário p/ detecção de phantom (ADR-006)
+   long   volume;     // volume do tick — metadado, agregado no MksBrick (ADR-006)
 
    MksTick()
    {

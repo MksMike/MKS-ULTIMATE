@@ -120,7 +120,7 @@ A análise de causa-raiz completa está em `docs/V5-POSTMORTEM.md`, baseada na l
 - **Renko** — tipo de gráfico em que novas barras (bricks) são formadas apenas quando o preço se move uma distância pré-definida, ignorando o tempo.
 - **Brick** — cada barra do gráfico Renko. Tem cor (alta ou baixa) e tamanho fixo.
 - **Tick** — unidade atômica de movimento de preço recebida do broker. Renko se constrói a partir de ticks.
-- **Phantom bar** — brick com volume zero, geralmente resultante de gap ou dado faltante. Precisa ser identificado e tratado explicitamente.
+- **Phantom bar** — termo herdado do V5 e do AzInvest, dissolvido na arquitetura V6. O "phantom brick" — brick sem tick de gatilho — foi eliminado pela ADR-011: no MKS-ULTIMATE não existe brick sem tick disparador. O "phantom tick" — tick de volume zero — foi resolvido pela ADR-006, que estabeleceu que volume zero não é anomalia. O termo não nomeia nenhuma categoria do V6.
 - **StressLab** — módulo do framework que simula condições adversas de mercado (spread, slippage, latência, rejeições) usando dados reais de broker, para testar robustez da estratégia antes da execução em live.
 - **Paridade backtest/live** — garantia de que o mesmo feed de ticks em backtest e em live produz o mesmo output bit-a-bit.
 - **Tick source** — abstração que fornece ticks à estratégia. Em live, lê do broker; em backtest, lê de arquivo histórico.

@@ -30,7 +30,7 @@ struct MksBrick
    ulong  triggerTickId;  // seq do MksTick disparador
 
    long   closeTimeMsc;   // timeMsc do tick disparador
-   long   volume;         // volume agregado dos ticks; 0 = candidato a phantom (ADR-006)
+   long   volume;         // volume agregado dos ticks; 0 é legítimo (ADR-006)
    int    thresholdsCrossed; // nº de thresholds cruzados; 1 = normal,
                              // >1 = brick multi-threshold (ADR-011)
 
