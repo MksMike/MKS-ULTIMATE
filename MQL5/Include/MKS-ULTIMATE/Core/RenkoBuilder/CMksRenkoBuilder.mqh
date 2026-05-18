@@ -3,52 +3,108 @@
 //| @project        : MKS-ULTIMATE
 //| @module         : Core / RenkoBuilder
 //| @responsibility : Motor de construção de bricks Renko a partir de
-//|                   ticks. Fatia 1: esqueleto + guarda de ingestão
-//|                   (ADR-006). Formação de brick em fatias futuras.
+//|                   ticks. Guarda ADR-006, formação ADR-010,
+//|                   multi-threshold ADR-011.
 //| @depends_on     : Core/Interfaces/IBrickSizer.mqh,
+//|                   Core/Interfaces/IRenkoSink.mqh,
 //|                   Core/Types/RenkoGeometry.mqh, Core/Types/Tick.mqh,
-//|                   Core/Types/Error.mqh
+//|                   Core/Types/Brick.mqh, Core/Types/Error.mqh
 //| @install_path   : MQL5/Include/MKS-ULTIMATE/Core/RenkoBuilder/CMksRenkoBuilder.mqh
 //+------------------------------------------------------------------+
 #ifndef MKS_ULTIMATE_CORE_RENKOBUILDER_CMKSRENKOBUILDER_MQH
 #define MKS_ULTIMATE_CORE_RENKOBUILDER_CMKSRENKOBUILDER_MQH
 
 #include <MKS-ULTIMATE/Core/Interfaces/IBrickSizer.mqh>
+#include <MKS-ULTIMATE/Core/Interfaces/IRenkoSink.mqh>
 #include <MKS-ULTIMATE/Core/Types/RenkoGeometry.mqh>
 #include <MKS-ULTIMATE/Core/Types/Tick.mqh>
+#include <MKS-ULTIMATE/Core/Types/Brick.mqh>
 #include <MKS-ULTIMATE/Core/Types/Error.mqh>
 
-// Motor de construção de bricks Renko (ADR-010). Esta fatia (1 de 4)
-// entrega o esqueleto da classe e a guarda de validade do tick na
-// ingestão (ADR-006). Formação de brick, cruzamento multi-threshold
-// (ADR-011) e despacho a IRenkoSink ficam para as fatias seguintes.
+// Motor de construção de bricks Renko (ADR-010). Consome ticks via
+// IngestTick e emite bricks fechados via IRenkoSink::OnBrickClose.
+// Implementa: guarda de validade do tick (ADR-006), preço-condutor mid
+// (ADR-010 §4) e cruzamento multi-threshold (ADR-011).
+//
+// Modelo de threshold (decisão de implementação; ADR-010 não fixa fórmula):
+// - Continuação: lastClose ± (1-PO)*S, no sentido do último brick.
+// - Reversão:    lastClose ∓ (1-PRO)*S*revSizeRatio, sentido oposto.
+// Consistente com median (0.5,0.5,1.0) → 0.5*S em ambos os lados e
+// classic (0.0,0.0,1.0) → S em ambos os lados, simétricos.
 class CMksRenkoBuilder
 {
 private:
-   MksRenkoGeometry m_geometry;
-   IBrickSizer     *m_sizer;
-   int              m_invalidLimit;        // L da ADR-006 §5
-   int              m_consecutiveInvalid;
-   bool             m_streamCorrupt;
+   MksRenkoGeometry      m_geometry;
+   IBrickSizer          *m_sizer;
+   IRenkoSink           *m_sink;
+   int                   m_invalidLimit;
+   int                   m_thresholdLimit;
+   int                   m_consecutiveInvalid;
+   bool                  m_streamCorrupt;
+
+   bool                  m_initialized;
+   bool                  m_hasFirstBrick;
+   double                m_lastClose;
+   ENUM_MKS_BRICK_DIR    m_lastDirection;
+   double                m_formingHigh;
+   double                m_formingLow;
+
+   double ContinuationThreshold(double base, ENUM_MKS_BRICK_DIR dir, double size) const
+   {
+      double sign = (dir == MKS_BRICK_BULL) ? 1.0 : -1.0;
+      return base + sign * (1.0 - m_geometry.po) * size;
+   }
+
+   double ReversalThreshold(double base, ENUM_MKS_BRICK_DIR dir, double size) const
+   {
+      // Reversão é no sentido oposto a 'dir'
+      double sign = (dir == MKS_BRICK_BULL) ? -1.0 : 1.0;
+      return base + sign * (1.0 - m_geometry.pro) * size * m_geometry.revSizeRatio;
+   }
+
+   void EmitBrick(double open, double close, ENUM_MKS_BRICK_DIR dir,
+                  int M, double triggerPrice, ulong triggerTickId, long closeTimeMsc)
+   {
+      MksBrick brick;
+      brick.open = open;
+      brick.close = close;
+      brick.direction = dir;
+      brick.thresholdsCrossed = M;
+      brick.triggerPrice = triggerPrice;
+      brick.triggerTickId = triggerTickId;
+      brick.closeTimeMsc = closeTimeMsc;
+      brick.high = MathMax(MathMax(open, close), m_formingHigh);
+      brick.low  = MathMin(MathMin(open, close), m_formingLow);
+      brick.volume = 0; // agregação por brick não é tratada nesta fatia
+      if(m_sink != NULL)
+         m_sink.OnBrickClose(brick);
+   }
 
 public:
-   // L default = 10: tolera glitch transiente sem mascarar feed sustentadamente quebrado.
+   // L = 10: tolera glitch transiente sem mascarar feed sustentadamente quebrado (ADR-006 §5).
+   // K = 20: tolera spikes plausíveis de XAUUSD em baixa liquidez; corta cruzamentos de
+   //         magnitude impossível em um único tick (ADR-011 §4).
    CMksRenkoBuilder(const MksRenkoGeometry &geometry,
                     IBrickSizer *sizer,
-                    int invalidLimit = 10)
+                    IRenkoSink  *sink,
+                    int invalidLimit = 10,
+                    int thresholdLimit = 20)
    {
       m_geometry = geometry;
       m_sizer = sizer;
+      m_sink = sink;
       m_invalidLimit = invalidLimit;
+      m_thresholdLimit = thresholdLimit;
       m_consecutiveInvalid = 0;
       m_streamCorrupt = false;
+      m_initialized = false;
+      m_hasFirstBrick = false;
+      m_lastClose = 0.0;
+      m_lastDirection = MKS_BRICK_BULL; // valor inerte até m_hasFirstBrick = true
+      m_formingHigh = 0.0;
+      m_formingLow = 0.0;
    }
 
-   // Ingere um tick (ADR-006). Tick válido: contador zera, retorna true
-   // (formação de brick é fatia 2). Tick inválido: descartado, contador
-   // incrementa, retorna false com MKS_ERR_RENKO_INVALID_TICK. L inválidos
-   // consecutivos: builder entra em estado interrompido e retorna false
-   // com MKS_ERR_RENKO_TICK_STREAM_CORRUPT em toda chamada subsequente.
    bool IngestTick(const MksTick &tick, MksError &err)
    {
       if(m_streamCorrupt)
@@ -59,29 +115,157 @@ public:
          return false;
       }
 
-      if(tick.IsValid())
+      if(!tick.IsValid())
       {
-         m_consecutiveInvalid = 0;
-         return true;
-      }
-
-      m_consecutiveInvalid++;
-
-      if(m_consecutiveInvalid >= m_invalidLimit)
-      {
-         m_streamCorrupt = true;
-         MKS_SET_ERROR(err, MKS_ERR_RENKO_TICK_STREAM_CORRUPT,
-                       "L ticks inválidos consecutivos — feed corrupto",
-                       StringFormat("invalidLimit=%d seq=%I64u",
-                                    m_invalidLimit, tick.seq));
+         m_consecutiveInvalid++;
+         if(m_consecutiveInvalid >= m_invalidLimit)
+         {
+            m_streamCorrupt = true;
+            MKS_SET_ERROR(err, MKS_ERR_RENKO_TICK_STREAM_CORRUPT,
+                          "L ticks inválidos consecutivos — feed corrupto",
+                          StringFormat("invalidLimit=%d seq=%I64u",
+                                       m_invalidLimit, tick.seq));
+            return false;
+         }
+         MKS_SET_ERROR(err, MKS_ERR_RENKO_INVALID_TICK,
+                       "tick reprovado por IsValid()",
+                       StringFormat("seq=%I64u bid=%.5f ask=%.5f",
+                                    tick.seq, tick.bid, tick.ask));
          return false;
       }
 
-      MKS_SET_ERROR(err, MKS_ERR_RENKO_INVALID_TICK,
-                    "tick reprovado por IsValid()",
-                    StringFormat("seq=%I64u bid=%.5f ask=%.5f",
-                                 tick.seq, tick.bid, tick.ask));
-      return false;
+      m_consecutiveInvalid = 0;
+      double mid = (tick.bid + tick.ask) / 2.0; // ADR-010 §4
+
+      if(!m_initialized)
+      {
+         m_initialized = true;
+         m_lastClose = mid;
+         m_formingHigh = mid;
+         m_formingLow = mid;
+         return true;
+      }
+
+      if(m_sizer == NULL || !m_sizer.IsReady())
+      {
+         if(mid > m_formingHigh) m_formingHigh = mid;
+         if(mid < m_formingLow)  m_formingLow  = mid;
+         return true;
+      }
+
+      double size = m_sizer.SizePoints();
+      if(size <= 0.0)
+      {
+         if(mid > m_formingHigh) m_formingHigh = mid;
+         if(mid < m_formingLow)  m_formingLow  = mid;
+         return true;
+      }
+
+      // Caminha a escada de thresholds (ADR-011 §3).
+      // Igualdade exata (mid == threshold) conta como cruzamento — decisão
+      // de implementação determinística (ticks de XAUUSD em pontos
+      // raramente caem exatos num threshold; o critério é estável).
+      int M = 0;
+      double walkClose = m_lastClose;
+      ENUM_MKS_BRICK_DIR walkDirection;
+
+      if(!m_hasFirstBrick)
+      {
+         // Primeiro brick: sem continuação/reversão — direção fixada pelo
+         // sinal do movimento de mid relativo a m_lastClose.
+         if(mid == m_lastClose)
+         {
+            if(mid > m_formingHigh) m_formingHigh = mid;
+            if(mid < m_formingLow)  m_formingLow  = mid;
+            return true;
+         }
+         walkDirection = (mid > m_lastClose) ? MKS_BRICK_BULL : MKS_BRICK_BEAR;
+
+         while(true)
+         {
+            double contThr = ContinuationThreshold(walkClose, walkDirection, size);
+            bool crossed = (walkDirection == MKS_BRICK_BULL)
+                              ? (mid >= contThr)
+                              : (mid <= contThr);
+            if(!crossed) break;
+            M++;
+            walkClose = contThr;
+            if(M > m_thresholdLimit) // ADR-011 §4
+            {
+               MKS_SET_ERROR(err, MKS_ERR_RENKO_THRESHOLD_LIMIT_EXCEEDED,
+                             "cruzamento acima do limiar K — não emitido",
+                             StringFormat("M=%d K=%d seq=%I64u mid=%.5f",
+                                          M, m_thresholdLimit, tick.seq, mid));
+               return false;
+            }
+         }
+      }
+      else
+      {
+         walkDirection = m_lastDirection;
+         while(true)
+         {
+            double contThr = ContinuationThreshold(walkClose, walkDirection, size);
+            double revThr  = ReversalThreshold(walkClose, walkDirection, size);
+            bool crossedCont = false;
+            bool crossedRev  = false;
+            if(walkDirection == MKS_BRICK_BULL)
+            {
+               crossedCont = (mid >= contThr);
+               crossedRev  = (mid <= revThr);
+            }
+            else
+            {
+               crossedCont = (mid <= contThr);
+               crossedRev  = (mid >= revThr);
+            }
+
+            if(crossedCont)
+            {
+               M++;
+               walkClose = contThr;
+            }
+            else if(crossedRev)
+            {
+               M++;
+               walkClose = revThr;
+               walkDirection = (walkDirection == MKS_BRICK_BULL) ? MKS_BRICK_BEAR : MKS_BRICK_BULL;
+            }
+            else
+            {
+               break;
+            }
+
+            if(M > m_thresholdLimit) // ADR-011 §4
+            {
+               MKS_SET_ERROR(err, MKS_ERR_RENKO_THRESHOLD_LIMIT_EXCEEDED,
+                             "cruzamento acima do limiar K — não emitido",
+                             StringFormat("M=%d K=%d seq=%I64u mid=%.5f",
+                                          M, m_thresholdLimit, tick.seq, mid));
+               return false;
+            }
+         }
+      }
+
+      if(M >= 1)
+      {
+         EmitBrick(m_lastClose, walkClose, walkDirection,
+                   M, mid, tick.seq, tick.timeMsc);
+         m_lastClose = walkClose;
+         m_lastDirection = walkDirection;
+         m_hasFirstBrick = true;
+         // Reset cobre o overshoot: próximo brick abre em walkClose; mid
+         // ficou além (ou igual a) walkClose. Garante invariante
+         // m_formingLow <= m_lastClose <= m_formingHigh.
+         m_formingHigh = MathMax(walkClose, mid);
+         m_formingLow  = MathMin(walkClose, mid);
+         return true;
+      }
+
+      // Nenhum threshold cruzado — atualiza extremos do brick em formação.
+      if(mid > m_formingHigh) m_formingHigh = mid;
+      if(mid < m_formingLow)  m_formingLow  = mid;
+      return true;
    }
 };
 
