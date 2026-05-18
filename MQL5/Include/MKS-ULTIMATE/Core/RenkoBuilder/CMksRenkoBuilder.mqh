@@ -174,6 +174,7 @@ public:
       {
          // Primeiro brick: sem continuação/reversão — direção fixada pelo
          // sinal do movimento de mid relativo a m_lastClose.
+         // Ver ADR-011, nota de esclarecimento — geometria do primeiro brick.
          if(mid == m_lastClose)
          {
             if(mid > m_formingHigh) m_formingHigh = mid;

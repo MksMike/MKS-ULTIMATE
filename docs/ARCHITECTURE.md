@@ -338,6 +338,14 @@ Um tick que cruza mais de um threshold de brick produz um único `MksBrick` hone
 
 ---
 
+**Nota de esclarecimento — geometria do primeiro brick** (2026-05-18)
+
+A ADR-011 §3 descreve a contagem de M caminhando a escada de thresholds e distingue o primeiro degrau de reversão (à distância `revSizeRatio`) dos degraus de continuação. Essa descrição pressupõe um brick anterior do qual continuar ou reverter. O primeiro brick de uma sessão não tem brick anterior: não há direção prévia, logo não há sentido em "continuação" nem "reversão". A regra fixada é — o primeiro brick tem sua direção definida pelo sinal do primeiro movimento do mid relativo ao mid inicial, e todos os seus degraus (inclusive em cruzamento multi-threshold) usam a geometria de continuação, `(1-PO)*size`. A geometria de reversão só passa a valer a partir do segundo brick, quando existe uma direção anterior. Para o preset median (`PO == PRO`, `revSizeRatio == 1.0`) a regra não altera nenhum valor; ela importa para presets assimétricos futuros, e é fixada agora para que o comportamento do primeiro brick não fique dependente de implementação.
+
+A ADR-011 não é alterada; esta nota registra a regra de borda que a §3 não cobria.
+
+---
+
 ### ADR-006: Tratamento de tick inválido no RenkoBuilder
 
 **Data:** 2026-05-18
