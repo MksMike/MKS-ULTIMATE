@@ -24,6 +24,7 @@ O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/) e es
 - `docs/ARCHITECTURE.md` §3 — ADR-011 aceita: tratamento de cruzamento multi-threshold no RenkoBuilder — um tick que cruza vários thresholds produz um único `MksBrick` honesto (sem phantom bricks), marcado pelo campo inteiro `thresholdsCrossed`; limiar configurável K acima do qual o builder devolve `MksError` em vez de emitir.
 - `MQL5/Include/MKS-ULTIMATE/Core/Types/Brick.mqh` — campo `int thresholdsCrossed` no `MksBrick` (1 = brick normal, >1 = brick multi-threshold; default 1, pois um brick cruza no mínimo um threshold). Implementa o eixo de marcação da ADR-011.
 - `MQL5/Include/MKS-ULTIMATE/Core/Types/Error.mqh` — código de erro `MKS_ERR_RENKO_THRESHOLD_LIMIT_EXCEEDED = 102` (faixa RenkoBuilder), para o estouro do limiar K do RenkoBuilder. Implementa o eixo de guarda de corrupção da ADR-011.
+- `docs/ARCHITECTURE.md` §3 — ADR-006 aceita: tratamento de tick inválido no RenkoBuilder. Volume zero não é anomalia; o critério é `MksTick::IsValid()` (preço malformado) como guarda de entrada do builder. Tick inválido é descartado e reportado; sequência de inválidos consecutivos interrompe o builder. Dois códigos novos na faixa RenkoBuilder de `Error.mqh`: `MKS_ERR_RENKO_INVALID_TICK` e `MKS_ERR_RENKO_TICK_STREAM_CORRUPT`.
 
 ### Changed
 - `docs/Projeto.md` §2 — causa-raiz do V5 reescrita: de "divergência silenciosa entre backtest e live" (sintoma) para a causa estrutural de quatro eixos.
