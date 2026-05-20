@@ -448,7 +448,7 @@ A fonte de dados histórica de ticks do MKS-ULTIMATE assenta sobre um contrato d
 ### ADR-013: Independência de broker e proveniência no rastro de auditoria
 
 **Data:** 2026-05-20
-**Status:** Proposta
+**Status:** Aceita
 
 **Contexto:**
 O MKS-ULTIMATE é, por definição, um framework de trading — não um EA acoplado a um corretor específico. O dono opera atualmente na Exness, mas a expectativa estrutural é que o mesmo motor funcione contra qualquer broker MT5 sem reescrita de código de lógica. Esta expectativa nunca foi enunciada como decisão formal; chega agora ao primeiro ponto em que pode ser violada por omissão.
