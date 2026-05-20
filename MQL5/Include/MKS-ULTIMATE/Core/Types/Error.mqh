@@ -27,7 +27,14 @@ enum ENUM_MKS_ERROR_CODE
 
    //--- Broker 200–299, Trade 300–399, Risk 400–499,
    //    StressLab 500–599, Log 600–699, Testing 700–799 — ver ADR-009
-   //    Data 800–899 — ver ADR-012 (TickSource, serializadores, integridade de header)
+
+   //--- Data: faixa 800–899 — ver ADR-012 ---
+   MKS_ERR_DATA_FILE_IO = 800,             // falha de I/O (open/read/write/seek/close)
+   MKS_ERR_DATA_INVALID_MAGIC = 801,       // arquivo não começa com MKSBRK01
+   MKS_ERR_DATA_UNSUPPORTED_VERSION = 802, // formatVersion não suportada por este reader
+   MKS_ERR_DATA_HEADER_INVALID = 803,      // header com tamanho/recordSize inconsistentes
+   MKS_ERR_DATA_TRUNCATED = 804,           // arquivo termina antes do brickCount esperado
+   MKS_ERR_DATA_STATE_INVALID = 805,       // operação em writer/reader em estado errado
 };
 
 struct MksError
