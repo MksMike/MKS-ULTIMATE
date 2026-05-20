@@ -27,6 +27,7 @@ enum ENUM_MKS_ERROR_CODE
 
    //--- Broker 200–299, Trade 300–399, Risk 400–499,
    //    StressLab 500–599, Log 600–699, Testing 700–799 — ver ADR-009
+   //    Data 800–899 — ver ADR-012 (TickSource, serializadores, integridade de header)
 };
 
 struct MksError
