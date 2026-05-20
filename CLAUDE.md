@@ -13,6 +13,8 @@ Ao iniciar uma sessão neste projeto, ler nesta ordem:
 8. CHANGELOG.md — o que mudou recentemente
 9. docs/TOM-E-CHATS.md — tom de voz, regras de confronto e modos de chat
 
+Em seguida, invocar `/status` para confirmar o estado atual contra `git log` e ADRs antes da primeira ação.
+
 ## Projeto
 **MKS-ULTIMATE** — Framework de trading automatizado baseado em Renko para MetaTrader 5.
 
@@ -47,6 +49,27 @@ Existe também um fork do projeto **Median-and-Turbo-Renko-indicator-bundle** (A
 ## Estrutura de diretórios
 
 A estrutura-alvo do projeto está em `docs/ARCHITECTURE.md` §2, e cresce conforme as fases do `ROADMAP.md` avançam.
+
+## Fluxo operacional
+
+### Skills (invocar quando aplicável)
+
+- `/status` — snapshot do estado atual (fase do ROADMAP, últimos commits, ADRs pendentes, working tree). Invocar no início de cada chat, após bootstrap, antes da primeira ação.
+- `/protocolo-1 <Modulo>` — executa o checklist do Protocolo 1 contra um módulo do core (ex.: `CMksRenkoBuilder`). Invocar antes de declarar qualquer módulo do core "pronto" no `ROADMAP.md`.
+- `/adr-novo` — template para nova ADR em `docs/ARCHITECTURE.md`.
+
+### Watcher de compile (`tools/watch-compile.ps1`)
+
+Compila headless via `MetaEditor64.exe` os `.mq5` afetados por mudanças em `.mqh`/`.mq5` dentro de `MQL5/Include/MKS-ULTIMATE/` e `MQL5/Scripts/MKS-ULTIMATE/`. Constrói o grafo reverso de `#include` e o rebuilda a cada ciclo com mudanças — pega arquivos novos, includes novos e dependências transitivas.
+
+**Auto-start via VSCode:** `.vscode/tasks.json` declara a task `watch: compile MQL5` com `runOn: folderOpen`. Abrir o repo no VSCode dispara o watcher num terminal dedicado (modo `silent` — não rouba foco). Na primeira vez, o VSCode pergunta "Allow Automatic Tasks in Folder?" — autorizar uma vez. Para forçar manualmente: `Ctrl+Shift+P → Tasks: Run Task → watch: compile MQL5`.
+
+**Rodar fora do VSCode (terminal direto):**
+```powershell
+powershell -ExecutionPolicy Bypass -File c:\dev\MKS-ULTIMATE\tools\watch-compile.ps1
+```
+
+Funciona em Windows PowerShell 5.1 (`powershell`) e PowerShell 7+ (`pwsh`). Path do MetaEditor configurável via `-Editor <path>`. Default: `C:\Program Files\MetaTrader 5 EXNESS\MetaEditor64.exe`. Não rodar concorrente com o MetaEditor GUI compilando o mesmo arquivo.
 
 ## Documentos de referência
 Todos os documentos abaixo existem em `docs/` e devem ser consultados:
