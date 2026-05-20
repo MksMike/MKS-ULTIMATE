@@ -445,6 +445,58 @@ A fonte de dados histórica de ticks do MKS-ULTIMATE assenta sobre um contrato d
 
 ---
 
+### ADR-013: Independência de broker e proveniência no rastro de auditoria
+
+**Data:** 2026-05-20
+**Status:** Proposta
+
+**Contexto:**
+O MKS-ULTIMATE é, por definição, um framework de trading — não um EA acoplado a um corretor específico. O dono opera atualmente na Exness, mas a expectativa estrutural é que o mesmo motor funcione contra qualquer broker MT5 sem reescrita de código de lógica. Esta expectativa nunca foi enunciada como decisão formal; chega agora ao primeiro ponto em que pode ser violada por omissão.
+
+O Slice 2 do ROADMAP inaugura o consumo de dados reais — `CopyTicksRange` sobre o símbolo do broker conectado. É o primeiro código do projeto que toca infraestrutura de corretor. Sem uma regra fixada, dois padrões erram silenciosamente:
+
+- **Hardcode condicional** — uma cláusula `if (broker == "Exness") {...}` em qualquer ponto de lógica recriaria, em escala menor, o eixo 2 do colapso do V5: múltiplos caminhos de execução sob o mesmo teto, escolhidos por uma propriedade do ambiente em vez da decisão arquitetural. Adicionar um broker novo passaria a exigir edição da lógica.
+- **Artefatos sem proveniência** — relatórios, logs, arquivos e outputs gerados pelo framework sem registro de qual broker os produziu. A ADR-012 (proposta) já resolve esse caso para o arquivo binário histórico de ticks; o resto do framework — relatórios do painel Experts, futuros logs estruturados (ADR-007 pendente), saídas de validação de Slice — carece da mesma disciplina.
+
+O ponto de cuidado é distinguir duas perguntas que parecem uma só. *"Como o framework opera contra qualquer broker?"* é a pergunta de arquitetura de runtime — detecção de ambiente, perfil por broker, símbolo canônico, sessões, precisão de pontos. Essa pergunta exige evidência empírica do que de fato varia entre brokers, e a evidência só começa a aparecer depois do Slice 3 (Custom Symbol). Decidir essa estrutura agora é fazer arquitetura no vazio — recusado pela §4 deste documento.
+
+*"Como o framework registra de qual broker vieram seus dados?"* é uma pergunta menor, é resolvível agora, e é a única que o Slice 2 efetivamente atravessa. Esta ADR resolve essa, e somente essa. A pergunta maior fica como dívida explícita com dono e momento definidos.
+
+**Decisão:**
+O MKS-ULTIMATE é broker-agnóstico por construção, e todo artefato persistido ou comunicado pelo framework carrega proveniência de execução.
+
+1. **Sem hardcode de broker.** Nenhuma string com identificador de broker — `"Exness"`, `"ICMarkets"`, `"XM"`, ou qualquer outro — aparece em código de lógica do framework: builder, sizer, sink, interfaces do core, classes de trade, risk, ou estratégia. Nenhuma cláusula condicional bifurca comportamento por nome de broker. Variação entre brokers é absorvida exclusivamente por parâmetros injetados — geometria, sizer, símbolo, configuração — nunca por ramo de código.
+
+2. **Símbolo é parâmetro, não constante.** Toda função, classe ou script que opera sobre um instrumento recebe o símbolo como entrada explícita. Default sensato em ponto de borda — por exemplo, `_Symbol` no `OnStart` de um script — é aceito; constante literal `"XAUUSD"` (ou variante) em qualquer ponto de código é vedada.
+
+3. **Todo artefato carrega proveniência.** Saídas do framework — relatórios em painel Experts, logs (formato a ser fixado na ADR-007), arquivos binários (estrutura definida pela ADR-012), CSVs de validação, e qualquer artefato persistido ou comunicado — registram, no mínimo, o tripleto `(broker, account, symbol)`. A proveniência é capturada em runtime, no momento da geração do artefato, não congelada em código.
+
+4. **Aquisição de proveniência em runtime.** O identificador do broker é obtido via `AccountInfoString(ACCOUNT_COMPANY)`. O número da conta via `AccountInfoInteger(ACCOUNT_LOGIN)`. Estes são pontos de borda — usados em logging, headers, relatórios. Não são consultados dentro de lógica de trading, de construção de brick ou de execução de ordem.
+
+5. **Detecção de broker e auto-configuração ficam fora do escopo.** A pergunta arquitetural maior — uma camada que detecta o broker em runtime e expõe perfil estruturado (símbolo canônico, precisão de pontos, sessões válidas, spread esperado, regras de margem e de execução) — não é decidida nesta ADR. É registrada como dívida explícita, a ser enfrentada por nova ADR após o Slice 3 (Custom Symbol), quando o framework tiver evidência empírica do que de fato varia entre brokers. Decidir essa estrutura agora — antes de operar em pelo menos um broker e idealmente comparar contra um segundo — é fazer arquitetura no vazio.
+
+6. **Escopo desta ADR.** Esta decisão fixa a disciplina de não-hardcode e o requisito de proveniência. Não cria tipos, interfaces ou classes novas. Não altera tipos existentes. É uma diretriz que vincula todo código futuro do framework — incluindo o script do Slice 2, que nasce sob ela.
+
+**Alternativas consideradas:**
+- **ADR larga definindo `IBrokerEnvironment` e perfis de broker agora:** rejeitada. Decide a estrutura — interface, campos do perfil, ponto de detecção, contrato de auto-configuração — antes de o framework ter rodado em qualquer broker. É arquitetura no vazio, padrão recusado pela §4 deste documento. Sob evidência zero do que varia entre brokers, a decisão tende a fixar exatamente os campos errados.
+- **Postergar a questão até o Custom Symbol:** rejeitada. O Slice 2 começa a gerar artefatos imediatamente — relatórios em painel Experts, e logo CSVs e arquivos. Sem a disciplina de proveniência fixada agora, esses artefatos nascem rastreáveis apenas pelo timestamp do commit, e a regra "todo artefato carrega proveniência" entra tarde demais para corrigir o passivo já gerado. A ADR-012, em paralelo, já exige proveniência no arquivo binário de ticks; manter a regra restrita à ADR-012 deixaria os outros artefatos sob disciplina diferente — eixo 2 em outra dimensão.
+- **Hardcode tolerado para "o broker atual" com nota de TODO:** rejeitada. Hardcode com TODO é apenas hardcode com prazo indefinido. A primeira vez que a string `"Exness"` entrar em qualquer arquivo do framework, a expectativa de portabilidade já é mentira retroativa.
+- **Proveniência opcional ("registrar quando conveniente"):** rejeitada. Garantia condicional cuja condição depende da disciplina momentânea de quem escreve o código degrada para nenhuma garantia — foi assim que o eixo 2 do V5 se instalou. Proveniência obrigatória em todo artefato persistido fecha a porta.
+
+**Consequências:**
+- O `ValidateBuilderOnRealTicks.mq5` (Slice 2) nasce sob esta ADR: recebe símbolo via input com default `_Symbol`, e imprime no relatório do painel Experts a tripleta `(broker, account, symbol)` obtida em runtime. Zero strings de broker no código.
+- A ADR-012, quando aceita, já registra proveniência no header do arquivo binário — alinhada por construção a esta ADR. A ADR-007 (formato de log estruturado, pendente) herda o requisito de proveniência como campo canônico do log.
+- Dívida arquitetural registrada com dono e momento: nova ADR para detecção de broker e perfil estruturado, a ser proposta após o Slice 3 (Custom Symbol), com evidência empírica do que varia entre brokers já em mão.
+- Nenhuma alteração em tipos do core. Nenhum código existente precisa ser tocado para retroativamente aderir — o builder, o sizer e os tipos da Fase 1 já não mencionam broker em lugar nenhum.
+- Esta ADR é diretriz vinculante para code review: qualquer cláusula condicional que ramifique comportamento por identificador de broker, ou qualquer literal de nome de broker em código de lógica, é defeito a corrigir.
+
+**Fronteiras:**
+- Não é a estrutura de detecção e perfil de broker — essa é a dívida registrada na cláusula 5 e na lista de Consequências.
+- Não é o contrato de integridade do arquivo histórico — essa é a ADR-012.
+- Não é o formato do log estruturado — essa é a ADR-007.
+
+---
+
 ## 4. Decisões pendentes
 
 Pontos que precisam virar ADR assim que forem enfrentados:
