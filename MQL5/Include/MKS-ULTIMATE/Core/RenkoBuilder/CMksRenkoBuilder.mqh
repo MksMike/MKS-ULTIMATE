@@ -270,6 +270,10 @@ public:
       return true;
    }
 
+   // true após L ticks inválidos consecutivos terem disparado 104.
+   // Sink/EA pode consultar para decidir se ainda confia no feed (ADR-006 §5).
+   bool IsStreamCorrupt() const { return m_streamCorrupt; }
+
    // Snapshot do brick em formação (ADR-010 §6). Não emite evento;
    // chamador consulta sob demanda. Antes do primeiro tick válido,
    // o snapshot retorna com hasData = false.
