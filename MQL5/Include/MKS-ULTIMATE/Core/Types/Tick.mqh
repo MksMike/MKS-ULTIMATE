@@ -18,12 +18,16 @@ struct MksTick
    double ask;
    double last;       // 0 se o broker não popular; guardado fiel ao recebido
    long   volume;     // volume do tick — metadado, agregado no MksBrick (ADR-006)
+   uint   flags;      // bitmask TICK_FLAG_* do MT5; preservado por ADR-012 §4
+                      // (auditoria irreversível: builder atual não consome,
+                      //  execução e estratégias futuras podem precisar)
 
    MksTick()
    {
       seq = 0; timeMsc = 0;
       bid = 0.0; ask = 0.0; last = 0.0;
       volume = 0;
+      flags = 0;
    }
 
    datetime Time()    const { return (datetime)(timeMsc / 1000); }

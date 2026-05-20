@@ -88,6 +88,7 @@ MksTick ToMksTick(const MqlTick &mt, ulong seq)
    t.ask     = mt.ask;
    t.last    = mt.last;
    t.volume  = (long)mt.volume;
+   t.flags   = mt.flags; // ADR-012 §4
    return t;
 }
 
