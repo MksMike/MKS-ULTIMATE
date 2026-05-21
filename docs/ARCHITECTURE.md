@@ -497,6 +497,71 @@ O MKS-ULTIMATE é broker-agnóstico por construção, e todo artefato persistido
 
 ---
 
+### ADR-014: Política de rotação e nomenclatura do arquivo .mksbk
+
+**Data:** 2026-05-21
+**Status:** Aceita
+
+**Contexto:**
+O Slice 3b inaugura o EA produtor (`Producer.mq5`) — primeiro código do framework que escreve `.mksbk` em runtime, fora de teste. Cada `OnInit` precisa decidir qual arquivo abrir antes de uma linha de motor rodar. Sem regra fixada, três armadilhas se instalam:
+
+1. **Append entre sessões** recria o eixo do `SyncWithExisting` do V5 (`V5-POSTMORTEM` §5 invariante 5): o estado do builder em memória é zerado a cada `OnInit`; reconciliar com o arquivo exigiria reprocessar ticks da janela coberta ou alterar o formato `.mksbk` (v2 com estado serializado). Custo alto, ganho ilusório.
+
+2. **Sobrescrita silenciosa por colisão de timestamp**: dois `OnInit` dentro do mesmo segundo (recompile rápido, restart do terminal) geram o mesmo nome de arquivo. Sem proteção, `FileOpen` em escrita destrói o conteúdo anterior sem aviso.
+
+3. **Duplicação inútil de proveniência**: o header do `.mksbk` já carrega broker, accountLogin, symbol, geometry e brickSizePoints (ADR-012 §3, ADR-013 §3). Carregar a mesma informação no nome do arquivo é redundância; ordenação por timestamp lexicográfico continua trivial sem ela.
+
+A decisão sobre o naming e a política de rotação não pode ficar implícita no código do Producer; precisa ser fixada antes que um segundo EA (ou ferramenta de pós-análise) tenha que decidir o mesmo de novo. O `Producer.mq5` da Slice 3b parte 1 (commit `468206c`) já nasceu sob a forma desta política — esta ADR a formaliza retroativamente, capturando o desenho em vigor.
+
+**Decisão:**
+A política de rotação do `.mksbk` no MKS-ULTIMATE assenta sobre três regras: arquivo novo por sessão, naming mínimo com proveniência no header, e guarda explícita contra colisão de nome.
+
+1. **Arquivo novo a cada `OnInit` do produtor.** Cada sessão do EA cria um `.mksbk` próprio. Nenhum modo de append entre sessões. O estado do builder começa zerado em cada `OnInit` — coerente com o invariante 5 do `V5-POSTMORTEM` ("reconstrução de estado é completa ou não acontece"); reconciliação parcial não existe por design.
+
+2. **Naming mínimo: `<symbol>_<YYYYMMDDTHHMMSS>.mksbk`.** Apenas o símbolo e o timestamp da sessão (segundo de `TimeCurrent` no `OnInit`, formato ISO compacto). A proveniência completa (broker, accountLogin, geometry, brickSizePoints) mora no header por ADR-012 §3 / ADR-013 §3 e não é duplicada no nome. Justificativas: (a) o timestamp em largura fixa ordena lexicograficamente por tempo; (b) o nome curto cabe folgado nos limites de path (Windows 260, MQL5 256); (c) ler broker/conta requer abrir o arquivo de qualquer forma — ferramentas de análise consultam o header, não o nome.
+
+3. **Sub-pasta única: `MKS-ULTIMATE\Bricks\`.** Todos os arquivos do produtor moram nessa pasta, sem segmentação por símbolo. Razão: o símbolo já é prefixo do nome de cada arquivo; ordenação por nome agrupa automaticamente. Sub-pasta por símbolo introduziria nível de diretório sem ganho. `FolderCreate("MKS-ULTIMATE")` + `FolderCreate("MKS-ULTIMATE\\Bricks")` antes do primeiro `FileOpen` — MQL5 não cria recursivamente.
+
+4. **Guarda contra colisão de nome.** Dois `OnInit` no mesmo segundo produziriam o mesmo nome. O `CMksBrickFileWriter::Open` recusa abrir se o arquivo já existe (via `FileIsExist`) e devolve o código novo `MKS_ERR_DATA_FILE_EXISTS = 806` (faixa Data, na sequência de 800-805). O Producer, ao receber 806, tenta novamente com sufixo numérico — `<base>_2.mksbk`, `<base>_3.mksbk`, … — até encontrar nome livre ou esgotar tentativas razoáveis (limite de implementação a fixar no Producer). Granularidade de segundos no timestamp é mantida; o sufixo cobre o resto.
+
+5. **Sem limpeza automática de arquivos antigos.** Retenção é política operacional, não do framework. Arquivos antigos ficam no disco até que o operador remova manualmente. Fora do escopo desta ADR.
+
+**Alternativas consideradas:**
+
+- **Append entre sessões (continuação do `.mksbk` anterior):** rejeitada. Reconciliação parcial recria o eixo do `SyncWithExisting` do V5. O builder em memória começa em estado zero a cada `OnInit`; reconstruir a partir do arquivo exigiria reprocessar a janela de ticks coberta ou estender o formato (v2) para carregar estado interno do builder (formingHigh, formingLow, lastDirection, lastClose). Custo alto, ganho ilusório — restart é evento raro e o histórico fica preservado em arquivo próprio.
+
+- **Naming completo com brokerSlug + accountLogin no nome (`<symbol>__<broker>_<account>__<TS>.mksbk`):** rejeitada. Duplica informação que o header já carrega (ADR-012 §3, ADR-013 §3). Toda ferramenta que precisa de proveniência tem de abrir o arquivo de qualquer modo — o ganho de "ver no nome" não compensa o custo de nome longo, com riscos de normalização (caracteres inválidos no `ACCOUNT_COMPANY`, truncamento, slug instável entre sessões). Nome curto e header completo é o desenho cumulativamente menos frágil.
+
+- **Granularidade de milissegundos no timestamp:** rejeitada. Ruído visual sem ganho real; a colisão de segundo é resolvida com mais segurança pela guarda explícita (regra 4) que pelo aumento de precisão — que apenas torna a colisão mais rara sem eliminá-la.
+
+- **Sub-pasta por símbolo (`MKS-ULTIMATE\<symbol>\`):** rejeitada. O símbolo já é prefixo do nome do arquivo; sub-pasta replica segmentação que o naming já oferece. Mais um nível de diretório para criar e navegar, sem benefício prático.
+
+- **Permitir sobrescrita silenciosa (`FileOpen` em modo write puro):** rejeitada. Destruir dado de sessão anterior sem aviso é o tipo de comportamento implícito que o projeto recusa. O check `FileIsExist` + erro 806 + retry com sufixo torna a guarda explícita e a recuperação automática.
+
+- **Limpeza automática de arquivos antigos (idade ou contagem):** rejeitada como escopo desta ADR. Política de retenção é decisão operacional, não arquitetural — uma sessão pode ser preciosa (validação de paridade, análise post-mortem) e outra pode ser lixo. O framework não decide isso.
+
+**Consequências:**
+
+- **Producer.mq5 nasce simples:** cada sessão é autocontida. Sem recuperação de estado entre sessões. Sem leitura de arquivo anterior no `OnInit`.
+
+- **Continuidade visual entre sessões** (chart do Custom Symbol) fica como questão aberta. Quando o usuário reinicia o EA, o Custom Symbol da sessão atual usa apenas os bricks da sessão atual. Plotar histórico mais longo exige (a) replay de `.mksbk` anteriores via ferramenta separada, ou (b) acionar `InpHistoricalFillDays` para o Producer reconstruir N dias de bricks no `OnInit`. Trade-off aceito.
+
+- **Novo código de erro `MKS_ERR_DATA_FILE_EXISTS = 806`** no enum `ENUM_MKS_ERROR_CODE` (`Error.mqh`), faixa Data (ADR-012 reservou 800-899).
+
+- **`CMksBrickFileWriter::Open`** ganha guarda `FileIsExist` antes do `FileOpen` — alteração de código já aceito (ADR-012), feita em trabalho à parte após o aceite desta ADR, no padrão das ADRs anteriores (ADR-006 sobre comentários "phantom", ADR-011 sobre `thresholdsCrossed`, ADR-012 sobre `Tick.flags`).
+
+- **`Producer.mq5`** implementa o retry com sufixo numérico ao receber 806. Limite de tentativas (ex.: 99) registrado como detalhe de implementação, não-arquitetural.
+
+- **Recuperação de estado em restart do EA** fica registrada como dívida arquitetural conhecida — esta ADR a empurra deliberadamente para o futuro. Quando virar problema concreto (operação contínua com restarts frequentes), nova ADR enfrenta a questão; até lá, a política de "arquivo novo, builder zerado" é a regra.
+
+**Fronteiras:**
+
+- Não é o formato binário do `.mksbk` — ADR-012 §5 fixou o contrato; layout concreto vive em `Core/Data/BrickFileFormat.mqh`.
+- Não é o contrato de integridade do arquivo histórico — ADR-012.
+- Não é o naming do Custom Symbol — decisão de implementação do Producer, sem ADR. Variação no naming do Custom Symbol não fere esta ADR.
+
+---
+
 ## 4. Decisões pendentes
 
 Pontos que precisam virar ADR assim que forem enfrentados:
