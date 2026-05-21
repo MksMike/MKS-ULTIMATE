@@ -27,7 +27,7 @@ Após esses, invocar `/status` para confirmar o estado contra `git log` antes da
 
 ---
 
-## 2. Estado do código (HEAD = `398501c`)
+## 2. Estado do código (HEAD = `679e77e`)
 
 O dia 2026-05-21 cobriu três blocos de trabalho sobrepostos:
 1. **Slice 3b proper** (commits até `a06cbe9`) — Producer + Custom Symbol.
@@ -58,7 +58,7 @@ O dia 2026-05-21 cobriu três blocos de trabalho sobrepostos:
 | 007 | Formato e destino do log estruturado | **Aceita** (`6e40c40`) |
 | 018 | Cálculo do ATR no `CMksAtrBrickSizer` | **Aceita** (`27b5226`) |
 | 016 | Interfaces `ISymbol`/`IAccount` | **Aceita** (`27e28cc`) |
-| 017 | Modelo de confirmação de execução do `CMksMt5Broker` | **Pendente** — adicionada pós-auditoria |
+| 017 | Modelo de confirmação de execução do `CMksMt5Broker` | **Aceita** (`679e77e`) |
 
 ADRs 001–013 sem alteração.
 
@@ -74,6 +74,8 @@ ADRs 001–013 sem alteração.
 Todos os commits do dia sobre HEAD `918c45f`:
 
 ```
+679e77e docs: accept ADR-017 (broker execution confirmation model)
+af2ca24 docs: cleanup consequences of ADR-016 acceptance (Protocolo 9, tree, CHECKPOINT)
 398501c feat(core): add ISymbol/IAccount + Mt5 impls, refactor Producer (ADR-016)
 27e28cc docs: accept ADR-016 (ISymbol and IAccount interfaces)
 8777d34 docs: refresh CHECKPOINT-slice3b with full day's work (HEAD 7e08c58)
@@ -186,6 +188,35 @@ ADR-016 (interfaces de mercado e conta) **redigida, aceita e materializada** em 
 
 **Pendência residual da ADR-016:** mocks `CMksFakeSymbol`/`CMksFakeAccount` para testes isolados — slice próprio quando primeiros testes de Trade Manager ou Risk Manager precisarem deles (relacionado à ADR-005).
 
+### Parte 7 — ADR-017 aceita (broker execution confirmation model)
+
+ADR-017 (modelo de confirmação de execução do broker) **redigida e aceita** em `679e77e`. Última ADR estrutural pendente do MVP. Apenas decisão arquitetural — implementação concreta (`CMksMt5Broker`, `CMksSimulatedBroker`, `CMksCostModel`) fica para slices próximos.
+
+**Pesquisa de fundamentação** via subagent consultou `docs.mql5.com` sobre `OrderSend`, `OnTradeTransaction`, `SYMBOL_FILLING_MODE`, `ACCOUNT_MARGIN_MODE`, retcodes e propriedades de `DEAL`. Identificou 6 pitfalls conhecidos (race `OrderSend`/`OnTradeTransaction`, deviation=0 rejeitado, filling mismatch retorna INVALID_FILL 10030, netting/hedging confusion, etc.) e mapeou as 8 decisões críticas.
+
+**8 decisões fixadas:**
+
+1. **`Send`/`Close` síncronos lógicos** — bloqueia até `OnTradeTransaction` reportar `TRADE_TRANSACTION_DEAL_ADD`. `fillPrice` vem de `HistoryDealGetDouble(deal, DEAL_PRICE)`, não do `result.price` cru. Preserva paridade backtest/live (backtest é trivialmente síncrono).
+2. **Broker per-símbolo** — `CMksMt5Broker(ISymbol*, IAccount*)`. Multi-símbolo é futuro.
+3. **Timeout 5s configurável**, sem retry automático em timeout (fatal).
+4. **Filling pré-detectado** via `m_symbol.FillingMode()` no `Init`, com fallback no primeiro `INVALID_FILL`. Cache do efetivo.
+5. **Margin mode dual** — netting (ordem oposta) vs. hedging (ordem oposta com `position=ticket`).
+6. **Retry interno** para REQUOTE/PRICE_CHANGED/PRICE_OFF: 3 tentativas, backoff 100ms. Configurável.
+7. **Deviation default 10 points**, configurável. Nunca 0.
+8. **CostModel classe separada** — passthrough no real (`HistoryDealGetDouble`); gerador no simulado (spread/slippage/commission/swap).
+
+7 alternativas rejeitadas (IBroker assíncrono, OrderSend cru sem aguardar, OrderSendAsync, multi-symbol, retry hardcoded, tipos separados, tentar ordem para detectar filling).
+
+**Consequências (trabalho futuro pós-aceite):**
+- Faixa Broker 200–299: códigos 200–203 (TIMEOUT, INVALID_FILL, RETRY_EXHAUSTED, NOT_INITIALIZED).
+- `MksExecutionResult` ganha campos `swap`, `dealId`, `attempts` (ciclo próprio).
+- `MksOrderRequest` e `IBroker.Send/Close/Modify` não mudam.
+- Pasta nova `Core/Broker/` com `CMksMt5Broker`, `CMksSimulatedBroker`, `CMksCostModel`.
+- EA expõe `g_broker.OnTradeTransactionEvent(transaction, request, result)` chamado pelo `OnTradeTransaction` do programa.
+- Teste de paridade: padrão do `Test_CMksRenkoBuilder` aplicado aos dois brokers.
+
+**ADR-016 é pré-requisito direto** — broker consome `ISymbol.FillingMode/TickSize/Point/VolumeStep/StopsLevel` e `IAccount.MarginMode/FreeMargin`.
+
 ---
 
 ## 4. Validação empírica
@@ -239,9 +270,8 @@ Estado das ADRs pendentes ao fim de 2026-05-21:
 |---|---|---|
 | 005 | Framework de testes unitários | **Pendente** — não enfrentada. Testes atuais (`Test_CMksRenkoBuilder` 428 assertions, `Test_CMksBrickFile` 97, `Test_CMksAtrBrickSizer` 72) usam asserções inline, sem framework formal. |
 | 008 | Reabertura de mercado no RenkoBuilder | **Pendente com evidência parcial registrada** (`CHECKPOINT-2026-05-20-slice2.md` §6): builder atual já trata gap de fim de semana via ADR-011 multi-threshold; teste de 7 dias incluindo gap de 49h gerou M=2 sem erros. Evidência insuficiente para generalizar (1 instrumento, 1 broker). |
-| 017 | Modelo de confirmação de execução do `CMksMt5Broker` | **Pendente** — adicionada pós-auditoria MQL5. Bloqueia Fase 4 (Broker abstractions). Inclui síncrono vs. assíncrono via `OnTradeTransaction`, filling mode, netting vs. hedging. Maior peça restante do MVP (18% do esforço estimado). |
 
-ADRs aceitas e implementadas no dia (movidas desta tabela): **014, 015, 007, 018, 016** — ver §2 e §3 Partes 4, 5 e 6.
+ADRs aceitas no dia (movidas desta tabela): **014, 015, 007, 018, 016, 017** — ver §2 e §3 Partes 4 a 7. ADRs 014, 007, 018, 016 também foram **materializadas em código testado**; ADR-015 é decisão filosófica sem código; ADR-017 é decisão arquitetural — implementação (`Core/Broker/`) é trabalho de slice próprio.
 
 Outras dívidas registradas:
 
