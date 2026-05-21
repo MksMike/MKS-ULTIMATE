@@ -44,7 +44,8 @@ MKS-ULTIMATE/
 │   │   └── StressLab/              # Simulação de condições adversas
 │   ├── Experts/
 │   │   └── MKS-ULTIMATE/           # EAs que usam o framework
-│   └── Scripts/                    # Scripts utilitários
+│   ├── Scripts/                    # Scripts utilitários
+│   └── Services/                   # Coletores de tick em background e workers independentes de gráfico
 ├── tests/                          # Testes unitários e de integração
 ├── logs/                           # Logs de backtest e live (gitignored)
 │   └── .gitkeep
@@ -568,7 +569,11 @@ Pontos que precisam virar ADR assim que forem enfrentados:
 
 - **ADR-005 (pendente):** Estrutura e execução dos testes unitários. Framework próprio mínimo ou adaptação de algo existente?
 - **ADR-007 (pendente):** Formato do log estruturado. JSON-line ou key=value? Volume de log esperado em live vs custo de parsing.
-- **ADR-008 (pendente):** Como tratar reabertura de mercado (segunda-feira) no RenkoBuilder. Gap vira brick? Vira múltiplos bricks? Vira nada?
+- **ADR-008 (pendente):** Como tratar reabertura de mercado (segunda-feira) no RenkoBuilder. Gap vira brick? Vira múltiplos bricks? Vira nada? Evidência parcial já registrada em `CHECKPOINT-2026-05-20-slice2.md` §6.
+- **ADR-015 (pendente):** Strategy Tester nativo do MT5 como ferramenta vs. fonte de verdade. O backtest oficial do MKS-ULTIMATE roda fora do tester, lendo `.mksbk` via `ITickSource` — decisão hoje implícita no princípio norteador e na ADR-012, mas não formalizada. Bloqueia esclarecimento sobre otimização de parâmetros e visualização de backtest antes da Fase 9.
+- **ADR-016 (pendente):** Interfaces `ISymbol` e `IAccount` + checklist de chamadas API globais proibidas em código de lógica (ver Protocolo 9 em `PROTOCOLOS.md`). Hoje a porta está fechada por convenção — ADR-013 §2 só permite chamadas globais na borda (composition root em `OnInit`/`OnTick`/`OnDeinit`). Precisa virar contrato testável antes de `CMksTradeManager`/`CMksRiskManager`/estratégias serem escritas.
+- **ADR-017 (pendente):** Modelo de confirmação de execução do `CMksMt5Broker`. Síncrono via retcode do `OrderSend` ou assíncrono via `OnTradeTransaction::TRADE_TRANSACTION_DEAL_ADD`? Decide latência vs. fidelidade de `fillPrice`/`slippage`. Inclui também política de filling mode (FOK/IOC/RETURN via `SymbolInfoInteger(SYMBOL_FILLING_MODE)`), uso de `OrderCheck`, e diferença netting vs. hedging. Bloqueia Fase 4 (Broker abstractions).
+- **ADR-018 (pendente):** Cálculo do ATR no `CMksAtrBrickSizer`. Três alternativas: (a) ATR sobre ticks brutos, cálculo próprio; (b) ATR sobre bricks fechados (coerente com filosofia "decisão pós-brick é sobre bricks"); (c) `iATR` nativo (reintroduz dependência do tester, contra ADR-015 quando aceita). ADR-010 §Consequências adiou explicitamente.
 
 Essas decisões são registradas formalmente quando forem enfrentadas, não antes. Decidir arquitetura no vazio produz decisões erradas.
 

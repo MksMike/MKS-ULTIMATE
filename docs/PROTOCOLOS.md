@@ -25,8 +25,7 @@ Aplicável quando um módulo novo (ex: `CMksRenkoBuilder`) está para ter status
 - [ ] Métodos públicos têm doc-comment quando não forem auto-evidentes
 - [ ] Nenhuma bifurcação `if(MQL5_TESTING)` na lógica do módulo
 - [ ] Nenhum `Sleep` bloqueante
-- [ ] Nenhum acesso a `TimeCurrent()` direto (usa `IClock` injetado)
-- [ ] Nenhum acesso a `OrderSend`/`PositionSelect` direto fora do `CMksBroker`
+- [ ] Nenhuma chamada API global em código de lógica do módulo — ver Protocolo 9 para lista completa (`TimeCurrent`, `SymbolInfo*`, `AccountInfo*`, `OrderSend`, `iATR`, etc.)
 - [ ] Unit tests cobrem: caminho feliz, casos de borda, condições de erro
 - [ ] Unit tests passam
 - [ ] Determinismo verificado (duas execuções com mesma entrada produzem mesma saída)
@@ -130,6 +129,71 @@ Em ordem, sem pular:
 11. **Entrada no CHANGELOG** com descrição, causa-raiz, fix, lição aprendida.
 
 A ordem importa. Pular etapas é o caminho para a segunda quebra de conta.
+
+---
+
+## Protocolo 9 — Chamadas API globais proibidas em código de lógica
+
+Aplicável durante code review e antes de declarar pronto qualquer módulo de lógica do core (`CMksTradeManager`, `CMksRiskManager`, estratégias futuras) ou auxiliar (`CMksLogger`, sizers, sinks). Fronteira clara: **bordas** (composition root em `OnInit`/`OnTick`/`OnDeinit` de EAs/scripts; implementações concretas de interfaces como `CMksMt5Broker`, `CMksLogger`) **podem** chamar a API global; **código de lógica** não pode.
+
+A regra está enunciada na ADR-013 §2 ("borda aceita default sensato como `_Symbol`"). Este protocolo lista as funções concretas que ficam fora da lógica, com o substituto correto.
+
+### Tempo
+
+| Função MQL5 | Substituto em código de lógica |
+|---|---|
+| `TimeCurrent`, `TimeLocal`, `TimeGMT`, `TimeTradeServer` | `IClock.NowMsc()` |
+
+### Mercado (símbolo)
+
+| Função MQL5 | Substituto |
+|---|---|
+| `Symbol()`, `_Symbol` | parâmetro injetado pela borda |
+| `Period()`, `_Period` | proibido em lógica (Renko não tem timeframe) |
+| `SymbolInfoDouble`, `SymbolInfoInteger`, `SymbolInfoString` | `ISymbol.*` (pendente, ADR-016) |
+| `SymbolInfoTick(symbol, mt)` | `ITickSource.Next(tick)` |
+| `SymbolInfoSessionTrade`, `SymbolInfoSessionQuote` | `ISymbol.*` (pendente) |
+
+### Conta
+
+| Função MQL5 | Substituto |
+|---|---|
+| `AccountInfoDouble`, `AccountInfoInteger`, `AccountInfoString` | `IAccount.*` (pendente, ADR-016) |
+
+### Identidade do programa
+
+| Função MQL5 | Substituto |
+|---|---|
+| `MQLInfoInteger(MQL5_TESTING)` | proibido — caminho único de código (REGRAS §1.7) |
+| `MQLInfoInteger(MQL5_PROGRAM_TYPE)` | proibido em lógica |
+
+### Séries e indicadores
+
+| Função MQL5 | Substituto |
+|---|---|
+| `iOpen`, `iHigh`, `iLow`, `iClose`, `iTime` | proibido — estratégia opera sobre `MksBrick.triggerPrice`, não sobre velas |
+| `iATR`, `iMA`, `iRSI`, `i*` família | proibido em lógica — cálculo próprio sobre `MksTick`/`MksBrick` (ADR-018 pendente) |
+| `CopyTicks`, `CopyRates`, `CopyBuffer` | `ITickSource.Next(tick)` para ticks; sizers calculam internamente sobre o que recebem |
+
+### Execução de ordem
+
+| Função MQL5 | Substituto |
+|---|---|
+| `OrderSend`, `OrderSendAsync` | `IBroker.Send(request, result, err)` |
+| `OrderCheck` | interno ao `CMksMt5Broker` |
+| `PositionSelect*`, `OrderSelect*`, `HistorySelect*` | `IBroker.*` (estado das ordens vive no broker) |
+
+### Custom Symbol
+
+| Função MQL5 | Substituto |
+|---|---|
+| `CustomSymbolCreate`, `CustomSymbolSet*`, `CustomRatesUpdate`, `CustomRatesDelete` | aceitável apenas em sinks de renderização (ex.: `CCustomSymbolSink` no Producer) — nunca como fonte de preço para lógica de trading (Eixo 1 do V5) |
+
+### Como aplicar
+
+- Code review bloqueia merge se qualquer função desta lista aparecer fora de uma implementação concreta de interface (pasta `Core/Broker/`, `Core/Log/`, sinks de renderização) ou da camada de borda (`OnInit`/`OnTick`/`OnDeinit` de EAs/scripts em `MQL5/Experts/`, `MQL5/Scripts/`, `MQL5/Services/`).
+- Quando uma função substituta ainda não existe (ADR-016, 017, 018 pendentes), a chamada direta na borda é tolerada com nota de TODO citando a ADR que vai fechar a porta.
+- Lista evolui — ADRs novas reorientam o substituto canônico.
 
 ---
 
