@@ -652,6 +652,107 @@ O ATR no MKS-ULTIMATE é calculado sobre **bricks fechados**, com a interface `I
 
 ---
 
+### ADR-017: Modelo de confirmação de execução do broker
+
+**Data:** 2026-05-22
+**Status:** Aceita
+
+**Contexto:**
+A interface `IBroker` foi definida na Fase 1 com três métodos síncronos — `Send`, `Close`, `Modify` — retornando `MksExecutionResult`. O tipo já carrega `status`, `fillPrice`, `requestedPrice`, `filledLots`, `commission`, `execTimeMsc`, `brokerRetcode`. O que falta decidir, antes de escrever `CMksMt5Broker` e `CMksSimulatedBroker`, é o **modelo de confirmação** — o conjunto de regras de comportamento que faz a interface síncrona funcionar contra uma API MQL5 que tem confirmação parcialmente assíncrona, contra fillings que variam entre brokers, e contra contas que podem ser netting ou hedging.
+
+A API MQL5 expõe duas vias de confirmação para uma ordem (`docs.mql5.com/en/docs/trading/ordersend`, `docs.mql5.com/en/docs/event_handlers/ontradetransaction`):
+
+- **Síncrona via `OrderSend`** — retorna `bool` + `MqlTradeResult`. `result.retcode` reflete o status no momento do retorno. `TRADE_RETCODE_DONE` em ordem a mercado geralmente significa "preenchida", mas não universalmente.
+- **Assíncrona via `OnTradeTransaction`** — evento `TRADE_TRANSACTION_DEAL_ADD` é o único momento canônico em que sabemos que o deal foi executado, com `deal_ticket` recuperável e `DEAL_PRICE`/`DEAL_VOLUME`/`DEAL_COMMISSION`/`DEAL_SWAP` legíveis via `HistoryDealGetDouble`.
+
+Sem fixar como o broker do framework reconcilia essas duas vias, o `CMksMt5Broker` nasce com comportamento ambíguo: a estratégia chama `Send` e recebe um `MksExecutionResult` — esse resultado vem do retcode imediato (rápido, mas pode mentir sobre preenchimento de fato) ou da espera por `DEAL_ADD` (mais lento mas correto)? Adicionalmente, três outros eixos têm armadilhas conhecidas e precisam de política fixada:
+
+- **Filling mode** (`SYMBOL_FILLING_MODE`) varia por broker. `INVALID_FILL` (retcode 10030) é rejeição garantida se o tipo solicitado não está no bitmask do símbolo.
+- **Margin mode** (`ACCOUNT_MARGIN_MODE`): netting fecha por ordem oposta; hedging exige `MqlTradeRequest.position = ticket`. Tratar errado faz "posições sumirem" do ponto de vista do EA.
+- **Retcodes retryable** (REQUOTE 10004, PRICE_CHANGED 10020, PRICE_OFF 10021) merecem nova tentativa; outros (NO_MONEY, TRADE_DISABLED, INVALID_VOLUME) são fatais.
+
+Esta ADR fixa o modelo antes do código nascer com convenções tácitas. Não escreve o `CMksMt5Broker` — fixa as regras dele.
+
+**Decisão:**
+O `CMksMt5Broker` (real) e o `CMksSimulatedBroker` (futuro) compartilham um modelo de confirmação único, organizado em sete regras.
+
+1. **`Send`/`Close` são síncronos lógicos.** A interface `IBroker` permanece síncrona: a estratégia chama `Send(request)`, espera o resultado, segue. Internamente, o `CMksMt5Broker` chama `OrderSend` e então **bloqueia até `OnTradeTransaction` reportar `TRADE_TRANSACTION_DEAL_ADD` para o deal correspondente, ou até atingir o timeout**. O resultado retornado carrega o preço executado real lido via `HistoryDealGetDouble(deal_ticket, DEAL_PRICE)`, não o `result.price` do `OrderSend` síncrono (que pode ser estimativa).
+
+   Razões: (a) `IBroker` é o mesmo contrato em backtest, onde a confirmação é trivialmente síncrona — manter síncrono em live preserva paridade; (b) preço real só é confiável após `DEAL_ADD` (a race entre `OrderSend` e o evento é documentada); (c) estratégia que aciona `Send` e segue agindo antes de saber o resultado introduz não-determinismo que mata paridade backtest/live.
+
+2. **Broker é per-símbolo.** `CMksMt5Broker` recebe `ISymbol*` e `IAccount*` no construtor; opera **um único símbolo**. EA chart-bound (caso de uso atual e previsto) instancia um broker por símbolo no composition root. Broker multi-símbolo é trabalho futuro, fora desta ADR.
+
+3. **Timeout configurável, default 5 segundos.** Se `DEAL_ADD` não chega dentro do timeout, `Send` retorna `MksExecutionResult` com `status = MKS_EXEC_ERROR` e `brokerRetcode = MKS_ERR_BROKER_TIMEOUT` (novo código na faixa Broker 200–299). O builder de ordens **não retenta automaticamente em timeout** — é fatal para a chamada corrente. Estratégia decide se chama novamente.
+
+4. **Filling mode pré-detectado + fallback no primeiro `INVALID_FILL`.** No `Init()`, o broker lê `m_symbol.FillingMode()` (bitmask) e escolhe o tipo preferido por ordem de preferência configurável (default `IOC → FOK → RETURN`). Cache do filling efetivo no broker. Se o broker do corretor mente sobre o bitmask e devolve `INVALID_FILL` (retcode 10030) na primeira ordem, o broker **regrida na escala** (próximo filling do bitmask) e retenta uma vez. Após esse fallback bem-sucedido, o filling efetivo é cacheado e usado dali em diante.
+
+5. **Margin mode handling dual.** No `Init()`, o broker lê `m_account.MarginMode()`. `Close(positionId, lots)`:
+   - **Netting** (`ACCOUNT_MARGIN_MODE_RETAIL_NETTING` ou `EXCHANGE`): envia ordem oposta de `lots` no mesmo símbolo. Campo `MqlTradeRequest.position` ignorado.
+   - **Hedging** (`ACCOUNT_MARGIN_MODE_RETAIL_HEDGING`): envia ordem oposta de `lots` com `MqlTradeRequest.position = positionId`. Necessário para fechar a posição específica.
+
+   `Send` (abertura) é idêntico nos dois modos.
+
+6. **Retry interno para retcodes retryable.** Lista: `TRADE_RETCODE_REQUOTE` (10004), `TRADE_RETCODE_PRICE_CHANGED` (10020), `TRADE_RETCODE_PRICE_OFF` (10021). Política default: **3 tentativas, backoff de 100ms entre elas**. Configurável no construtor. Camada superior (`CMksTradeManager`, estratégia) recebe apenas o resultado final — sucesso ou último erro. Retcodes não-retryable (NO_MONEY, TRADE_DISABLED, MARKET_CLOSED, INVALID_*) retornam imediatamente.
+
+7. **`deviation` default = 10 points, configurável.** Nunca enviar `deviation=0` (pode ser rejeitado em alguns brokers; janela zero é hostil em mercados voláteis). O valor é definido por símbolo no construtor; estratégia não toca esse parâmetro diretamente — é configuração do broker.
+
+8. **`CostModel` como classe separada.** Em `Core/Broker/CMksCostModel.mqh`. Para o broker real, é **passthrough** — comissão e swap vêm de `HistoryDealGetDouble(deal_ticket, DEAL_COMMISSION/DEAL_SWAP)`. Para o broker simulado, é um modelo gerador: spread em points (fixed ou floating distribution), commission_per_lot, slippage como distribuição (uniform ou normal), swap_long/swap_short por noite. `MksExecutionResult` carrega o resultado de qualquer um dos dois — broker upstream não distingue.
+
+**Alternativas consideradas:**
+
+- **`IBroker` assíncrono — `Send` retorna imediato; estratégia consome eventos de fill via callback ou polling:** rejeitada. Assincronicidade quebra paridade backtest/live (backtest não tem race) e empurra complexidade para a estratégia. O custo síncrono (alguns ms aguardando `DEAL_ADD`) é aceitável para o caso de uso atual — uma estratégia faz poucas ordens por sessão, não é HFT.
+
+- **`OrderSend` síncrono puro — confiar em `result.retcode` e `result.price` sem aguardar `OnTradeTransaction`:** rejeitada. Documentação MQL5 e prática consolidada do ecossistema indicam que `DEAL_ADD` é o evento canônico de fill. Confiar em `result.price` cru produz `MksExecutionResult.fillPrice` que pode divergir do `DEAL_PRICE` real, especialmente em condições de spread variável ou Market execution.
+
+- **`OrderSendAsync` exclusivamente:** rejeitada. Faz sentido para HFT/multi-símbolo, não para o caso de uso atual. Mantém a complexidade alta sem retorno.
+
+- **Broker multi-símbolo (`Send(request, symbol)`):** rejeitada para v1. Adiciona parâmetro a cada chamada e complica a injeção de `ISymbol*`. Single-symbol broker cobre 100% dos casos previstos até a Fase 9 (EA de validação).
+
+- **Retry global sem política configurável (hardcoded 3 tentativas):** rejeitada. Diferentes estratégias têm tolerâncias diferentes — uma estratégia de breakout pode tolerar 0 retries (preço se moveu, oportunidade passou), uma estratégia de mean reversion pode tolerar 5. Política no construtor permite ajuste por estratégia.
+
+- **`MksExecutionResult` separado por tipo (FillReport vs RejectReport):** rejeitada. O tipo atual já tem `status` que discrimina FILLED/PARTIAL/REJECTED/ERROR. Tipos separados duplicariam código sem ganho.
+
+- **Filling mode tentando ordem real em vez de pré-detectar:** rejeitada. Pré-detecção (via `SYMBOL_FILLING_MODE` no `Init`) tem custo zero e evita uma rejeição garantida no caminho feliz. Fallback fica para o caso em que o broker mente sobre o bitmask — minoritário.
+
+**Consequências:**
+
+- **Novos códigos de erro na faixa Broker (200–299, reservada por ADR-009):**
+  - `MKS_ERR_BROKER_TIMEOUT = 200` — `DEAL_ADD` não chegou no tempo configurado.
+  - `MKS_ERR_BROKER_INVALID_FILL = 201` — todos os filling modes do bitmask falharam (caso patológico).
+  - `MKS_ERR_BROKER_RETRY_EXHAUSTED = 202` — tentativas de retry esgotadas em retcode retryable.
+  - `MKS_ERR_BROKER_NOT_INITIALIZED = 203` — `Send`/`Close` chamado antes de `Init`.
+  - Outros códigos surgem conforme implementação (REJECTED genérico, etc.).
+
+- **`MksExecutionResult` ganha campos.** Trabalho à parte em ciclo próprio após este aceite:
+  - `swap` (double) — captura de carry overnight (`DEAL_SWAP`).
+  - `dealId` (ulong) — ticket do deal MT5 que originou o fill, para auditoria.
+  - `attempts` (int) — quantas tentativas o broker fez (1 = sucesso na primeira; >1 = retries).
+
+- **`MksOrderRequest`** não muda em v1. Símbolo vem do broker (per-symbol). Magic number, expiration de pendente, type não-mercado ficam para futuro.
+
+- **`IBroker.Send/Close/Modify`** mantêm assinatura atual. A semântica síncrona já é compatível.
+
+- **Pasta nova `Core/Broker/`** — `CMksMt5Broker.mqh`, `CMksSimulatedBroker.mqh`, `CMksCostModel.mqh`. Atualizar `ARCHITECTURE.md` §2 quando implementada.
+
+- **`CMksMt5Broker` precisa receber `OnTradeTransaction` do EA.** Composition root expõe um método público (ex.: `g_broker.OnTradeTransactionEvent(transaction, request, result)`) chamado pelo `OnTradeTransaction` do EA. O broker mantém estado interno (deals esperados, deals chegados) para a sincronização síncrona-via-evento.
+
+- **Teste de paridade.** Quando ambos os brokers estiverem implementados, replicar o padrão do `Test_CMksRenkoBuilder`: duas instâncias (`CMksMt5Broker` mock + `CMksSimulatedBroker`) alimentadas com a mesma sequência de `MksOrderRequest` produzem `MksExecutionResult` idênticos campo-a-campo, dada uma simulação de slippage e custo idênticos. Esse é o gold standard de prova de paridade backtest/live para a camada de execução.
+
+- **ADR-016 prepara terreno aqui.** `CMksMt5Broker` consome `ISymbol` (FillingMode, TickSize, Point, VolumeStep, StopsLevel) e `IAccount` (MarginMode, FreeMargin). A interface estabelecida pela ADR-016 é a base direta.
+
+- **ARCHITECTURE.md §4** perde a entrada ADR-017 pendente quando esta for aceita.
+
+**Fronteiras:**
+
+- Não cobre **ordens pendentes** (`BUY_LIMIT`, `SELL_STOP`, etc.) — v1 do broker é apenas a mercado. Pendentes ficam para evolução futura.
+- Não cobre **multi-símbolo** no mesmo broker — cada símbolo tem seu broker.
+- Não cobre **otimização de latência** (`OrderSendAsync`, threading). Estratégia atual opera em escala de minutos por brick; latência síncrona é irrelevante.
+- Não cobre **broker para spread betting / CFD com regras especiais** — assumimos Market/Exchange execution padrão.
+- Não cobre a **implementação concreta** do `CMksMt5Broker` ou `CMksSimulatedBroker` — slice próprio após este aceite.
+- Não cobre `CostModel` em detalhe matemático — esta ADR fixa que ele existe como classe separada com responsabilidades duais (passthrough/gerador). Os parâmetros e fórmulas concretas do gerador são decisão do slice de implementação do `CMksSimulatedBroker`.
+
+---
+
 ### ADR-016: Interfaces ISymbol e IAccount
 
 **Data:** 2026-05-21
@@ -925,7 +1026,7 @@ Pontos que precisam virar ADR assim que forem enfrentados:
 
 - **ADR-005 (pendente):** Estrutura e execução dos testes unitários. Framework próprio mínimo ou adaptação de algo existente?
 - **ADR-008 (pendente):** Como tratar reabertura de mercado (segunda-feira) no RenkoBuilder. Gap vira brick? Vira múltiplos bricks? Vira nada? Evidência parcial já registrada em `CHECKPOINT-2026-05-20-slice2.md` §6.
-- **ADR-017 (pendente):** Modelo de confirmação de execução do `CMksMt5Broker`. Síncrono via retcode do `OrderSend` ou assíncrono via `OnTradeTransaction::TRADE_TRANSACTION_DEAL_ADD`? Decide latência vs. fidelidade de `fillPrice`/`slippage`. Inclui também política de filling mode (FOK/IOC/RETURN via `SymbolInfoInteger(SYMBOL_FILLING_MODE)`), uso de `OrderCheck`, e diferença netting vs. hedging. Bloqueia Fase 4 (Broker abstractions).
+
 Essas decisões são registradas formalmente quando forem enfrentadas, não antes. Decidir arquitetura no vazio produz decisões erradas.
 
 ## 5. Convenções de nomenclatura
