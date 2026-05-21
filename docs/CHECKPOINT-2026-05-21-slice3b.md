@@ -180,7 +180,7 @@ Estado das ADRs pendentes, atualizado pós-Slice 3b:
 | 008 | Reabertura de mercado no RenkoBuilder | **Pendente com evidência parcial registrada** (`CHECKPOINT-2026-05-20-slice2.md` §6): o builder atual já trata gap de fim de semana via ADR-011 multi-threshold; teste de 7 dias incluindo gap de 49h gerou M=2 sem erros. Evidência insuficiente para generalizar (1 instrumento, 1 broker). |
 | 016 | Interfaces `ISymbol`/`IAccount` + checklist API globais | **Pendente** — adicionada pós-auditoria MQL5. Protocolo 9 já estabelece a fronteira; falta a ADR formal e as interfaces. Bloqueia `CMksTradeManager`/`CMksRiskManager`/estratégias. |
 | 017 | Modelo de confirmação de execução do `CMksMt5Broker` | **Pendente** — adicionada pós-auditoria MQL5. Bloqueia Fase 4 (Broker abstractions). Inclui síncrono vs. assíncrono via `OnTradeTransaction`, filling mode, netting vs. hedging. |
-| 018 | Cálculo do ATR no `CMksAtrBrickSizer` | **Pendente** — adicionada pós-auditoria MQL5. ADR-010 §Consequências adiou explicitamente. Três alternativas mapeadas em `ARCHITECTURE.md` §4. |
+| 018 | Cálculo do ATR no `CMksAtrBrickSizer` | **Aceita** (commit deste aceite). ATR sobre bricks fechados (Wilder), `IBrickSizer` ganha `OnBrick`, warm-up via `defaultSizePoints` para evitar deadlock. Bloqueia implementação do `CMksAtrBrickSizer` mas destrava o desenho. |
 
 Outras dívidas registradas:
 

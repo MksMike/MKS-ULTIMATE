@@ -563,6 +563,92 @@ A política de rotação do `.mksbk` no MKS-ULTIMATE assenta sobre três regras:
 
 ---
 
+### ADR-018: Cálculo do ATR no CMksAtrBrickSizer
+
+**Data:** 2026-05-21
+**Status:** Aceita
+
+**Contexto:**
+A ADR-010 desenhou o eixo de tamanho do brick como interface `IBrickSizer` e listou `CMksAtrBrickSizer` como implementação futura, com "a cadência de recálculo do tamanho por ATR — travado por sessão, por N bricks ou por brick — fica adiada para quando o `CAtrBrickSizer` for construído".
+
+A auditoria MQL5 (Risco 6, integrada em `4756e8e`) reabriu a discussão e identificou três alternativas técnicas para o cálculo:
+
+- **(a)** ATR sobre ticks brutos, cálculo próprio.
+- **(b)** ATR sobre bricks fechados, cálculo próprio.
+- **(c)** `iATR` nativo do MQL5, com fallback para arquivo histórico em backtest.
+
+A ADR-015 vetou (c) — `iATR` em backtest depende das séries que o Strategy Tester injeta, e o framework rejeita o tester como fonte de verdade. Resta decidir entre (a) e (b), e também a forma da interface `IBrickSizer` (que hoje não permite ao sizer receber feedback do builder).
+
+**Decisão:**
+O ATR no MKS-ULTIMATE é calculado sobre **bricks fechados**, com a interface `IBrickSizer` estendida para receber notificação do builder a cada brick emitido.
+
+1. **ATR sobre bricks fechados (alternativa b).** O `CMksAtrBrickSizer` acumula uma janela rolante dos últimos N bricks fechados e calcula o ATR clássico (Wilder's smoothing) sobre essa janela. `SizePoints()` retorna `ATR_derived * multiplier`, com clamp opcional em `[minSizePoints, maxSizePoints]`.
+
+2. **`IBrickSizer` ganha método `OnBrick`.** Adição na interface, em respeito à ADR-004 (pure virtual):
+
+   ```
+   virtual void OnBrick(const MksBrick &brick) = 0;
+   ```
+
+   - `CMksFixedBrickSizer` implementa como no-op (corpo vazio) — size é constante, sem feedback necessário.
+   - `CMksAtrBrickSizer` implementa como recálculo da janela e do ATR.
+
+   Builder chama `m_sizer.OnBrick(brick)` imediatamente após cada `EmitBrick`. Mudança no `CMksRenkoBuilder` é pequena (1 linha).
+
+3. **Cadência de recálculo: por brick.** A cada brick emitido, o sizer atualiza o ATR. Custo de CPU é trivial (janela de N bricks com smoothing constante). Sem rate-limiting nem otimização prematura.
+
+4. **Warm-up: `SizePoints` retorna `defaultSizePoints` até acumular N bricks.** O `CMksAtrBrickSizer` recebe `defaultSizePoints` no construtor (ex.: 3.0). `IsReady()` retorna `true` **desde o início**. Antes de acumular N bricks, `SizePoints` retorna o default. A partir do N-ésimo brick, retorna `ATR_derived * multiplier`.
+
+   Razão para `IsReady=true` desde o primeiro tick: o builder atual NÃO emite bricks enquanto `sizer.IsReady()==false` (`Core/RenkoBuilder/CMksRenkoBuilder.mqh`, linha 150). Se ATR sizer retornasse `false` durante warm-up, deadlock — não emite brick → sizer nunca recebe brick → nunca fica pronto.
+
+5. **Fórmula: Wilder's smoothing.** `ATR_n = (ATR_{n-1} * (N-1) + TR_n) / N`, onde `TR_n = max(high - low, |high - prev_close|, |low - prev_close|)` sobre o brick atual. Wilder é o ATR clássico (formulação de J. Welles Wilder em "New Concepts in Technical Trading Systems", 1978). Simple MA do TR é alternativa rejeitada — Wilder é mais responsivo a movimentos recentes sem o efeito de "drop-off" da SMA quando uma observação grande sai da janela.
+
+6. **Parâmetros do construtor:**
+   - `atrPeriod`: N (default sugerido 14 bricks — convenção).
+   - `multiplier`: fator sobre o ATR (default sugerido 0.5 — brick size = metade do ATR; valores típicos 0.3 a 1.0).
+   - `defaultSizePoints`: fallback durante warm-up.
+   - `minSizePoints`, `maxSizePoints`: clamps opcionais (defaults 0 e infinito).
+
+**Alternativas consideradas:**
+
+- **(a) ATR sobre ticks brutos:** rejeitada. Conceitualmente forçada — "high" e "low" são pontuais em ticks, sem analogia direta com ATR clássico. Implementação requer `IBrickSizer.OnTick(MksTick&)` — interface mais larga, custo de CPU por tick (vs. por brick), e a resultante "ATR de ticks" não é grandeza padrão da literatura. Sobre bricks, ATR é coerente com Renko: "toda decisão pós-brick é sobre bricks".
+
+- **(c) `iATR` nativo:** vetada pela ADR-015. `iATR` em backtest depende das séries injetadas pelo Strategy Tester, e o framework rejeita o tester como fonte de verdade. Implementação ficaria sujeita a dependência oculta do tester.
+
+- **Cadência por sessão (travado no `OnInit`):** rejeitada. Mata a adaptabilidade do ATR — perde o ponto de ter sizer dinâmico. Útil apenas se o objetivo for "ATR como inicialização one-shot", o que não é o caso aqui.
+
+- **Cadência por janela (recalcula a cada M bricks, M > 1):** rejeitada. Otimização prematura — CPU de recalcular ATR a cada brick é desprezível. Adiciona complexidade sem ganho mensurável.
+
+- **Simple MA do TR (vs. Wilder's):** rejeitada. SMA é mais lenta a reagir e tem efeito de "drop-off" quando uma observação grande sai da janela. Wilder é o padrão da literatura para ATR.
+
+- **Sizer também implementa `IRenkoSink` (recebe bricks como sink):** rejeitada. Acoplamento confuso — sizer ficaria conectado a duas cadeias (builder via `SizePoints`; multiSink via `OnBrickClose`). E MQL5 não suporta herança múltipla. Método `OnBrick` direto em `IBrickSizer` é mais limpo.
+
+- **`IsReady=false` durante warm-up, builder espera:** rejeitada. Causaria deadlock — sem bricks emitidos, sizer nunca acumula janela, nunca fica pronto. `defaultSizePoints` + `IsReady=true` quebra o ciclo determinismticamente.
+
+**Consequências:**
+
+- **`IBrickSizer` ganha `OnBrick(const MksBrick&)` como pure virtual.** Alteração de interface do core já aceita (ADR-010). `CMksFixedBrickSizer` (já existente) ganha implementação no-op. Recompilação obrigatória de arquivos que incluem `IBrickSizer.mqh`. Alteração feita em ciclo próprio após este aceite, padrão das ADRs anteriores.
+
+- **`CMksRenkoBuilder.mqh` chama `m_sizer.OnBrick(brick)`** após cada `EmitBrick`. Alteração pequena (1 linha em `EmitBrick` ou no caller, dependendo da abordagem).
+
+- **`CMksAtrBrickSizer` em `Core/RenkoBuilder/CMksAtrBrickSizer.mqh`** — nova classe. Implementação pendente, em slice próprio. Inclui janela rolante de N bricks, cálculo de TR e ATR Wilder, `SizePoints` com fallback warm-up, `Validate` checando parâmetros.
+
+- **Teste de regressão do `CMksFixedBrickSizer`:** adição do `OnBrick` no-op não muda comportamento. `Test_CMksRenkoBuilder.mq5` (428 assertions) deve continuar verde após a alteração da interface.
+
+- **Determinismo preservado.** ATR sobre bricks é função pura da sequência de bricks. Sequência de bricks é função pura da sequência de ticks (ADRs 010/011/006). Logo, ATR é função pura dos ticks — paridade backtest/live mantida.
+
+- **Path dependence aceita.** ATR drift muda size que muda formação do próximo brick. Sistema é path-dependent, mas determinístico: mesma sequência de ticks gera a mesma sequência completa (bricks + ATR + sizes), sempre.
+
+- **Warm-up determinístico.** Os primeiros N bricks usam `defaultSizePoints` fixo, depois o sizer transita para `ATR_derived`. Transição é por contagem de bricks, não por tempo — reprodutível.
+
+**Fronteiras:**
+
+- Não é a implementação concreta do `CMksAtrBrickSizer` — slice próprio.
+- Não é a escolha de defaults numéricos (`atrPeriod=14`, `multiplier=0.5`) como vinculantes — são sugestões; cada estratégia escolhe os seus.
+- Não é o conceito de "sizer dinâmico" em geral — esta ADR cobre só ATR. Outros sizers dinâmicos (baseados em volume, sessão, volatilidade realizada) ficam para ADRs futuras se forem necessários.
+
+---
+
 ### ADR-007: Formato e destino do log estruturado
 
 **Data:** 2026-05-21
@@ -727,8 +813,6 @@ Pontos que precisam virar ADR assim que forem enfrentados:
 - **ADR-008 (pendente):** Como tratar reabertura de mercado (segunda-feira) no RenkoBuilder. Gap vira brick? Vira múltiplos bricks? Vira nada? Evidência parcial já registrada em `CHECKPOINT-2026-05-20-slice2.md` §6.
 - **ADR-016 (pendente):** Interfaces `ISymbol` e `IAccount` + checklist de chamadas API globais proibidas em código de lógica (ver Protocolo 9 em `PROTOCOLOS.md`). Hoje a porta está fechada por convenção — ADR-013 §2 só permite chamadas globais na borda (composition root em `OnInit`/`OnTick`/`OnDeinit`). Precisa virar contrato testável antes de `CMksTradeManager`/`CMksRiskManager`/estratégias serem escritas.
 - **ADR-017 (pendente):** Modelo de confirmação de execução do `CMksMt5Broker`. Síncrono via retcode do `OrderSend` ou assíncrono via `OnTradeTransaction::TRADE_TRANSACTION_DEAL_ADD`? Decide latência vs. fidelidade de `fillPrice`/`slippage`. Inclui também política de filling mode (FOK/IOC/RETURN via `SymbolInfoInteger(SYMBOL_FILLING_MODE)`), uso de `OrderCheck`, e diferença netting vs. hedging. Bloqueia Fase 4 (Broker abstractions).
-- **ADR-018 (pendente):** Cálculo do ATR no `CMksAtrBrickSizer`. Três alternativas: (a) ATR sobre ticks brutos, cálculo próprio; (b) ATR sobre bricks fechados (coerente com filosofia "decisão pós-brick é sobre bricks"); (c) `iATR` nativo (reintroduz dependência do tester, contra ADR-015 quando aceita). ADR-010 §Consequências adiou explicitamente.
-
 Essas decisões são registradas formalmente quando forem enfrentadas, não antes. Decidir arquitetura no vazio produz decisões erradas.
 
 ## 5. Convenções de nomenclatura
