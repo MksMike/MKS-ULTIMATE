@@ -1033,7 +1033,7 @@ O Strategy Tester nativo do MT5 é usado no MKS-ULTIMATE **como ferramenta de de
 ### ADR-005: Framework próprio mínimo para testes unitários do core
 
 **Data:** 2026-05-21
-**Status:** Proposta
+**Status:** Aceita
 
 **Contexto:**
 A Fase 3 do `ROADMAP.md` exige um "framework mínimo de asserções (`ASSERT_EQ`, `ASSERT_TRUE`, etc.) em `Core/Testing/`" como critério de saída. Quatro suítes de teste já existem e passam — `Test_CMksRenkoBuilder` (428 assertions), `Test_CMksBrickFile` (97), `Test_CMksAtrBrickSizer` (72) e `Test_CMksSimulatedBroker` (51) —, mas usam asserções inline copiadas e coladas entre os arquivos. Auditoria desses 4 arquivos antes desta ADR revelou divergências estruturais: a tolerância de `AssertEqualDouble` é hardcoded por arquivo (1e-9 em três, 1e-12 em um), `AssertNearDouble` (tolerância explícita) só existe em dois deles, a mensagem de falha varia em formatação numérica entre arquivos, e o comportamento de fim diverge (um dispara `Alert`, os outros só `Print`). Helpers de domínio — `CCapturingSink`, `CFakeSymbol`, `MakeTick`, `MakeBrick`, `BuildSampleBricks` — são reescritos inline em cada arquivo. O registro de testes é manual: cada função é chamada em `OnStart()`; esquecer de adicionar a chamada deixa o teste fora da execução sem aviso. Sem uma decisão fixada, cada novo módulo do core (Trade Manager, Risk Manager, StressLab) replicará o padrão divergente e a dívida cresce. A ADR-005 estava reservada na §4 desde a abertura do documento; esta entrada a quita antes da Fase 5 abrir.
