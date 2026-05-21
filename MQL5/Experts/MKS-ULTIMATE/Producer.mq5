@@ -12,6 +12,7 @@
 //| @depends_on     : Core/RenkoBuilder/CMksRenkoBuilder.mqh,
 //|                   Core/RenkoBuilder/CMksFixedBrickSizer.mqh,
 //|                   Core/Data/CMksBrickFileWriter.mqh,
+//|                   Core/Log/CMksLogger.mqh,
 //|                   Core/Types/RenkoGeometry.mqh, Core/Types/Tick.mqh,
 //|                   Core/Types/Brick.mqh, Core/Types/Error.mqh,
 //|                   Core/Interfaces/IRenkoSink.mqh
@@ -22,25 +23,28 @@
 #include <MKS-ULTIMATE/Core/RenkoBuilder/CMksRenkoBuilder.mqh>
 #include <MKS-ULTIMATE/Core/RenkoBuilder/CMksFixedBrickSizer.mqh>
 #include <MKS-ULTIMATE/Core/Data/CMksBrickFileWriter.mqh>
+#include <MKS-ULTIMATE/Core/Log/CMksLogger.mqh>
 #include <MKS-ULTIMATE/Core/Types/RenkoGeometry.mqh>
 #include <MKS-ULTIMATE/Core/Types/Tick.mqh>
 #include <MKS-ULTIMATE/Core/Types/Brick.mqh>
 #include <MKS-ULTIMATE/Core/Types/Error.mqh>
 #include <MKS-ULTIMATE/Core/Interfaces/IRenkoSink.mqh>
 
-input double InpBrickSizePts        = 3.0;   // tamanho do brick em pontos
-input int    InpHistoricalFillDays  = 0;     // 0 = sem fill histórico; >0 = CopyTicksRange(now-N*86400, now)
-input int    InpInvalidTickLimit    = 10;    // L (ADR-006 §5)
-input int    InpThresholdLimit      = 20;    // K (ADR-011 §4)
-input bool   InpPrintBricks         = false; // verbose: imprime cada brick no journal
-input int    InpInvalidLogEvery     = 100;   // rate-limit do log 103: imprime 1 a cada N
-input bool   InpResetCustomSymbolBars = true; // wipe bars antigas do Custom Symbol no OnInit
+input double InpBrickSizePts          = 3.0;   // tamanho do brick em pontos
+input int    InpHistoricalFillDays    = 0;     // 0 = sem fill histórico; >0 = CopyTicksRange(now-N*86400, now)
+input int    InpInvalidTickLimit      = 10;    // L (ADR-006 §5)
+input int    InpThresholdLimit        = 20;    // K (ADR-011 §4)
+input bool   InpPrintBricks           = false; // verbose: imprime cada brick no journal
+input int    InpInvalidLogEvery       = 100;   // rate-limit do log 103: imprime 1 a cada N
+input bool   InpResetCustomSymbolBars = true;  // wipe bars antigas do Custom Symbol no OnInit
+input bool   InpLogToFile             = true;  // grava .log em MKS-ULTIMATE\Logs\ (ADR-007)
 
 string   g_symbol         = "";
 int      g_digits         = 0;
 string   g_broker         = "";
 long     g_account        = 0;
 string   g_filePath       = "";
+string   g_logPath        = "";
 string   g_csName         = "";
 datetime g_nextBarTime    = 0;
 ulong    g_seq            = 0;
@@ -54,6 +58,7 @@ int      g_histBricks     = 0;
 CMksFixedBrickSizer  *g_sizer   = NULL;
 CMksBrickFileWriter  *g_writer  = NULL;
 CMksRenkoBuilder     *g_builder = NULL;
+CMksLogger           *g_logger  = NULL;
 
 //+------------------------------------------------------------------+
 //| Sink: encaminha cada brick fechado para o writer e contabiliza.   |
@@ -311,23 +316,30 @@ void IngestOne(const MksTick &tick)
       if(InpInvalidLogEvery > 0 && (g_invalidSeen % InpInvalidLogEvery == 0))
       {
          g_invalidLogged++;
-         PrintFormat("103 invalid tick (%d-th, log 1/%d): %s",
-                     g_invalidSeen, InpInvalidLogEvery, err.ToString());
+         g_logger.Warn("Producer", "invalid tick (rate-limited)",
+            StringFormat("\"code\":103,\"seen\":%d,\"every\":%d,\"err\":\"%s\"",
+                         g_invalidSeen, InpInvalidLogEvery,
+                         MksJsonEscape(err.ToString())));
       }
    }
    else if(err.code == MKS_ERR_RENKO_THRESHOLD_LIMIT_EXCEEDED)
    {
       g_k102Seen++;
-      PrintFormat("102 K-exceeded: %s", err.ToString());
+      g_logger.Warn("Producer", "threshold limit K exceeded",
+         StringFormat("\"code\":102,\"err\":\"%s\"",
+                      MksJsonEscape(err.ToString())));
    }
    else if(err.code == MKS_ERR_RENKO_TICK_STREAM_CORRUPT)
    {
       g_streamHalted = true;
-      PrintFormat("104 STREAM CORRUPT — builder interrompido: %s", err.ToString());
+      g_logger.Error("Producer", "tick stream corrupt, builder halted",
+         StringFormat("\"code\":104,\"err\":\"%s\"",
+                      MksJsonEscape(err.ToString())));
    }
    else
    {
-      PrintFormat("ERR: %s", err.ToString());
+      g_logger.Error("Producer", "ingest error",
+         StringFormat("\"err\":\"%s\"", MksJsonEscape(err.ToString())));
    }
 }
 
@@ -344,12 +356,13 @@ void RunHistoricalFill(int days)
    int n = CopyTicksRange(g_symbol, ticks, COPY_TICKS_ALL, fromMsc, toMsc);
    if(n <= 0)
    {
-      PrintFormat("historical fill: CopyTicksRange retornou %d (LastError=%d)",
-                  n, GetLastError());
+      g_logger.Warn("Producer", "historical fill: CopyTicksRange failed",
+         StringFormat("\"ret\":%d,\"lastErr\":%d", n, GetLastError()));
       return;
    }
    g_histLoaded = n;
-   PrintFormat("historical fill: %d ticks (%d dias)", n, days);
+   g_logger.Info("Producer", "historical fill: ticks loaded",
+      StringFormat("\"ticks\":%d,\"days\":%d", n, days));
 
    int bricksBefore = g_sink.bricksWritten;
    for(int i = 0; i < n; i++)
@@ -359,7 +372,8 @@ void RunHistoricalFill(int days)
       if(g_streamHalted) break;
    }
    g_histBricks = g_sink.bricksWritten - bricksBefore;
-   PrintFormat("historical fill: %d bricks emitidos", g_histBricks);
+   g_logger.Info("Producer", "historical fill: bricks emitted",
+      StringFormat("\"bricks\":%d", g_histBricks));
 }
 
 //+------------------------------------------------------------------+
@@ -373,6 +387,7 @@ void Cleanup()
    if(g_sink       != NULL) { delete g_sink;       g_sink       = NULL; }
    if(g_writer     != NULL) { delete g_writer;     g_writer     = NULL; }
    if(g_sizer      != NULL) { delete g_sizer;      g_sizer      = NULL; }
+   if(g_logger     != NULL) { delete g_logger;     g_logger     = NULL; }
 }
 
 //+------------------------------------------------------------------+
@@ -383,25 +398,44 @@ int OnInit()
    g_broker  = AccountInfoString(ACCOUNT_COMPANY);
    g_account = AccountInfoInteger(ACCOUNT_LOGIN);
 
-   Print("");
-   Print("=== MKS-ULTIMATE Producer (Slice 3b) ===");
-   PrintFormat("provenance: broker=\"%s\" account=%I64d symbol=%s digits=%d",
-               g_broker, g_account, g_symbol, g_digits);
-   PrintFormat("config: S=%.4f preset=median L=%d K=%d histDays=%d printBricks=%s resetCS=%s",
-               InpBrickSizePts, InpInvalidTickLimit, InpThresholdLimit,
-               InpHistoricalFillDays, (InpPrintBricks ? "true" : "false"),
-               (InpResetCustomSymbolBars ? "true" : "false"));
+   datetime sessionStart = TimeCurrent();
+   MqlDateTime dt;
+   TimeToStruct(sessionStart, dt);
+   string stamp = StringFormat("%04d%02d%02dT%02d%02d%02d",
+                               dt.year, dt.mon, dt.day,
+                               dt.hour, dt.min, dt.sec);
 
-   // Pasta destino. FileOpen não cria recursivamente — criar nível por nível.
+   // Pastas. FileOpen não cria recursivamente — criar nível por nível.
    FolderCreate("MKS-ULTIMATE");
    FolderCreate("MKS-ULTIMATE\\Bricks");
+   FolderCreate("MKS-ULTIMATE\\Logs");
+
+   // Logger antes de tudo — todas mensagens posteriores vão para JSON-line.
+   g_logger = new CMksLogger();
+   g_logPath = StringFormat("MKS-ULTIMATE\\Logs\\%s_%s.log", g_symbol, stamp);
+   MksError err;
+   if(!g_logger.Open(g_logPath, MKS_LOG_INFO, true, InpLogToFile, err))
+   {
+      PrintFormat("OnInit: logger.Open falhou: %s", err.ToString());
+      Cleanup();
+      return INIT_FAILED;
+   }
+   g_logger.WriteHeader(g_broker, g_account, g_symbol, g_digits,
+                        "Producer", (long)sessionStart * 1000);
+   g_logger.Info("Producer", "starting",
+      StringFormat("\"S\":%.4f,\"preset\":\"median\",\"L\":%d,\"K\":%d,"
+                   "\"histDays\":%d,\"printBricks\":%s,\"resetCS\":%s",
+                   InpBrickSizePts, InpInvalidTickLimit, InpThresholdLimit,
+                   InpHistoricalFillDays,
+                   (InpPrintBricks ? "true" : "false"),
+                   (InpResetCustomSymbolBars ? "true" : "false")));
 
    // Sizer (heap para que cleanup parcial seja uniforme).
    g_sizer = new CMksFixedBrickSizer(InpBrickSizePts);
-   MksError err;
    if(!g_sizer.Validate(err))
    {
-      PrintFormat("OnInit: sizer inválido: %s", err.ToString());
+      g_logger.Error("Producer", "sizer invalid",
+         StringFormat("\"err\":\"%s\"", MksJsonEscape(err.ToString())));
       Cleanup();
       return INIT_PARAMETERS_INCORRECT;
    }
@@ -409,16 +443,16 @@ int OnInit()
    MksRenkoGeometry geom = MksGeometryMedian();
    if(!geom.Validate(err))
    {
-      PrintFormat("OnInit: geometria inválida: %s", err.ToString());
+      g_logger.Error("Producer", "geometry invalid",
+         StringFormat("\"err\":\"%s\"", MksJsonEscape(err.ToString())));
       Cleanup();
       return INIT_PARAMETERS_INCORRECT;
    }
 
    // Writer com retry de sufixo numérico em caso de colisão (ADR-014 §4).
-   // Sessão capturada uma vez para que todos os retries usem o mesmo
-   // timestamp — sufixo é o único campo que muda entre tentativas.
+   // Reutiliza sessionStart já capturado para o log (mesmo timestamp em
+   // ambos os arquivos: .log e .mksbk).
    g_writer = new CMksBrickFileWriter();
-   datetime sessionStart = TimeCurrent();
    const int kMaxAttempts = 100;
    bool opened = false;
    for(int attempt = 0; attempt < kMaxAttempts; attempt++)
@@ -430,19 +464,24 @@ int OnInit()
          break;
       }
       if(err.code != MKS_ERR_DATA_FILE_EXISTS) break; // erro real, não retry
-      PrintFormat("OnInit: arquivo existe, tentando próximo sufixo: %s", g_filePath);
+      g_logger.Info("Producer", "mksbk filename collision, retrying",
+         StringFormat("\"path\":\"%s\",\"attempt\":%d",
+                      MksJsonEscape(g_filePath), attempt + 1));
    }
    if(!opened)
    {
-      PrintFormat("OnInit: writer.Open falhou: %s", err.ToString());
+      g_logger.Error("Producer", "writer.Open failed",
+         StringFormat("\"err\":\"%s\"", MksJsonEscape(err.ToString())));
       Cleanup();
       return INIT_FAILED;
    }
-   PrintFormat("output: %s", g_filePath);
+   g_logger.Info("Producer", "mksbk opened",
+      StringFormat("\"path\":\"%s\"", MksJsonEscape(g_filePath)));
    if(!g_writer.WriteHeader(g_broker, g_account, g_symbol, g_digits,
                             geom, InpBrickSizePts, err))
    {
-      PrintFormat("OnInit: WriteHeader falhou: %s", err.ToString());
+      g_logger.Error("Producer", "writer.WriteHeader failed",
+         StringFormat("\"err\":\"%s\"", MksJsonEscape(err.ToString())));
       Cleanup();
       return INIT_FAILED;
    }
@@ -452,20 +491,22 @@ int OnInit()
    // limpo). Setado APÓS WriteHeader do .mksbk para que uma falha aqui
    // não bagunce a invariante do writer.
    g_csName = BuildCustomSymbolName(g_symbol, InpBrickSizePts);
-   PrintFormat("custom symbol: %s", g_csName);
+   g_logger.Info("Producer", "custom symbol",
+      StringFormat("\"name\":\"%s\"", MksJsonEscape(g_csName)));
    if(!EnsureCustomSymbolReady(g_csName, g_symbol, err))
    {
-      PrintFormat("OnInit: EnsureCustomSymbolReady falhou: %s", err.ToString());
+      g_logger.Error("Producer", "EnsureCustomSymbolReady failed",
+         StringFormat("\"err\":\"%s\"", MksJsonEscape(err.ToString())));
       Cleanup();
       return INIT_FAILED;
    }
    if(InpResetCustomSymbolBars)
    {
       if(!CustomRatesDelete(g_csName, 0, LONG_MAX))
-         PrintFormat("WARN: CustomRatesDelete falhou: lastErr=%d (segue sem wipe)",
-                     GetLastError());
+         g_logger.Warn("Producer", "CustomRatesDelete failed (continues without wipe)",
+            StringFormat("\"lastErr\":%d", GetLastError()));
       else
-         Print("CS: bars antigas removidas");
+         g_logger.Info("Producer", "cs bars wiped", "");
    }
    g_nextBarTime = AlignDownToM1(TimeCurrent());
 
@@ -490,7 +531,7 @@ int OnInit()
    // Fill histórico opcional (mesmo motor; combate ao eixo 2 do V5).
    RunHistoricalFill(InpHistoricalFillDays);
 
-   Print("OnInit: pronto. Processando ticks live...");
+   g_logger.Info("Producer", "ready, processing live ticks", "");
    return INIT_SUCCEEDED;
 }
 
@@ -512,8 +553,9 @@ void OnDeinit(const int reason)
    if(g_writer != NULL)
    {
       MksError err;
-      if(!g_writer.Close(err))
-         PrintFormat("OnDeinit: Close falhou: %s", err.ToString());
+      if(!g_writer.Close(err) && g_logger != NULL)
+         g_logger.Error("Producer", "writer.Close failed",
+            StringFormat("\"err\":\"%s\"", MksJsonEscape(err.ToString())));
    }
 
    int totalBricks  = (g_sink   != NULL) ? g_sink.bricksWritten    : 0;
@@ -522,20 +564,25 @@ void OnDeinit(const int reason)
    int csFails      = (g_csSink != NULL) ? g_csSink.updateFailures : 0;
    long fileBricks  = (g_writer != NULL) ? g_writer.BrickCount()   : 0;
 
-   Print("");
-   Print("=== RELATORIO Producer ===");
-   PrintFormat("deinit reason: %d", reason);
-   PrintFormat("ticks ingeridos (seq): %I64u", g_seq);
-   PrintFormat("bricks: total=%d (writer count=%I64d) writeFailures=%d",
-               totalBricks, fileBricks, writeFails);
-   PrintFormat("custom symbol: %s bars=%d updateFailures=%d",
-               g_csName, csBars, csFails);
-   PrintFormat("histórico: ticks=%d bricks=%d", g_histLoaded, g_histBricks);
-   PrintFormat("erros: 102=%d 103=%d (logados=%d) 104=%s",
-               g_k102Seen, g_invalidSeen, g_invalidLogged,
-               (g_streamHalted ? "yes" : "no"));
-   PrintFormat("arquivo: %s", g_filePath);
-   Print("=== fim ===");
+   if(g_logger != NULL)
+   {
+      g_logger.Info("Producer", "session summary",
+         StringFormat(
+            "\"deinitReason\":%d,\"ticksIngested\":%I64u,"
+            "\"bricksTotal\":%d,\"writerCount\":%I64d,\"writeFailures\":%d,"
+            "\"csName\":\"%s\",\"csBars\":%d,\"csUpdateFailures\":%d,"
+            "\"histTicks\":%d,\"histBricks\":%d,"
+            "\"err102\":%d,\"err103\":%d,\"err103Logged\":%d,\"streamHalted\":%s,"
+            "\"mksbkPath\":\"%s\",\"logPath\":\"%s\"",
+            reason, g_seq,
+            totalBricks, fileBricks, writeFails,
+            MksJsonEscape(g_csName), csBars, csFails,
+            g_histLoaded, g_histBricks,
+            g_k102Seen, g_invalidSeen, g_invalidLogged,
+            (g_streamHalted ? "true" : "false"),
+            MksJsonEscape(g_filePath), MksJsonEscape(g_logPath)));
+      g_logger.Close();
+   }
 
    Cleanup();
 }

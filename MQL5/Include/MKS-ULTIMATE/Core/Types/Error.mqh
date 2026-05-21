@@ -26,7 +26,13 @@ enum ENUM_MKS_ERROR_CODE
    MKS_ERR_RENKO_TICK_STREAM_CORRUPT = 104, // L ticks inválidos consecutivos (ADR-006)
 
    //--- Broker 200–299, Trade 300–399, Risk 400–499,
-   //    StressLab 500–599, Log 600–699, Testing 700–799 — ver ADR-009
+   //    StressLab 500–599 — ver ADR-009
+
+   //--- Log: faixa 600–699 — ver ADR-007 ---
+   MKS_ERR_LOG_FILE_IO = 600,              // falha de I/O do logger (open/write/close)
+   MKS_ERR_LOG_STATE_INVALID = 601,        // operação no logger em estado errado
+
+   //--- Testing 700–799 — ver ADR-009
 
    //--- Data: faixa 800–899 — ver ADR-012 ---
    MKS_ERR_DATA_FILE_IO = 800,             // falha de I/O (open/read/write/seek/close)
