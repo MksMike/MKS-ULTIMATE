@@ -66,7 +66,7 @@ Este documento define **o que construir e em que ordem**. Cada fase tem entregá
 
 ## Fase 2 — RenkoBuilder (coração do framework)
 
-**Status:** Em andamento
+**Status:** Concluída
 
 **Entregáveis:**
 - `Core/RenkoBuilder/CMksRenkoBuilder.mqh` — classe que consome ticks e emite bricks
@@ -97,7 +97,9 @@ Este documento define **o que construir e em que ordem**. Cada fase tem entregá
 
 ## Fase 3 — Testes unitários do core
 
-**Status:** Não iniciada
+**Status:** Parcialmente concluída
+
+**Nota:** Cobertura de testes existe e passa — 648 assertions distribuídas entre `Test_CMksRenkoBuilder` (428), `Test_CMksBrickFile` (97), `Test_CMksAtrBrickSizer` (72) e `Test_CMksSimulatedBroker` (51). Porém, os testes usam asserções inline; o critério de framework formal em `Core/Testing/` permanece aberto e depende da ADR-005.
 
 **Entregáveis:**
 - Estrutura de testes em `tests/` (formato a decidir — pode ser scripts `.mq5` que rodam asserções, ou infra externa)
@@ -121,7 +123,9 @@ Este documento define **o que construir e em que ordem**. Cada fase tem entregá
 
 ## Fase 4 — Broker abstractions
 
-**Status:** Não iniciada
+**Status:** Concluída
+
+**Nota:** ADR-017 inteira materializada em código testado. `CMksMt5Broker` validado em demo XAUUSDm/Exness (Send+Close em 524ms, sem timeout). `CMksSimulatedBroker` cobre 12 cenários com 51 assertions. `CMksCostModel` plugável (spread, slippage, commission, swap). Retry interno (REQUOTE/PRICE_CHANGED/PRICE_OFF, 3 tentativas, backoff 100ms), fallback de filling (FOK→IOC→RETURN), retcodes MT5 tratados via códigos 200–203.
 
 **Entregáveis:**
 - `Core/Broker/CMksMt5Broker.mqh` — implementação de `IBroker` usando API MT5 real (para live e backtest nativo)
