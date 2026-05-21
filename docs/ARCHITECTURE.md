@@ -1030,11 +1030,58 @@ O Strategy Tester nativo do MT5 é usado no MKS-ULTIMATE **como ferramenta de de
 
 ---
 
+### ADR-005: Framework próprio mínimo para testes unitários do core
+
+**Data:** 2026-05-21
+**Status:** Proposta
+
+**Contexto:**
+A Fase 3 do `ROADMAP.md` exige um "framework mínimo de asserções (`ASSERT_EQ`, `ASSERT_TRUE`, etc.) em `Core/Testing/`" como critério de saída. Quatro suítes de teste já existem e passam — `Test_CMksRenkoBuilder` (428 assertions), `Test_CMksBrickFile` (97), `Test_CMksAtrBrickSizer` (72) e `Test_CMksSimulatedBroker` (51) —, mas usam asserções inline copiadas e coladas entre os arquivos. Auditoria desses 4 arquivos antes desta ADR revelou divergências estruturais: a tolerância de `AssertEqualDouble` é hardcoded por arquivo (1e-9 em três, 1e-12 em um), `AssertNearDouble` (tolerância explícita) só existe em dois deles, a mensagem de falha varia em formatação numérica entre arquivos, e o comportamento de fim diverge (um dispara `Alert`, os outros só `Print`). Helpers de domínio — `CCapturingSink`, `CFakeSymbol`, `MakeTick`, `MakeBrick`, `BuildSampleBricks` — são reescritos inline em cada arquivo. O registro de testes é manual: cada função é chamada em `OnStart()`; esquecer de adicionar a chamada deixa o teste fora da execução sem aviso. Sem uma decisão fixada, cada novo módulo do core (Trade Manager, Risk Manager, StressLab) replicará o padrão divergente e a dívida cresce. A ADR-005 estava reservada na §4 desde a abertura do documento; esta entrada a quita antes da Fase 5 abrir.
+
+**Decisão:**
+O MKS-ULTIMATE adota um framework próprio mínimo de testes em `MQL5/Include/MKS-ULTIMATE/Core/Testing/`, sem dependência externa.
+
+1. **Três artefatos compõem o framework.** `Core/Testing/Asserts.mqh` carrega o vocabulário uniforme de asserção. `Core/Testing/TestRunner.mqh` carrega o singleton runner e a macro `MKS_RUN`. `Core/Testing/Mocks/` é a pasta de mocks reutilizáveis — um arquivo por mock, nomeado por convenção (`CMksFakeSymbol.mqh`, `CMksFakeAccount.mqh`, `CMksCapturingSink.mqh`).
+
+2. **Vocabulário de asserção uniforme.** Um único include — `Asserts.mqh` — define todas as sobrecargas necessárias: `MKS_ASSERT_TRUE`, `MKS_ASSERT_FALSE`, `MKS_ASSERT_EQ_INT`, `MKS_ASSERT_EQ_LONG`, `MKS_ASSERT_EQ_ULONG`, `MKS_ASSERT_EQ_STRING`, `MKS_ASSERT_EQ_DOUBLE`, `MKS_ASSERT_NEAR_DOUBLE`. A tolerância de `MKS_ASSERT_EQ_DOUBLE` é parâmetro com default explícito `1e-9`; `MKS_ASSERT_NEAR_DOUBLE` exige tolerância obrigatória. A mensagem de falha é única, sempre no formato `FAIL [<test_name>] <what>: expected=<x> actual=<y>`. As macros — não funções diretas — capturam `__FILE__`/`__LINE__` no call site para diagnóstico, no mesmo padrão da ADR-009.
+
+3. **Registro de teste manual via `MKS_RUN(funcName)`.** O `OnStart()` lista os testes via uma macro `MKS_RUN(Test_BullContinuation)` que expande para `g_mksTestRunner.Begin("Test_BullContinuation"); Test_BullContinuation(); g_mksTestRunner.End();`. O nome do teste passa a ser o nome da função (via stringification `#funcName`), eliminando o `g_currentTest = "string livre"` que hoje pode divergir do nome da função. A lista no `OnStart()` continua sendo o manifesto explícito do que roda — adicionar um teste novo exige uma linha nesse manifesto, e a omissão é visível em code review.
+
+4. **State global encapsulado no runner singleton.** O `g_mksTestRunner` (instância global declarada no `TestRunner.mqh`) carrega `passedAssertions`, `failedAssertions`, `passedTests`, `failedTests`, `currentTest`. As macros de asserção chamam `g_mksTestRunner.Pass()` ou `g_mksTestRunner.Fail(...)`. MQL5 não tem exceções nem RAII; passar um `MksTestContext&` em cada chamada de asserção seria peso sem ganho proporcional. O singleton é deliberado e o escopo é o programa do script de teste.
+
+5. **Mocks moram em `Core/Testing/Mocks/`.** A justificativa é a árvore do `ARCHITECTURE.md §2`, que reservou `Core/Testing/` para o framework de teste desde a abertura do documento. Mocks são biblioteca do framework — quem precisa do framework, precisa dos mocks. Como nenhum código de produção faz `#include` de mock, a separação física entre teste e produção continua clara (`Scripts/Tests/` vs `Experts/` vs `Include/` de produção).
+
+6. **Saída padronizada do runner.** Ao final, o runner imprime `=== <passedAssertions>/<totalAssertions> assertions in <numTests> tests (<failedTests> failed) ===`. Falha gera `Alert` único no fim, não `Alert` por arquivo. A diferença atual entre o `Alert` do `Test_CMksRenkoBuilder` e o silêncio dos outros desaparece.
+
+7. **Escopo desta ADR.** Esta ADR fixa a estrutura do framework. A migração dos 4 testes existentes para o framework é trabalho separado, em slice próprio após o aceite. A Fase 3 só passa a "Concluída" quando o framework existir **e** os 4 testes existentes tiverem sido migrados sem perda de cobertura — esse é o critério de saída efetivo, gravado aqui.
+
+**Alternativas consideradas:**
+- **Adaptar projeto open-source (MQL5-Unit ou similar):** rejeitada. Introduz dependência externa num caminho crítico — toda validação do core passa pelo framework de teste. Convenções não batem com as do projeto (prefixos `Mks`, `ENUM_MKS_*`, `__FILE__`/`__FUNCTION__`/`__LINE__` no padrão da ADR-009). Se o projeto upstream morrer ou divergir, herdamos código órfão de qualquer jeito — e o custo de manter 400 linhas próprias é menor que o de auditar e patchear código de terceiros que não respeita as convenções do MKS-ULTIMATE. O espírito do princípio invariante 5 da §1 (controle do caminho crítico) sustenta a recusa, mesmo a regra literal não se aplicando a testes.
+- **Manter asserções inline, apenas extrair helpers de domínio:** rejeitada. Resolve copy-paste de mocks (`CCapturingSink`, `CFakeSymbol`) mas deixa intactos os bugs latentes — tolerâncias divergentes, mensagens inconsistentes, comportamento de fim divergente, registro manual sem ligação ao nome da função. É meia-solução que perpetua exatamente o estado que motivou esta ADR.
+- **Auto-registro de testes via function pointer global e macro com bloco estático:** rejeitada. MQL5 não tem inicialização estática garantida para tabelas de function pointers, e a manipulação seria frágil (sem `__attribute__`, sem `static_assert`, sem RTTI). O ganho — "esqueci de adicionar a chamada em `OnStart`" — é pequeno comparado ao custo de manter mágica de macro que pode quebrar entre versões do MetaEditor. A lista manual no `OnStart()` é o manifesto explícito do que roda; omissão é visível em code review.
+- **Contexto isolado por teste (`MksTestContext& ctx` passado em cada asserção):** rejeitada. Forçaria a assinatura `ctx.AssertEqual(...)` em toda chamada, com `ctx` passado para cada função de teste. Em MQL5 (single-threaded, sem RAII, sem exceções), o ganho de isolamento real é zero — o runner singleton já encapsula o estado, e nada além de um teste roda em paralelo. O peso de propagar `ctx` por todas as assinaturas não compensa.
+- **Mocks em `Scripts/Tests/Helpers/` (fora do `Core/`):** rejeitada. O `ARCHITECTURE.md §2` já reservou `Core/Testing/` como o lugar do framework de teste; criar pasta nova fora do plano por receio de "misturar teste com produção" ignora que a separação física entre `Scripts/Tests/*.mq5` (consumidor) e `Include/.../Core/Testing/` (biblioteca) já é nítida. Manter no `Core/Testing/` honra a árvore já decidida.
+
+**Consequências:**
+- Nova pasta `MQL5/Include/MKS-ULTIMATE/Core/Testing/` materializa o que o `ARCHITECTURE.md §2` já reservou. A árvore do §2 ganha a sub-pasta `Mocks/` quando o framework for implementado.
+- O framework tem ~400 linhas estimadas (Asserts.mqh ~150, TestRunner.mqh ~80, Mocks/ ~200 distribuídas). Tamanho coerente com "mínimo".
+- A faixa de erro Testing (700–799) reservada na ADR-009 continua disponível; será usada se o framework precisar reportar erros estruturados (ex.: setup de mock falhou). Esta ADR não cunha código de erro novo.
+- **Critério de saída efetivo da Fase 3** redefinido: framework existe + 4 testes migrados sem perda de cobertura. O `ROADMAP.md` carrega hoje "Parcialmente concluída"; passa a "Concluída" apenas depois da migração.
+- Próximos módulos do core (Trade Manager, Risk Manager, StressLab) nascem usando o framework — fecha a porta para o padrão divergente se replicar.
+- Dívida de migração assumida: o slice de implementação reescreve os 4 arquivos atuais (`Test_CMksRenkoBuilder`, `Test_CMksBrickFile`, `Test_CMksAtrBrickSizer`, `Test_CMksSimulatedBroker`). Trabalho mecânico, baixo risco, mas exige rodar empiricamente cada suíte pós-migração para confirmar a paridade de cobertura (648 assertions preservadas).
+- Compatibilidade futura: se o MQL5 evoluir a ponto de oferecer reflexão ou um framework de teste nativo, migração é mecânica e fica registrada em ADR de substituição.
+
+**Fronteiras:**
+- Não é a especificação dos mocks individuais — `CMksFakeSymbol`, `CMksFakeAccount`, `CMksCapturingSink` são criados conforme a demanda dos testes que os consomem; cada um é detalhe de implementação registrado no commit que o introduz, não nova ADR.
+- Não é a política de naming de teste — adotamos por convenção `Test_<ClasseTestada>` para o arquivo e `Test_<Cenário>` para a função, herdado dos 4 testes existentes. Convenção, não cláusula.
+- Não cobre testes de integração ao broker real (`Test_MksMt5BrokerLive.mq5` em `Experts/`) — esses são EAs por necessidade da API MT5 e ficam fora do framework. O critério para a Fase 4 não exigiu cobertura formal desses; permanece assim.
+
+---
+
 ## 4. Decisões pendentes
 
 Pontos que precisam virar ADR assim que forem enfrentados:
 
-- **ADR-005 (pendente):** Estrutura e execução dos testes unitários. Framework próprio mínimo ou adaptação de algo existente?
 - **ADR-008 (pendente):** Como tratar reabertura de mercado (segunda-feira) no RenkoBuilder. Gap vira brick? Vira múltiplos bricks? Vira nada? Evidência parcial já registrada em `CHECKPOINT-2026-05-20-slice2.md` §6.
 
 Essas decisões são registradas formalmente quando forem enfrentadas, não antes. Decidir arquitetura no vazio produz decisões erradas.
