@@ -27,7 +27,7 @@ Após esses, invocar `/status` para confirmar o estado contra `git log` antes da
 
 ---
 
-## 2. Estado do código (HEAD do dia = `7e08c58`)
+## 2. Estado do código (HEAD = `398501c`)
 
 O dia 2026-05-21 cobriu três blocos de trabalho sobrepostos:
 1. **Slice 3b proper** (commits até `a06cbe9`) — Producer + Custom Symbol.
@@ -45,6 +45,9 @@ O dia 2026-05-21 cobriu três blocos de trabalho sobrepostos:
 | `CMksLogger` | `Core/Log/CMksLogger.mqh` — JSON-line + destino dual + arquivo por sessão | **feito + validado** (ADR-007) |
 | `CMksAtrBrickSizer` | `Core/RenkoBuilder/CMksAtrBrickSizer.mqh` — ATR Wilder sobre bricks | **feito + testado (72 assertions)** (ADR-018) |
 | `IBrickSizer.OnBrick` | Extensão da interface para feedback do builder | **feito** (commit `16c8e82`) |
+| `ISymbol` + `CMksMt5Symbol` | `Core/Interfaces/ISymbol.mqh` + `Core/Symbol/CMksMt5Symbol.mqh` — ficha técnica do instrumento | **feito + validado** (ADR-016) |
+| `IAccount` + `CMksMt5Account` | `Core/Interfaces/IAccount.mqh` + `Core/Account/CMksMt5Account.mqh` — estado da conta | **feito + validado** (ADR-016) |
+| `Producer.mq5` via interfaces | Refactor: `g_iSymbol`/`g_iAccount` no composition root | **feito** (commit `398501c`) |
 
 ### ADRs — só o que mudou desde o checkpoint anterior
 
@@ -54,7 +57,7 @@ O dia 2026-05-21 cobriu três blocos de trabalho sobrepostos:
 | 015 | Strategy Tester nativo como ferramenta vs. fonte de verdade | **Aceita** (`e512524`) |
 | 007 | Formato e destino do log estruturado | **Aceita** (`6e40c40`) |
 | 018 | Cálculo do ATR no `CMksAtrBrickSizer` | **Aceita** (`27b5226`) |
-| 016 | Interfaces `ISymbol`/`IAccount` + checklist API globais | **Pendente** — adicionada pós-auditoria |
+| 016 | Interfaces `ISymbol`/`IAccount` | **Aceita** (`27e28cc`) |
 | 017 | Modelo de confirmação de execução do `CMksMt5Broker` | **Pendente** — adicionada pós-auditoria |
 
 ADRs 001–013 sem alteração.
@@ -71,6 +74,9 @@ ADRs 001–013 sem alteração.
 Todos os commits do dia sobre HEAD `918c45f`:
 
 ```
+398501c feat(core): add ISymbol/IAccount + Mt5 impls, refactor Producer (ADR-016)
+27e28cc docs: accept ADR-016 (ISymbol and IAccount interfaces)
+8777d34 docs: refresh CHECKPOINT-slice3b with full day's work (HEAD 7e08c58)
 7e08c58 feat(core): add CMksAtrBrickSizer (ADR-018)
 3618e77 feat(core): add CMksLogger and refactor Producer (ADR-007)
 16c8e82 feat(core): extend IBrickSizer with OnBrick (ADR-018 §2)
@@ -159,6 +165,27 @@ Após a integração da auditoria, três das quatro ADRs adicionadas foram aceit
 
 **Limitação conhecida** registrada no código (ADR-007): `CMksLogger.FormatTimestamp` produz `.000Z` fixo — MQL5 não expõe API para "TimeCurrent com millis" fora de `MqlTick.time_msc`. TODO para evolução futura quando caller puder passar `timeMsc` do tick corrente como contexto.
 
+### Parte 6 — ADR-016 aceita + ISymbol/IAccount materializados + Producer refactor
+
+ADR-016 (interfaces de mercado e conta) **redigida, aceita e materializada** em código testado, fechando uma das duas ADRs estruturais que sobravam pendentes pós-auditoria.
+
+**ADR aceita (`27e28cc`):** duas interfaces puras (`ISymbol` com 16 métodos de ficha técnica do instrumento; `IAccount` com 10 métodos de estado da conta), enums nativos do MQL5, get-on-demand. Define `Core/Symbol/` e `Core/Account/` como pastas novas. 6 alternativas rejeitadas (interface única, funções livres, pular abstração, snapshot, Bid/Ask em ISymbol, cobertura completa da API).
+
+**Implementação (`398501c`):**
+- `Core/Interfaces/ISymbol.mqh` (56 linhas) — Name, Digits, Point, TickSize, TickValue, ContractSize, VolumeMin/Max/Step, StopsLevel, FreezeLevel, FillingMode, BaseCurrency, ProfitCurrency, MarginCurrency.
+- `Core/Interfaces/IAccount.mqh` (46 linhas) — Login, Company, Currency, Balance, Equity, Margin, FreeMargin, Leverage, MarginMode, TradeMode.
+- `Core/Symbol/CMksMt5Symbol.mqh` (105 linhas) — construtor `(string)`, delega para `SymbolInfo*`.
+- `Core/Account/CMksMt5Account.mqh` (82 linhas) — delega para `AccountInfo*`. Usa `ACCOUNT_MARGIN_FREE` (não o deprecated `ACCOUNT_FREEMARGIN`).
+- `Producer.mq5` refatorado: composition root instancia `g_iSymbol`/`g_iAccount`; `EnsureCustomSymbolReady` recebe `ISymbol*` em vez de `string`; ~8 chamadas a `SymbolInfo*`/`AccountInfo*` migraram para as interfaces.
+
+**Consequências documentais (também neste commit ou no refresh seguinte):**
+- `PROTOCOLOS.md` Protocolo 9: linhas de Mercado/Conta agora apontam para `ISymbol.*`/`IAccount.*` como **disponíveis** (com referência a `Core/Symbol/CMksMt5Symbol` e `Core/Account/CMksMt5Account`), não mais "pendentes".
+- `ARCHITECTURE.md` §2 (árvore): pastas `Core/Symbol/` e `Core/Account/` adicionadas. Também `Core/Data/` (esquecida em refreshes anteriores).
+
+**Validação empírica:** Producer atachou e completou OnInit. Header META do `.log` mostra `broker:"Exness Technologies Ltd"`, `account:277678478`, `symbol:"XAUUSDm"`, `digits:3` — todos obtidos via `g_iAccount.Company()`, `g_iAccount.Login()`, `g_iSymbol.Digits()` (não mais via API global). Custom Symbol `XAUUSDm.MKS_RKN3` criado e populado com bars via `EnsureCustomSymbolReady` consumindo `g_iSymbol.Digits/Point/TickSize/etc`. Historical fill de 7 dias: 1.785.559 ticks → 10.074 bricks emitidos. Comportamento semanticamente idêntico ao run anterior — refactor sem regressão.
+
+**Pendência residual da ADR-016:** mocks `CMksFakeSymbol`/`CMksFakeAccount` para testes isolados — slice próprio quando primeiros testes de Trade Manager ou Risk Manager precisarem deles (relacionado à ADR-005).
+
 ---
 
 ## 4. Validação empírica
@@ -212,10 +239,9 @@ Estado das ADRs pendentes ao fim de 2026-05-21:
 |---|---|---|
 | 005 | Framework de testes unitários | **Pendente** — não enfrentada. Testes atuais (`Test_CMksRenkoBuilder` 428 assertions, `Test_CMksBrickFile` 97, `Test_CMksAtrBrickSizer` 72) usam asserções inline, sem framework formal. |
 | 008 | Reabertura de mercado no RenkoBuilder | **Pendente com evidência parcial registrada** (`CHECKPOINT-2026-05-20-slice2.md` §6): builder atual já trata gap de fim de semana via ADR-011 multi-threshold; teste de 7 dias incluindo gap de 49h gerou M=2 sem erros. Evidência insuficiente para generalizar (1 instrumento, 1 broker). |
-| 016 | Interfaces `ISymbol`/`IAccount` + checklist API globais | **Pendente** — adicionada pós-auditoria MQL5. Protocolo 9 já estabelece a fronteira; falta a ADR formal e as interfaces. Bloqueia `CMksTradeManager`/`CMksRiskManager`/estratégias. |
-| 017 | Modelo de confirmação de execução do `CMksMt5Broker` | **Pendente** — adicionada pós-auditoria MQL5. Bloqueia Fase 4 (Broker abstractions). Inclui síncrono vs. assíncrono via `OnTradeTransaction`, filling mode, netting vs. hedging. |
+| 017 | Modelo de confirmação de execução do `CMksMt5Broker` | **Pendente** — adicionada pós-auditoria MQL5. Bloqueia Fase 4 (Broker abstractions). Inclui síncrono vs. assíncrono via `OnTradeTransaction`, filling mode, netting vs. hedging. Maior peça restante do MVP (18% do esforço estimado). |
 
-ADRs aceitas e implementadas no dia (movidas desta tabela): **014, 015, 007, 018** — ver §2 e §3 Partes 4 e 5.
+ADRs aceitas e implementadas no dia (movidas desta tabela): **014, 015, 007, 018, 016** — ver §2 e §3 Partes 4, 5 e 6.
 
 Outras dívidas registradas:
 

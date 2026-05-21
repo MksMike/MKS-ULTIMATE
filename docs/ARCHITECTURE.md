@@ -35,7 +35,10 @@ MKS-ULTIMATE/
 │   │   │   ├── Version.mqh         # Versão única do framework
 │   │   │   ├── Interfaces/         # IBroker, ITickSource, IClock, ILogger, IRenkoSink, IBrickSizer
 │   │   │   ├── Types/              # Tick, Brick, OrderRequest, ExecutionResult, Error, RenkoGeometry
-│   │   │   ├── RenkoBuilder/       # CMksRenkoBuilder e suas variantes
+│   │   │   ├── RenkoBuilder/       # CMksRenkoBuilder, sizers (Fixed, Atr)
+│   │   │   ├── Data/               # BrickFileFormat, CMksBrickFileWriter/Reader
+│   │   │   ├── Symbol/             # CMksMt5Symbol (impl de ISymbol)
+│   │   │   ├── Account/            # CMksMt5Account (impl de IAccount)
 │   │   │   ├── Broker/             # CMksMt5Broker, CMksSimulatedBroker, CostModel
 │   │   │   ├── Trade/              # CMksTradeManager, CMksPositionSizer
 │   │   │   ├── Risk/               # CMksRiskManager, camadas de limite

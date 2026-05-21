@@ -151,15 +151,15 @@ A regra está enunciada na ADR-013 §2 ("borda aceita default sensato como `_Sym
 |---|---|
 | `Symbol()`, `_Symbol` | parâmetro injetado pela borda |
 | `Period()`, `_Period` | proibido em lógica (Renko não tem timeframe) |
-| `SymbolInfoDouble`, `SymbolInfoInteger`, `SymbolInfoString` | `ISymbol.*` (pendente, ADR-016) |
+| `SymbolInfoDouble`, `SymbolInfoInteger`, `SymbolInfoString` | `ISymbol.*` (ADR-016, `Core/Symbol/CMksMt5Symbol`) |
 | `SymbolInfoTick(symbol, mt)` | `ITickSource.Next(tick)` |
-| `SymbolInfoSessionTrade`, `SymbolInfoSessionQuote` | `ISymbol.*` (pendente) |
+| `SymbolInfoSessionTrade`, `SymbolInfoSessionQuote` | `ISymbol.*` — não no escopo do v1 da ADR-016; adicionar quando necessário |
 
 ### Conta
 
 | Função MQL5 | Substituto |
 |---|---|
-| `AccountInfoDouble`, `AccountInfoInteger`, `AccountInfoString` | `IAccount.*` (pendente, ADR-016) |
+| `AccountInfoDouble`, `AccountInfoInteger`, `AccountInfoString` | `IAccount.*` (ADR-016, `Core/Account/CMksMt5Account`) |
 
 ### Identidade do programa
 
@@ -193,7 +193,7 @@ A regra está enunciada na ADR-013 §2 ("borda aceita default sensato como `_Sym
 ### Como aplicar
 
 - Code review bloqueia merge se qualquer função desta lista aparecer fora de uma implementação concreta de interface (pasta `Core/Broker/`, `Core/Log/`, sinks de renderização) ou da camada de borda (`OnInit`/`OnTick`/`OnDeinit` de EAs/scripts em `MQL5/Experts/`, `MQL5/Scripts/`, `MQL5/Services/`).
-- Quando uma função substituta ainda não existe (ADR-016, 017, 018 pendentes), a chamada direta na borda é tolerada com nota de TODO citando a ADR que vai fechar a porta.
+- Quando uma função substituta ainda não existe (ADR-017 pendente para `IBroker` completo), a chamada direta na borda é tolerada com nota de TODO citando a ADR que vai fechar a porta.
 - Lista evolui — ADRs novas reorientam o substituto canônico.
 
 ---
