@@ -27,7 +27,7 @@ Após esses, invocar `/status` para confirmar o estado contra `git log` antes da
 
 ---
 
-## 2. Estado do código (HEAD = `466d15d`)
+## 2. Estado do código (HEAD = `88947cd`)
 
 O dia 2026-05-21 cobriu três blocos de trabalho sobrepostos:
 1. **Slice 3b proper** (commits até `a06cbe9`) — Producer + Custom Symbol.
@@ -52,7 +52,8 @@ O dia 2026-05-21 cobriu três blocos de trabalho sobrepostos:
 | Erros 200-203 | Faixa Broker: `TIMEOUT`/`INVALID_FILL`/`RETRY_EXHAUSTED`/`NOT_INITIALIZED` | **feito** (commit `6ed70f8`) |
 | `CMksCostModel` | `Core/Broker/CMksCostModel.mqh` — spread, slippage, commission, swap configuráveis | **feito** (commit `25df429`, ADR-017 §8) |
 | `CMksSimulatedBroker` | `Core/Broker/CMksSimulatedBroker.mqh` — broker em memória, hedging, sem auto-close de SL/TP | **feito + testado (51 assertions)** (commit `466d15d`, ADR-017) |
-| `CMksMt5Broker` | Broker real para live trading | **pendente** (ADR-017 — implementação concreta) |
+| `CMksMt5Broker` | `Core/Broker/CMksMt5Broker.mqh` — broker real, caminho síncrono via `HistoryDealSelect` | **feito + validado** (commit `88947cd`) |
+| `Test_MksMt5BrokerLive.mq5` | EA de validação empírica em demo | **feito + validado** (Send+Close em 524ms) |
 
 ### ADRs — só o que mudou desde o checkpoint anterior
 
@@ -79,6 +80,8 @@ ADRs 001–013 sem alteração.
 Todos os commits do dia sobre HEAD `918c45f`:
 
 ```
+88947cd feat(core): add CMksMt5Broker + live test EA (ADR-017 Parte 4)
+28a2100 docs: cleanup after Fase 4 partial implementation (Partes 1-3 of ADR-017)
 466d15d feat(core): add CMksSimulatedBroker + tests (ADR-017)
 25df429 feat(core): add CMksCostModel for simulated broker (ADR-017 §8)
 6ed70f8 feat(core): expand MksExecutionResult + broker error codes (ADR-017)
@@ -250,10 +253,21 @@ ADR-017 começou a virar código. Implementação em 4 partes; **3 concluídas**
 - **Validação empírica:** **51 assertions, 0 falhas** em 12 cenários (not_initialized, invalid_request, send sem custos / com spread / com slippage / com commission, SL/TP BUY+SELL, close full+partial, close inexistente, modify, hedging com 3 sends, determinismo entre 2 brokers).
 - `CFakeSymbol` inline no teste (sem mock formal ainda — slice próprio quando ADR-005 for atacada).
 
-**Parte 4 — `CMksMt5Broker` (pendente):**
-- Broker real para live trading. Maior complexidade da Fase 4: race entre `OrderSend` síncrono e `OnTradeTransaction` assíncrono; fallback automático de filling; retry com backoff em retcodes retryable; espera por `TRADE_TRANSACTION_DEAL_ADD` para extrair preço executado real via `HistoryDealGetDouble(deal, DEAL_PRICE)`.
-- Validação só é possível em demo MT5 real — não dá pra unit-testar.
-- Trabalho de slice próximo, ~2-3h focadas.
+**Parte 4 — `CMksMt5Broker` (`88947cd`):**
+- `Core/Broker/CMksMt5Broker.mqh` (~370 linhas) + `Experts/MKS-ULTIMATE/Test_MksMt5BrokerLive.mq5` (~140 linhas).
+- Implementa `IBroker` contra API MT5 real. Construtor recebe `ISymbol*`, `IAccount*`, `magic`, `deviation`, `timeoutMs`, `maxRetries`, `retryDelayMs`. `Init()` detecta filling preferido (FOK→IOC→RETURN) e margin mode.
+- `Send`/`Close`: `OrderSend` síncrono + retry interno em REQUOTE/PRICE_CHANGED/PRICE_OFF + fallback automático de filling em INVALID_FILL. Em hedging, `Close` envia `req.position=positionId`.
+- `Modify`: `TRADE_ACTION_SLTP`, sem espera (não cria deal).
+- **Lição empírica:** primeira versão usava Sleep loop esperando `OnTradeTransaction` setar flag — falhou empiricamente com TIMEOUT em 5s (ordem foi executada no servidor em 129ms, mas evento ficou em fila pelo MQL5 single-threaded). Fix: caminho síncrono direto via `HistoryDealSelect(res.deal)` imediatamente após `OrderSend` retornar DONE. Nota de esclarecimento adicionada à ADR-017.
+- `OnTradeTransactionEvent` permanece como fallback para casos edge (`res.deal == 0` imediato).
+- **Validação empírica em XAUUSDm/Exness demo (account 277678478):**
+  - Send: status=FILLED, fillPrice=4540.794, attempts=1, retcode=10009.
+  - Close: status=FILLED, fillPrice=4540.486, attempts=1.
+  - Tempo total: **524ms** (vs. timeout 5s).
+  - `positionId=1842380049` lido via `DEAL_POSITION_ID` (não confundido com `res.order`).
+  - Sem timeout, sem posição órfã, parity entre Send/Close.
+
+**Fase 4 (Broker abstractions) — 100% materializada.** Restam Fases 5 (Trade Manager), 6 (Risk Manager), 7 (StressLab), 9 (EA validação end-to-end). ADR-017 totalmente realizada em código testado, com nota de esclarecimento sobre threading model do MQL5 (`HistoryDealSelect` direto em vez de Sleep loop).
 
 ---
 
@@ -313,7 +327,6 @@ ADRs aceitas no dia (movidas desta tabela): **014, 015, 007, 018, 016, 017** —
 
 Outras dívidas registradas:
 
-- **`CMksMt5Broker` (Parte 4 da Fase 4)** — broker real para live trading. ADR-017 fixou todas as decisões; falta o código + validação empírica em demo MT5. Maior peça restante do MVP (~13% após ADR-017 parcialmente materializada).
 - **Validação empírica do `Test_CMksRenkoBuilder` runtime** após a extensão do `IBrickSizer` (commit `16c8e82`) — só compile clean. Semanticamente neutro (no-op no sizer constante), mas vale rodar empiricamente quando voltar a essa região.
 - **Validação empírica do `CMksAtrBrickSizer` em produção** — `Test_CMksAtrBrickSizer` cobre comportamento isolado (72 assertions). Falta swap experimental no Producer (substituir `CMksFixedBrickSizer` por `CMksAtrBrickSizer` e ver brick sizes adaptarem em 7 dias de dado real).
 - **Recuperação de estado em restart do EA** — ADR-014 §Consequências adia explicitamente. Estado do builder zerado a cada `OnInit`; reconciliação parcial proibida por design.

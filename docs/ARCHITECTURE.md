@@ -39,7 +39,7 @@ MKS-ULTIMATE/
 │   │   │   ├── Data/               # BrickFileFormat, CMksBrickFileWriter/Reader
 │   │   │   ├── Symbol/             # CMksMt5Symbol (impl de ISymbol)
 │   │   │   ├── Account/            # CMksMt5Account (impl de IAccount)
-│   │   │   ├── Broker/             # CMksMt5Broker (pendente), CMksSimulatedBroker, CMksCostModel
+│   │   │   ├── Broker/             # CMksMt5Broker, CMksSimulatedBroker, CMksCostModel
 │   │   │   ├── Trade/              # CMksTradeManager, CMksPositionSizer
 │   │   │   ├── Risk/               # CMksRiskManager, camadas de limite
 │   │   │   ├── Log/                # CMksLogger (logging estruturado)
@@ -750,6 +750,16 @@ O `CMksMt5Broker` (real) e o `CMksSimulatedBroker` (futuro) compartilham um mode
 - Não cobre **broker para spread betting / CFD com regras especiais** — assumimos Market/Exchange execution padrão.
 - Não cobre a **implementação concreta** do `CMksMt5Broker` ou `CMksSimulatedBroker` — slice próprio após este aceite.
 - Não cobre `CostModel` em detalhe matemático — esta ADR fixa que ele existe como classe separada com responsabilidades duais (passthrough/gerador). Os parâmetros e fórmulas concretas do gerador são decisão do slice de implementação do `CMksSimulatedBroker`.
+
+---
+
+**Nota de esclarecimento — mecânica de confirmação síncrona** (2026-05-22)
+
+A ADR-017 §1 fixou que `Send`/`Close` são "síncronos lógicos — bloqueiam até `OnTradeTransaction` reportar `TRADE_TRANSACTION_DEAL_ADD`, ou até o timeout". Essa formulação descrevia a **semântica externa** (interface síncrona com `fillPrice` real lido após o deal existir), mas a **mecânica interna** sugerida (Sleep loop aguardando o evento setar uma flag) tem um problema descoberto na validação empírica do `CMksMt5Broker` em demo Exness no dia 2026-05-22: **MQL5 é single-threaded cooperativo**. `OnTradeTransaction` **não é processado durante uma execução de `OnTick`** — fica enfileirado até o `OnTick` retornar. Logo, um Sleep loop dentro de `Send` (chamado por `OnTick`) deadlocka logicamente: espera evento que só vem depois que `Send` retornar. Empiricamente, ordem real foi executada em 129ms no servidor, mas o EA acusou `TIMEOUT` após 5s — esperando um evento que estava em fila.
+
+**A mecânica correta**, aplicada na implementação (`CMksMt5Broker.mqh` commit `88947cd`): após `OrderSend(req, res)` retornar `TRADE_RETCODE_DONE` em Market execution, `res.deal` já está populado pelo servidor. Lê-se imediatamente via `HistoryDealSelect(res.deal)` + `HistoryDealGetDouble(deal, DEAL_PRICE/VOLUME/COMMISSION/SWAP)`, **sem depender de `OnTradeTransaction`**. A semântica externa da ADR-017 §1 é preservada (`Send` retorna com preço executado real); a mecânica interna troca "Sleep + flag por evento" por "leitura direta do histórico do deal". O roteamento de `OnTradeTransaction` para `OnTradeTransactionEvent` permanece como **fallback** para casos edge (`res.deal == 0` imediato — ordens pendentes, execução postergada).
+
+A ADR-017 não é alterada; esta nota registra o refinamento da mecânica encontrado em validação.
 
 ---
 
