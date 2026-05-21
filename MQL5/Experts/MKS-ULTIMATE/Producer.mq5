@@ -13,9 +13,13 @@
 //|                   Core/RenkoBuilder/CMksFixedBrickSizer.mqh,
 //|                   Core/Data/CMksBrickFileWriter.mqh,
 //|                   Core/Log/CMksLogger.mqh,
+//|                   Core/Symbol/CMksMt5Symbol.mqh,
+//|                   Core/Account/CMksMt5Account.mqh,
 //|                   Core/Types/RenkoGeometry.mqh, Core/Types/Tick.mqh,
 //|                   Core/Types/Brick.mqh, Core/Types/Error.mqh,
-//|                   Core/Interfaces/IRenkoSink.mqh
+//|                   Core/Interfaces/IRenkoSink.mqh,
+//|                   Core/Interfaces/ISymbol.mqh,
+//|                   Core/Interfaces/IAccount.mqh
 //| @install_path   : MQL5/Experts/MKS-ULTIMATE/Producer.mq5
 //+------------------------------------------------------------------+
 #property strict
@@ -24,11 +28,15 @@
 #include <MKS-ULTIMATE/Core/RenkoBuilder/CMksFixedBrickSizer.mqh>
 #include <MKS-ULTIMATE/Core/Data/CMksBrickFileWriter.mqh>
 #include <MKS-ULTIMATE/Core/Log/CMksLogger.mqh>
+#include <MKS-ULTIMATE/Core/Symbol/CMksMt5Symbol.mqh>
+#include <MKS-ULTIMATE/Core/Account/CMksMt5Account.mqh>
 #include <MKS-ULTIMATE/Core/Types/RenkoGeometry.mqh>
 #include <MKS-ULTIMATE/Core/Types/Tick.mqh>
 #include <MKS-ULTIMATE/Core/Types/Brick.mqh>
 #include <MKS-ULTIMATE/Core/Types/Error.mqh>
 #include <MKS-ULTIMATE/Core/Interfaces/IRenkoSink.mqh>
+#include <MKS-ULTIMATE/Core/Interfaces/ISymbol.mqh>
+#include <MKS-ULTIMATE/Core/Interfaces/IAccount.mqh>
 
 input double InpBrickSizePts          = 3.0;   // tamanho do brick em pontos
 input int    InpHistoricalFillDays    = 0;     // 0 = sem fill histórico; >0 = CopyTicksRange(now-N*86400, now)
@@ -55,10 +63,12 @@ bool     g_streamHalted   = false;
 int      g_histLoaded     = 0;
 int      g_histBricks     = 0;
 
-CMksFixedBrickSizer  *g_sizer   = NULL;
-CMksBrickFileWriter  *g_writer  = NULL;
-CMksRenkoBuilder     *g_builder = NULL;
-CMksLogger           *g_logger  = NULL;
+CMksFixedBrickSizer  *g_sizer    = NULL;
+CMksBrickFileWriter  *g_writer   = NULL;
+CMksRenkoBuilder     *g_builder  = NULL;
+CMksLogger           *g_logger   = NULL;
+ISymbol              *g_iSymbol  = NULL;
+IAccount             *g_iAccount = NULL;
 
 //+------------------------------------------------------------------+
 //| Sink: encaminha cada brick fechado para o writer e contabiliza.   |
@@ -212,41 +222,41 @@ string BuildCustomSymbolName(const string &symbol, double sizePts)
 //| APAGA o histórico do CS — efeito simétrico com ADR-014). Seleciona |
 //| em Market Watch (requisito de fato para CustomRatesUpdate).        |
 //+------------------------------------------------------------------+
-bool EnsureCustomSymbolReady(const string &cs, const string &src, MksError &err)
+bool EnsureCustomSymbolReady(const string &cs, ISymbol *src, MksError &err)
 {
+   if(src == NULL)
+   {
+      MKS_SET_ERROR(err, MKS_ERR_CORE_INVALID_ARGUMENT,
+                    "EnsureCustomSymbolReady: ISymbol nulo", cs);
+      return false;
+   }
+   string srcName = src.Name();
    bool exists = (SymbolInfoInteger(cs, SYMBOL_CUSTOM) == 1);
    if(!exists)
    {
-      if(!CustomSymbolCreate(cs, "MKS-ULTIMATE", src))
+      if(!CustomSymbolCreate(cs, "MKS-ULTIMATE", srcName))
       {
          int lastErr = GetLastError();
          if(lastErr != 5304) // 5304 = símbolo já existe (race)
          {
             MKS_SET_ERROR(err, MKS_ERR_DATA_FILE_IO,
                           "CustomSymbolCreate falhou",
-                          StringFormat("cs=%s src=%s lastErr=%d", cs, src, lastErr));
+                          StringFormat("cs=%s src=%s lastErr=%d",
+                                       cs, srcName, lastErr));
             return false;
          }
       }
    }
 
-   CustomSymbolSetInteger(cs, SYMBOL_DIGITS,
-                          SymbolInfoInteger(src, SYMBOL_DIGITS));
-   CustomSymbolSetInteger(cs, SYMBOL_CHART_MODE, (long)SYMBOL_CHART_MODE_BID);
-   CustomSymbolSetDouble (cs, SYMBOL_POINT,
-                          SymbolInfoDouble(src, SYMBOL_POINT));
-   CustomSymbolSetDouble (cs, SYMBOL_TRADE_TICK_SIZE,
-                          SymbolInfoDouble(src, SYMBOL_TRADE_TICK_SIZE));
-   CustomSymbolSetDouble (cs, SYMBOL_TRADE_TICK_VALUE,
-                          SymbolInfoDouble(src, SYMBOL_TRADE_TICK_VALUE));
-   CustomSymbolSetDouble (cs, SYMBOL_TRADE_CONTRACT_SIZE,
-                          SymbolInfoDouble(src, SYMBOL_TRADE_CONTRACT_SIZE));
-   CustomSymbolSetString (cs, SYMBOL_CURRENCY_BASE,
-                          SymbolInfoString(src, SYMBOL_CURRENCY_BASE));
-   CustomSymbolSetString (cs, SYMBOL_CURRENCY_PROFIT,
-                          SymbolInfoString(src, SYMBOL_CURRENCY_PROFIT));
-   CustomSymbolSetString (cs, SYMBOL_CURRENCY_MARGIN,
-                          SymbolInfoString(src, SYMBOL_CURRENCY_MARGIN));
+   CustomSymbolSetInteger(cs, SYMBOL_DIGITS,        src.Digits());
+   CustomSymbolSetInteger(cs, SYMBOL_CHART_MODE,    (long)SYMBOL_CHART_MODE_BID);
+   CustomSymbolSetDouble (cs, SYMBOL_POINT,                src.Point());
+   CustomSymbolSetDouble (cs, SYMBOL_TRADE_TICK_SIZE,      src.TickSize());
+   CustomSymbolSetDouble (cs, SYMBOL_TRADE_TICK_VALUE,     src.TickValue());
+   CustomSymbolSetDouble (cs, SYMBOL_TRADE_CONTRACT_SIZE,  src.ContractSize());
+   CustomSymbolSetString (cs, SYMBOL_CURRENCY_BASE,   src.BaseCurrency());
+   CustomSymbolSetString (cs, SYMBOL_CURRENCY_PROFIT, src.ProfitCurrency());
+   CustomSymbolSetString (cs, SYMBOL_CURRENCY_MARGIN, src.MarginCurrency());
 
    if(!SymbolSelect(cs, true))
    {
@@ -388,15 +398,24 @@ void Cleanup()
    if(g_writer     != NULL) { delete g_writer;     g_writer     = NULL; }
    if(g_sizer      != NULL) { delete g_sizer;      g_sizer      = NULL; }
    if(g_logger     != NULL) { delete g_logger;     g_logger     = NULL; }
+   if(g_iSymbol    != NULL) { delete g_iSymbol;    g_iSymbol    = NULL; }
+   if(g_iAccount   != NULL) { delete g_iAccount;   g_iAccount   = NULL; }
 }
 
 //+------------------------------------------------------------------+
 int OnInit()
 {
-   g_symbol  = _Symbol;
-   g_digits  = (int)SymbolInfoInteger(g_symbol, SYMBOL_DIGITS);
-   g_broker  = AccountInfoString(ACCOUNT_COMPANY);
-   g_account = AccountInfoInteger(ACCOUNT_LOGIN);
+   g_symbol = _Symbol;
+
+   // Composition root: instancia as interfaces para o instrumento e a
+   // conta corrente. ADR-016: lógica futura consulta via interface; só
+   // a borda do composition root toca CMksMt5Symbol/Account direto.
+   g_iSymbol  = new CMksMt5Symbol(g_symbol);
+   g_iAccount = new CMksMt5Account();
+
+   g_digits  = g_iSymbol.Digits();
+   g_broker  = g_iAccount.Company();
+   g_account = g_iAccount.Login();
 
    datetime sessionStart = TimeCurrent();
    MqlDateTime dt;
@@ -493,7 +512,7 @@ int OnInit()
    g_csName = BuildCustomSymbolName(g_symbol, InpBrickSizePts);
    g_logger.Info("Producer", "custom symbol",
       StringFormat("\"name\":\"%s\"", MksJsonEscape(g_csName)));
-   if(!EnsureCustomSymbolReady(g_csName, g_symbol, err))
+   if(!EnsureCustomSymbolReady(g_csName, g_iSymbol, err))
    {
       g_logger.Error("Producer", "EnsureCustomSymbolReady failed",
          StringFormat("\"err\":\"%s\"", MksJsonEscape(err.ToString())));
