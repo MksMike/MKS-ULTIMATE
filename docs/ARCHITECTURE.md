@@ -563,6 +563,103 @@ A política de rotação do `.mksbk` no MKS-ULTIMATE assenta sobre três regras:
 
 ---
 
+### ADR-007: Formato e destino do log estruturado
+
+**Data:** 2026-05-21
+**Status:** Aceita
+
+**Contexto:**
+A interface `ILogger` foi definida na Fase 1 (`Core/Interfaces/ILogger.mqh`), mas o formato concreto da linha de log nunca foi decidido. EAs e scripts atuais — `Producer.mq5`, `ValidateBuilderOnRealTicks.mq5`, `ValidateProducerOutput.mq5`, `Test_*.mq5` — usam `Print`/`PrintFormat` direto, com formato livre. Volume vai crescer rapidamente: `CMksLogger` (pendente) será dependência transversal de todos os módulos futuros (`CMksTradeManager`, `CMksRiskManager`, `CMksMt5Broker`, estratégias).
+
+Sem formato fixado, três problemas se materializam:
+
+1. **Paridade backtest/live (princípio norteador) não tem ferramenta de auditoria.** Log-diff entre uma execução em backtest e uma em live é a forma direta de detectar divergência (eixo 4 do V5-POSTMORTEM). Sem schema estruturado, log-diff é impossível ou degenera em regex-fest.
+
+2. **Hot path não pode logar de qualquer forma.** `Print` é síncrono no MT5 e pode atrasar `OnTick` quando chamado em volume (~1000 ticks/min em XAUUSD). Sem política explícita, código novo loga em qualquer lugar — vira gargalo.
+
+3. **Volume e custo de armazenamento.** Backtest de 7 dias com Producer já gerou 1.7M ticks e ~10k bricks. Um log de 1 linha por brick = ~10k linhas (~1MB). Um log de 1 linha por tick = 1.7M linhas (~170MB). Decisão precoce ou ausência leva a desperdício ou perda de auditoria.
+
+Esta ADR fixa formato, destino e política antes de o `CMksLogger` ser escrito.
+
+**Decisão:**
+O log estruturado do MKS-ULTIMATE assenta sobre cinco regras: JSON-line, destino dual, hot path mudo, arquivo por sessão, e política de níveis decidida na borda.
+
+1. **Formato: JSON-line.** Cada mensagem é uma linha contendo um objeto JSON válido, terminado por `\n`. Schema mínimo obrigatório:
+
+   ```json
+   {"ts": "2026-05-21T15:30:42.123Z", "level": "INFO", "module": "RenkoBuilder", "msg": "brick emitted", "brickIdx": 9883, "direction": "BULL"}
+   ```
+
+   Campos obrigatórios:
+   - `ts` — ISO 8601 UTC com precisão de milissegundo.
+   - `level` — `TRACE` / `DEBUG` / `INFO` / `WARN` / `ERROR`.
+   - `module` — nome curto do módulo de origem (`RenkoBuilder`, `Broker`, `TradeManager`, etc.).
+   - `msg` — mensagem em inglês, curta, sem template interpolation com runtime values (esses vão em campos próprios).
+
+   Campos contextuais opcionais (key/value), sem schema fixo — cada chamada do logger adiciona o que faz sentido. Exemplos comuns: `seq` (tick), `brickIdx`, `orderId`, `errorCode`, `lastErr`.
+
+2. **Destino dual: `Print` + `FileWrite`.** Cada chamada de log escreve em DOIS lugares simultaneamente:
+   - `Print(jsonLine)` — para o Experts panel do MT5 (inspeção em tempo real).
+   - `FileWrite(handle, jsonLine + "\n")` — para arquivo persistente em `MKS-ULTIMATE\Logs\<symbol>_<YYYYMMDDTHHMMSS>.log`.
+
+   Custo dobrado de I/O é aceito — vale a inspeção em tempo real combinada com auditoria persistente. Para casos onde apenas um destino faz sentido (cenário de teste interno sem persistência), o `CMksLogger` recebe flags no construtor (`bool toPrint`, `bool toFile`).
+
+3. **Hot path mudo.** `OnTick`, `IngestTick`, `OnBookEvent` e qualquer função chamada por tick **não logam**. Logger é usado em:
+   - Decisões pós-brick (`OnBrickClose` e callbacks downstream).
+   - Eventos de ordem (entrada/saída em `IBroker.Send`/`Close`/`Modify`).
+   - Erros estruturados (`MksError` reportado por qualquer módulo).
+   - Inicialização e finalização (`OnInit`, `OnDeinit`).
+
+   Logging granular por tick é proibido em produção. Para diagnóstico de tick-level em desenvolvimento, o EA pode ter um flag input (ex.: `InpPrintBricks` já existente no Producer) que ativa logging detalhado — mas a saída vai para `Print` apenas, não para arquivo, e o flag é descritivo do que é logado (não "log de tudo").
+
+4. **Arquivo por sessão.** Cada `OnInit` cria um arquivo novo de log, simétrico com a política da ADR-014 para `.mksbk`. Nome: `MKS-ULTIMATE\Logs\<symbol>_<YYYYMMDDTHHMMSS>.log`. Sub-pasta `Logs/` na árvore. Sem append entre sessões. Sem rotação interna do logger — sessão = arquivo. Disco lotado é problema operacional, não do framework. Guard contra colisão de nome (análoga à ADR-014 §4) fica para a implementação do `CMksLogger`.
+
+5. **Política de níveis decidida na borda.** O `CMksLogger` recebe o nível mínimo no construtor — não consulta `MQLInfoInteger(MQL5_TESTING)` internamente, respeitando o Protocolo 9. A decisão de nível default fica no `OnInit` do EA, que pode optar por:
+   - `INFO+` em live (recomendado para produção).
+   - `WARN+` em backtest (reduz volume — `MQLInfoInteger(MQL5_TESTING)` consultado na borda do `OnInit` é uso permitido por ADR-015 §3 para ajustar verbosidade de output, não para bifurcar lógica de trading).
+   - Input do EA (`InpLogLevel`) tem precedência sobre defaults — desenvolvimento ativa `TRACE`/`DEBUG`.
+
+6. **Header do arquivo (primeira linha).** A primeira linha do arquivo é um JSON-line especial com `level: "META"` contendo proveniência cached do `OnInit`: `broker`, `accountLogin`, `symbol`, `digits`, `frameworkVersion` (de `Core/Version.mqh`), `eaName`, `sessionStartMsc`. Linhas subsequentes não repetem essa informação — economiza bytes e facilita header-vs-body parsing.
+
+**Alternativas consideradas:**
+
+- **Key=value (logfmt do Heroku/structlog):** rejeitada. Mais legível no MT5 Experts panel sem ferramenta externa, mas escaping de quotes/espaços em valores é frágil. JSON-line tem parsing trivial em qualquer linguagem (`jq`, Python, Go), e o overhead de `{"":""}` extra é irrelevante para o volume previsto.
+
+- **Texto livre estruturado (`[INFO] msg key=value`):** rejeitada. Máxima legibilidade humana, parsing por regex. Mata auditoria sistemática — log-diff entre backtest/live precisa de schema, não de regex.
+
+- **Só `Print`, sem arquivo:** rejeitada. O Experts panel é limpo no restart do terminal; auditoria de paridade exige persistência além da sessão. E o panel tem limite de scroll-back que esconde mensagens antigas em sessões longas.
+
+- **Só `FileWrite`, sem `Print`:** rejeitada. Perde inspeção em tempo real durante operação. Operador olhando o MT5 não vê nada — precisa abrir tail do arquivo numa janela paralela. UX ruim.
+
+- **Logging assíncrono via buffer + flush periódico:** rejeitada. Complexidade alta (gerenciamento de buffer, flush em `OnDeinit`, risco de perder mensagens no crash) para ganho marginal — a regra de "hot path mudo" já elimina o problema de atraso síncrono.
+
+- **Logger sem schema fixo (campo livre):** rejeitada. Sem schema, log-diff é impossível, e cada módulo inventa o seu — recriação do eixo 2 do V5 em outra dimensão.
+
+**Consequências:**
+
+- **`CMksLogger` em `Core/Log/CMksLogger.mqh`** — implementação de `ILogger`. Construtor recebe path do arquivo e flags (`bool toPrint`, `bool toFile`, nível mínimo). Métodos: `Trace`/`Debug`/`Info`/`Warn`/`Error` como helpers + um `Log(level, module, msg, ctx)` interno. Forma exata da assinatura fica para a implementação, desde que respeite o JSON-line schema desta ADR.
+
+- **`ILogger` da Fase 1 pode precisar de revisão.** O método atual `Log(level, message)` é genérico mas não força o schema (`module`, contextos). Quando `CMksLogger` for implementado, vai propor uma assinatura mais estruturada — possivelmente aceitando um `MksLogContext` (struct POD com pares chave-valor). Se a interface mudar, é alteração de tipo do core (ciclo próprio após este aceite, padrão das ADRs anteriores).
+
+- **Sub-pasta `MKS-ULTIMATE\Logs\`** aparece. `FolderCreate("MKS-ULTIMATE")` + `FolderCreate("MKS-ULTIMATE\\Logs")` antes do `FileOpen` no `OnInit` do EA, mesmo padrão do `Bricks/`. Estrutura-alvo em §2 deve refletir isso quando o `CMksLogger` for implementado.
+
+- **`Producer.mq5` (já existente) ganha `CMksLogger` no composition root** — substituição de `PrintFormat` por `logger.Info`/`Warn`/`Error` em ciclo de refactor pós-aceite. EA atual continua funcional até esse refactor.
+
+- **Faixa de erros Log: 600–699** (ADR-009 já reservou). `MKS_ERR_LOG_FILE_IO`, `MKS_ERR_LOG_INVALID_LEVEL`, etc., serão alocados quando `CMksLogger` for escrito.
+
+- **Ferramenta de log-diff vira possível.** Dois arquivos `.log` de runs diferentes podem ser comparados linha-a-linha após normalização de `ts`/`seq`. Implementação futura (Fase 8 ou utilitário Python externo), não bloqueada por esta ADR.
+
+- **Custo de I/O do destino dual aceitável.** Para ~10k linhas por sessão de Producer, ~1MB de log. Imperceptível. Em estratégia futura com mais eventos (~100k linhas/dia), ~10MB/dia — ainda gerenciável. Mitigação se virar problema: desligar `toPrint` em runs longos ou aumentar nível mínimo.
+
+**Fronteiras:**
+
+- Não é a implementação de `CMksLogger` — vem depois.
+- Não é a ferramenta de log-diff — trabalho futuro.
+- Não é o formato do report de release (Sharpe, drawdown) — esse é tema da ADR-015 §Consequências, decidido quando o reporter for implementado.
+- Não é a estrutura do `MksError` — esse é ADR-009. O log de erro estruturado consome `MksError` e serializa seus campos no JSON-line.
+
+---
+
 ### ADR-015: Strategy Tester nativo como ferramenta, não fonte de verdade
 
 **Data:** 2026-05-21
@@ -627,7 +724,6 @@ O Strategy Tester nativo do MT5 é usado no MKS-ULTIMATE **como ferramenta de de
 Pontos que precisam virar ADR assim que forem enfrentados:
 
 - **ADR-005 (pendente):** Estrutura e execução dos testes unitários. Framework próprio mínimo ou adaptação de algo existente?
-- **ADR-007 (pendente):** Formato do log estruturado. JSON-line ou key=value? Volume de log esperado em live vs custo de parsing.
 - **ADR-008 (pendente):** Como tratar reabertura de mercado (segunda-feira) no RenkoBuilder. Gap vira brick? Vira múltiplos bricks? Vira nada? Evidência parcial já registrada em `CHECKPOINT-2026-05-20-slice2.md` §6.
 - **ADR-016 (pendente):** Interfaces `ISymbol` e `IAccount` + checklist de chamadas API globais proibidas em código de lógica (ver Protocolo 9 em `PROTOCOLOS.md`). Hoje a porta está fechada por convenção — ADR-013 §2 só permite chamadas globais na borda (composition root em `OnInit`/`OnTick`/`OnDeinit`). Precisa virar contrato testável antes de `CMksTradeManager`/`CMksRiskManager`/estratégias serem escritas.
 - **ADR-017 (pendente):** Modelo de confirmação de execução do `CMksMt5Broker`. Síncrono via retcode do `OrderSend` ou assíncrono via `OnTradeTransaction::TRADE_TRANSACTION_DEAL_ADD`? Decide latência vs. fidelidade de `fillPrice`/`slippage`. Inclui também política de filling mode (FOK/IOC/RETURN via `SymbolInfoInteger(SYMBOL_FILLING_MODE)`), uso de `OrderCheck`, e diferença netting vs. hedging. Bloqueia Fase 4 (Broker abstractions).
