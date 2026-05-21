@@ -79,6 +79,10 @@ private:
       brick.volume = 0; // agregação por brick não é tratada nesta fatia
       if(m_sink != NULL)
          m_sink.OnBrickClose(brick);
+      // ADR-018 §2: sizer recebe cada brick fechado para atualizar estado
+      // (ATR sobre bricks). Sizers constantes implementam como no-op.
+      if(m_sizer != NULL)
+         m_sizer.OnBrick(brick);
    }
 
 public:

@@ -42,6 +42,9 @@ public:
       }
       return true;
    }
+
+   // Tamanho constante — não há estado interno para atualizar.
+   void OnBrick(const MksBrick &brick) override { }
 };
 
 #endif // MKS_ULTIMATE_CORE_RENKOBUILDER_CMKSFIXEDBRICKSIZER_MQH
