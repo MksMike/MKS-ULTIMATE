@@ -39,7 +39,7 @@ MKS-ULTIMATE/
 │   │   │   ├── Data/               # BrickFileFormat, CMksBrickFileWriter/Reader
 │   │   │   ├── Symbol/             # CMksMt5Symbol (impl de ISymbol)
 │   │   │   ├── Account/            # CMksMt5Account (impl de IAccount)
-│   │   │   ├── Broker/             # CMksMt5Broker, CMksSimulatedBroker, CostModel
+│   │   │   ├── Broker/             # CMksMt5Broker (pendente), CMksSimulatedBroker, CMksCostModel
 │   │   │   ├── Trade/              # CMksTradeManager, CMksPositionSizer
 │   │   │   ├── Risk/               # CMksRiskManager, camadas de limite
 │   │   │   ├── Log/                # CMksLogger (logging estruturado)

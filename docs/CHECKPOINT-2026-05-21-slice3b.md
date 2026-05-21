@@ -27,7 +27,7 @@ Após esses, invocar `/status` para confirmar o estado contra `git log` antes da
 
 ---
 
-## 2. Estado do código (HEAD = `679e77e`)
+## 2. Estado do código (HEAD = `466d15d`)
 
 O dia 2026-05-21 cobriu três blocos de trabalho sobrepostos:
 1. **Slice 3b proper** (commits até `a06cbe9`) — Producer + Custom Symbol.
@@ -48,6 +48,11 @@ O dia 2026-05-21 cobriu três blocos de trabalho sobrepostos:
 | `ISymbol` + `CMksMt5Symbol` | `Core/Interfaces/ISymbol.mqh` + `Core/Symbol/CMksMt5Symbol.mqh` — ficha técnica do instrumento | **feito + validado** (ADR-016) |
 | `IAccount` + `CMksMt5Account` | `Core/Interfaces/IAccount.mqh` + `Core/Account/CMksMt5Account.mqh` — estado da conta | **feito + validado** (ADR-016) |
 | `Producer.mq5` via interfaces | Refactor: `g_iSymbol`/`g_iAccount` no composition root | **feito** (commit `398501c`) |
+| `MksExecutionResult` expandido | Campos `swap`, `dealId`, `attempts` (ADR-017 §Consequências) | **feito** (commit `6ed70f8`) |
+| Erros 200-203 | Faixa Broker: `TIMEOUT`/`INVALID_FILL`/`RETRY_EXHAUSTED`/`NOT_INITIALIZED` | **feito** (commit `6ed70f8`) |
+| `CMksCostModel` | `Core/Broker/CMksCostModel.mqh` — spread, slippage, commission, swap configuráveis | **feito** (commit `25df429`, ADR-017 §8) |
+| `CMksSimulatedBroker` | `Core/Broker/CMksSimulatedBroker.mqh` — broker em memória, hedging, sem auto-close de SL/TP | **feito + testado (51 assertions)** (commit `466d15d`, ADR-017) |
+| `CMksMt5Broker` | Broker real para live trading | **pendente** (ADR-017 — implementação concreta) |
 
 ### ADRs — só o que mudou desde o checkpoint anterior
 
@@ -74,6 +79,10 @@ ADRs 001–013 sem alteração.
 Todos os commits do dia sobre HEAD `918c45f`:
 
 ```
+466d15d feat(core): add CMksSimulatedBroker + tests (ADR-017)
+25df429 feat(core): add CMksCostModel for simulated broker (ADR-017 §8)
+6ed70f8 feat(core): expand MksExecutionResult + broker error codes (ADR-017)
+33f775b docs: refresh CHECKPOINT with ADR-017 acceptance (HEAD 679e77e)
 679e77e docs: accept ADR-017 (broker execution confirmation model)
 af2ca24 docs: cleanup consequences of ADR-016 acceptance (Protocolo 9, tree, CHECKPOINT)
 398501c feat(core): add ISymbol/IAccount + Mt5 impls, refactor Producer (ADR-016)
@@ -217,6 +226,35 @@ ADR-017 (modelo de confirmação de execução do broker) **redigida e aceita** 
 
 **ADR-016 é pré-requisito direto** — broker consome `ISymbol.FillingMode/TickSize/Point/VolumeStep/StopsLevel` e `IAccount.MarginMode/FreeMargin`.
 
+### Parte 8 — Implementação progressiva da Fase 4 (Broker abstractions)
+
+ADR-017 começou a virar código. Implementação em 4 partes; **3 concluídas**, 1 pendente.
+
+**Parte 1 — Tipos expandidos (`6ed70f8`):**
+- `MksExecutionResult` ganha `swap`, `dealId`, `attempts` (ADR-017 §Consequências). Construtor zera. Consumidores existentes não quebram.
+- 4 códigos novos na faixa Broker 200-299: `MKS_ERR_BROKER_TIMEOUT=200`, `MKS_ERR_BROKER_INVALID_FILL=201`, `MKS_ERR_BROKER_RETRY_EXHAUSTED=202`, `MKS_ERR_BROKER_NOT_INITIALIZED=203`.
+
+**Parte 2 — `CMksCostModel` (`25df429`):**
+- `Core/Broker/CMksCostModel.mqh` (118 linhas). Pasta nova `Core/Broker/`.
+- Determinístico, sem RNG. Parâmetros: `spreadPoints`, `slippagePoints`, `commissionPerLot`, `swapLongPerDay`, `swapShortPerDay` (todos default 0 = sem custos).
+- API: `Validate(err)`, `FillPriceFor(side, mid, pointValue)`, `Commission(lots)`, `SwapForDays(side, lots, days)`.
+- BUY paga `mid + halfSpread + slip`; SELL recebe `mid - halfSpread - slip`. Slippage adverso ao trader.
+
+**Parte 3 — `CMksSimulatedBroker` (`466d15d`):**
+- `Core/Broker/CMksSimulatedBroker.mqh` (240 linhas) + `Test_CMksSimulatedBroker.mq5` (~440 linhas).
+- Implementa `IBroker`. Construtor recebe `ISymbol*` + `CMksCostModel*`. EA chama `OnTick(tick)` antes de cada `Send/Close` para o broker conhecer o mid.
+- `Send`: aplica costModel + cria position com ticket sequencial + computa SL/TP em preço absoluto. Retorna `MksExecutionResult` preenchido.
+- `Close(positionId, lots)`: valida + aplica fill no lado oposto + reduz/zera position.
+- `Modify(positionId, sl, tp)`: atualiza SL/TP em preço absoluto.
+- **Simplificações deliberadas v1:** assume HEDGING (cada Send abre position nova); SL/TP armazenados sem auto-close (Trade Manager futuro monitora); sem cálculo automático de swap acumulado.
+- **Validação empírica:** **51 assertions, 0 falhas** em 12 cenários (not_initialized, invalid_request, send sem custos / com spread / com slippage / com commission, SL/TP BUY+SELL, close full+partial, close inexistente, modify, hedging com 3 sends, determinismo entre 2 brokers).
+- `CFakeSymbol` inline no teste (sem mock formal ainda — slice próprio quando ADR-005 for atacada).
+
+**Parte 4 — `CMksMt5Broker` (pendente):**
+- Broker real para live trading. Maior complexidade da Fase 4: race entre `OrderSend` síncrono e `OnTradeTransaction` assíncrono; fallback automático de filling; retry com backoff em retcodes retryable; espera por `TRADE_TRANSACTION_DEAL_ADD` para extrair preço executado real via `HistoryDealGetDouble(deal, DEAL_PRICE)`.
+- Validação só é possível em demo MT5 real — não dá pra unit-testar.
+- Trabalho de slice próximo, ~2-3h focadas.
+
 ---
 
 ## 4. Validação empírica
@@ -271,10 +309,11 @@ Estado das ADRs pendentes ao fim de 2026-05-21:
 | 005 | Framework de testes unitários | **Pendente** — não enfrentada. Testes atuais (`Test_CMksRenkoBuilder` 428 assertions, `Test_CMksBrickFile` 97, `Test_CMksAtrBrickSizer` 72) usam asserções inline, sem framework formal. |
 | 008 | Reabertura de mercado no RenkoBuilder | **Pendente com evidência parcial registrada** (`CHECKPOINT-2026-05-20-slice2.md` §6): builder atual já trata gap de fim de semana via ADR-011 multi-threshold; teste de 7 dias incluindo gap de 49h gerou M=2 sem erros. Evidência insuficiente para generalizar (1 instrumento, 1 broker). |
 
-ADRs aceitas no dia (movidas desta tabela): **014, 015, 007, 018, 016, 017** — ver §2 e §3 Partes 4 a 7. ADRs 014, 007, 018, 016 também foram **materializadas em código testado**; ADR-015 é decisão filosófica sem código; ADR-017 é decisão arquitetural — implementação (`Core/Broker/`) é trabalho de slice próprio.
+ADRs aceitas no dia (movidas desta tabela): **014, 015, 007, 018, 016, 017** — ver §2 e §3 Partes 4 a 8. ADRs 014, 007, 018, 016 e parcialmente 017 também foram **materializadas em código testado** (ADR-017 tem 3 de 4 partes prontas — `CMksMt5Broker` é pendente). ADR-015 é decisão filosófica sem código.
 
 Outras dívidas registradas:
 
+- **`CMksMt5Broker` (Parte 4 da Fase 4)** — broker real para live trading. ADR-017 fixou todas as decisões; falta o código + validação empírica em demo MT5. Maior peça restante do MVP (~13% após ADR-017 parcialmente materializada).
 - **Validação empírica do `Test_CMksRenkoBuilder` runtime** após a extensão do `IBrickSizer` (commit `16c8e82`) — só compile clean. Semanticamente neutro (no-op no sizer constante), mas vale rodar empiricamente quando voltar a essa região.
 - **Validação empírica do `CMksAtrBrickSizer` em produção** — `Test_CMksAtrBrickSizer` cobre comportamento isolado (72 assertions). Falta swap experimental no Producer (substituir `CMksFixedBrickSizer` por `CMksAtrBrickSizer` e ver brick sizes adaptarem em 7 dias de dado real).
 - **Recuperação de estado em restart do EA** — ADR-014 §Consequências adia explicitamente. Estado do builder zerado a cada `OnInit`; reconciliação parcial proibida por design.
