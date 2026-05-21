@@ -27,43 +27,58 @@ Após esses, invocar `/status` para confirmar o estado contra `git log` antes da
 
 ---
 
-## 2. Estado do código (HEAD do dia = `4756e8e`)
+## 2. Estado do código (HEAD do dia = `7e08c58`)
 
-Slice 3b proper fecha em `a06cbe9`. Após o slice, na mesma sessão, foi feita a **integração da auditoria MQL5** (commit `4756e8e`) — distribuição dos 4 sinais novos da auditoria nos documentos existentes, sem criar arquivo de auditoria separado. Ver §3.4 abaixo.
+O dia 2026-05-21 cobriu três blocos de trabalho sobrepostos:
+1. **Slice 3b proper** (commits até `a06cbe9`) — Producer + Custom Symbol.
+2. **Integração da auditoria MQL5** (`4756e8e`) — distribuição de 4 sinais novos da auditoria nos docs existentes, sem criar arquivo de auditoria separado.
+3. **Aceites de ADR + implementações de consequência** (commits de `e512524` em diante) — ADR-015/007/018 aceitas e materializadas em código testado: `CMksLogger` + Producer refactor + `CMksAtrBrickSizer`.
 
 | Camada | Item | Estado |
 |---|---|---|
 | Slice 3a | `MQL5/Include/MKS-ULTIMATE/Core/Data/` — formato `.mksbk` + writer + reader | feito + testado (97 assertions) |
 | Slice 3a | `MQL5/Scripts/MKS-ULTIMATE/Tests/Test_CMksBrickFile.mq5` — golden file | feito + verde |
-| Slice 3b parte 1 | `MQL5/Experts/MKS-ULTIMATE/Producer.mq5` — EA fundido | **feito + validado** |
+| Slice 3b parte 1 | `MQL5/Experts/MKS-ULTIMATE/Producer.mq5` — EA fundido (multi-sink, logger) | **feito + validado** |
 | Slice 3b parte 1 | `MQL5/Scripts/MKS-ULTIMATE/ValidateProducerOutput.mq5` — leitor | **feito** |
 | Slice 3b parte 2 | Custom Symbol no Producer (`CCustomSymbolSink` + `CMultiSink`) | **feito + validado** |
-| ADR-014 | Política de rotação e naming do `.mksbk` | **Aceita** |
 | Auditoria MQL5 | Integração nos docs (ARCHITECTURE §2/§4, Protocolo 9, §6 deste CHECKPOINT) | **feita** (commit `4756e8e`) |
+| `CMksLogger` | `Core/Log/CMksLogger.mqh` — JSON-line + destino dual + arquivo por sessão | **feito + validado** (ADR-007) |
+| `CMksAtrBrickSizer` | `Core/RenkoBuilder/CMksAtrBrickSizer.mqh` — ATR Wilder sobre bricks | **feito + testado (72 assertions)** (ADR-018) |
+| `IBrickSizer.OnBrick` | Extensão da interface para feedback do builder | **feito** (commit `16c8e82`) |
 
 ### ADRs — só o que mudou desde o checkpoint anterior
 
 | ADR | Tema | Status |
 |---|---|---|
 | 014 | Política de rotação e naming do `.mksbk` | **Aceita** (`8e30554`) |
-| 015 | Strategy Tester nativo como ferramenta vs. fonte de verdade | **Aceita** (commit deste aceite) |
+| 015 | Strategy Tester nativo como ferramenta vs. fonte de verdade | **Aceita** (`e512524`) |
+| 007 | Formato e destino do log estruturado | **Aceita** (`6e40c40`) |
+| 018 | Cálculo do ATR no `CMksAtrBrickSizer` | **Aceita** (`27b5226`) |
 | 016 | Interfaces `ISymbol`/`IAccount` + checklist API globais | **Pendente** — adicionada pós-auditoria |
 | 017 | Modelo de confirmação de execução do `CMksMt5Broker` | **Pendente** — adicionada pós-auditoria |
-| 018 | Cálculo do ATR no `CMksAtrBrickSizer` | **Pendente** — adicionada pós-auditoria |
 
 ADRs 001–013 sem alteração.
 
 ### Códigos de erro — só o que foi adicionado
 
 - `MKS_ERR_DATA_FILE_EXISTS = 806` em `Core/Types/Error.mqh` (faixa Data). Consequência da ADR-014 §4 cláusula 4.
+- `MKS_ERR_LOG_FILE_IO = 600` e `MKS_ERR_LOG_STATE_INVALID = 601` em `Core/Types/Error.mqh` (faixa Log). Consequência da ADR-007.
 
 ---
 
 ## 3. O que foi feito no Slice 3b + housekeeping pós-fechamento
 
-6 commits sobre HEAD `918c45f` (5 do slice + 1 da integração da auditoria, mais este próprio CHECKPOINT em `f734464`):
+Todos os commits do dia sobre HEAD `918c45f`:
 
 ```
+7e08c58 feat(core): add CMksAtrBrickSizer (ADR-018)
+3618e77 feat(core): add CMksLogger and refactor Producer (ADR-007)
+16c8e82 feat(core): extend IBrickSizer with OnBrick (ADR-018 §2)
+27b5226 docs: accept ADR-018 (ATR calculation on closed bricks)
+6e40c40 docs: accept ADR-007 (structured log format)
+2cdc008 docs(protocols): tighten Protocolo 2 with ADR-015 consequence
+e512524 docs: accept ADR-015 (strategy tester as tool, not source of truth)
+aa4b6d2 docs: refresh CHECKPOINT-slice3b with post-closure audit integration
 4756e8e docs: integrate MQL5 alignment audit (ADR-015..018, Protocolo 9, Services/)
 f734464 docs: add CHECKPOINT 2026-05-21 slice3b (handoff after Slice 3b)
 a06cbe9 feat(experts): add Custom Symbol second sink to Producer (Slice 3b)
@@ -124,6 +139,26 @@ Após o fechamento do Slice 3b, o dono colou nesta sessão um relatório de audi
 - `PROTOCOLOS.md`: novo **Protocolo 9** com tabela completa de "chamadas API globais proibidas em código de lógica" (tempo, símbolo, conta, identidade, séries, execução, Custom Symbol) — cada função com substituto canônico. Protocolo 1 atualizado para apontar para Protocolo 9.
 - §6 deste CHECKPOINT: ADRs 015–018 marcadas "adicionada pós-auditoria MQL5".
 
+### Parte 5 — Aceites de ADR + implementações de consequência (pós-auditoria)
+
+Após a integração da auditoria, três das quatro ADRs adicionadas foram aceitas e duas materializadas em código testado, no mesmo dia.
+
+**ADRs aceitas (3):**
+
+- **ADR-015** (`e512524`) — Strategy Tester nativo como ferramenta, não fonte de verdade. Decisão filosófica pura; sem código consequência. Bloqueava ADR-018 (vetou alternativa `iATR` nativo).
+- **ADR-007** (`6e40c40`) — Formato e destino do log estruturado. JSON-line + destino dual (Print + FileWrite) + hot path mudo + arquivo por sessão + política de níveis na borda.
+- **ADR-018** (`27b5226`) — Cálculo do ATR no `CMksAtrBrickSizer`. ATR sobre bricks fechados (Wilder), `IBrickSizer` ganha `OnBrick`, warm-up via `defaultSizePoints` para evitar deadlock.
+
+**Consequências em código (2 commits, 934 inserções líquidas):**
+
+- **`16c8e82`** — Extensão do `IBrickSizer` com `OnBrick(MksBrick&)` pure virtual (ADR-018 §2). `CMksFixedBrickSizer` ganha implementação no-op. `CMksRenkoBuilder.EmitBrick` chama `m_sizer.OnBrick(brick)` após notificar o sink. Compile clean nos 6 arquivos afetados; runtime do `Test_CMksRenkoBuilder` (428 assertions) **não rodado nesta sessão** — semanticamente neutro para sizer constante.
+
+- **`3618e77`** — `CMksLogger` em `Core/Log/CMksLogger.mqh` (ADR-007 implementado). JSON-line com schema fixo, escape de paths via `MksJsonEscape`, header META com proveniência, helpers `Trace/Debug/Info/Warn/Error`. `ILogger` da Fase 1 ganhou nova assinatura `Log(level, module, msg, ctxJson)` — sem consumidor real prévio, sem breakage. `Producer.mq5` refatorado: todos os `Print`/`PrintFormat` substituídos por chamadas do logger; novo input `InpLogToFile`; `MKS-ULTIMATE\Logs\<symbol>_<TS>.log` criado em paralelo ao `.mksbk`. Validação empírica: 10 linhas JSON íntegras, parity entre sinks (writerCount=csBars=bricksTotal=10.074).
+
+- **`7e08c58`** — `CMksAtrBrickSizer` em `Core/RenkoBuilder/CMksAtrBrickSizer.mqh` (ADR-018 implementado). ATR Wilder sobre bricks fechados, warm-up via `defaultSizePoints`, `IsReady=true` sempre (anti-deadlock), parâmetros: `atrPeriod=14`, `multiplier=0.5`, `defaultSize`, clamp `min/max`. Validação empírica via `Test_CMksAtrBrickSizer.mq5`: **72 assertions, 0 falhas** em 11 cenários (Validate, warm-up, transição, TR primeiro/com-gap, Wilder, clamp min/max, determinismo).
+
+**Limitação conhecida** registrada no código (ADR-007): `CMksLogger.FormatTimestamp` produz `.000Z` fixo — MQL5 não expõe API para "TimeCurrent com millis" fora de `MqlTick.time_msc`. TODO para evolução futura quando caller puder passar `timeMsc` do tick corrente como contexto.
+
 ---
 
 ## 4. Validação empírica
@@ -171,23 +206,26 @@ Quando o input do EA tem comentário (`input int InpHistoricalFillDays = 0; // d
 
 ## 6. Pendências persistentes
 
-Estado das ADRs pendentes, atualizado pós-Slice 3b:
+Estado das ADRs pendentes ao fim de 2026-05-21:
 
-| ADR | Tema | Status pós-Slice 3b |
+| ADR | Tema | Status |
 |---|---|---|
-| 005 | Framework de testes unitários | **Pendente** — não enfrentada. Testes atuais (`Test_CMksRenkoBuilder` 428 assertions, `Test_CMksBrickFile` 97 assertions) usam asserções inline, sem framework formal. |
-| 007 | Formato do log estruturado | **Aceita** (commit deste aceite). JSON-line + destino dual (Print+FileWrite) + hot path mudo + arquivo por sessão. Bloqueia implementação de `CMksLogger` mas destrava arquitetura. |
-| 008 | Reabertura de mercado no RenkoBuilder | **Pendente com evidência parcial registrada** (`CHECKPOINT-2026-05-20-slice2.md` §6): o builder atual já trata gap de fim de semana via ADR-011 multi-threshold; teste de 7 dias incluindo gap de 49h gerou M=2 sem erros. Evidência insuficiente para generalizar (1 instrumento, 1 broker). |
+| 005 | Framework de testes unitários | **Pendente** — não enfrentada. Testes atuais (`Test_CMksRenkoBuilder` 428 assertions, `Test_CMksBrickFile` 97, `Test_CMksAtrBrickSizer` 72) usam asserções inline, sem framework formal. |
+| 008 | Reabertura de mercado no RenkoBuilder | **Pendente com evidência parcial registrada** (`CHECKPOINT-2026-05-20-slice2.md` §6): builder atual já trata gap de fim de semana via ADR-011 multi-threshold; teste de 7 dias incluindo gap de 49h gerou M=2 sem erros. Evidência insuficiente para generalizar (1 instrumento, 1 broker). |
 | 016 | Interfaces `ISymbol`/`IAccount` + checklist API globais | **Pendente** — adicionada pós-auditoria MQL5. Protocolo 9 já estabelece a fronteira; falta a ADR formal e as interfaces. Bloqueia `CMksTradeManager`/`CMksRiskManager`/estratégias. |
 | 017 | Modelo de confirmação de execução do `CMksMt5Broker` | **Pendente** — adicionada pós-auditoria MQL5. Bloqueia Fase 4 (Broker abstractions). Inclui síncrono vs. assíncrono via `OnTradeTransaction`, filling mode, netting vs. hedging. |
-| 018 | Cálculo do ATR no `CMksAtrBrickSizer` | **Aceita** (commit deste aceite). ATR sobre bricks fechados (Wilder), `IBrickSizer` ganha `OnBrick`, warm-up via `defaultSizePoints` para evitar deadlock. Bloqueia implementação do `CMksAtrBrickSizer` mas destrava o desenho. |
+
+ADRs aceitas e implementadas no dia (movidas desta tabela): **014, 015, 007, 018** — ver §2 e §3 Partes 4 e 5.
 
 Outras dívidas registradas:
 
-- **Recuperação de estado em restart do EA** — ADR-014 §Consequências adia explicitamente. Estado do builder é zerado a cada `OnInit`; reconciliação parcial é proibida por design.
-- **Continuidade visual entre sessões no Custom Symbol** — ADR-014 §Consequências. Workaround atual: `InpHistoricalFillDays > 0` reconstrói N dias no `OnInit`.
-- **Limite de tentativas do retry de sufixo (`kMaxAttempts=100`)** — não-arquitetural, fixado no `Producer.mq5`. Revisitar se 100 colisões num segundo for cenário real.
-- **WARN `CustomRatesDelete lastErr=5019`** no primeiro run de cada combinação símbolo/size — benigno (CS recém-criado sem bars). Pode ser suprimido em futuro polish.
+- **Validação empírica do `Test_CMksRenkoBuilder` runtime** após a extensão do `IBrickSizer` (commit `16c8e82`) — só compile clean. Semanticamente neutro (no-op no sizer constante), mas vale rodar empiricamente quando voltar a essa região.
+- **Validação empírica do `CMksAtrBrickSizer` em produção** — `Test_CMksAtrBrickSizer` cobre comportamento isolado (72 assertions). Falta swap experimental no Producer (substituir `CMksFixedBrickSizer` por `CMksAtrBrickSizer` e ver brick sizes adaptarem em 7 dias de dado real).
+- **Recuperação de estado em restart do EA** — ADR-014 §Consequências adia explicitamente. Estado do builder zerado a cada `OnInit`; reconciliação parcial proibida por design.
+- **Continuidade visual entre sessões no Custom Symbol** — ADR-014 §Consequências. Workaround: `InpHistoricalFillDays > 0` reconstrói N dias.
+- **Limite de tentativas do retry de sufixo (`kMaxAttempts=100`)** — não-arquitetural, fixado no Producer.
+- **WARN `CustomRatesDelete lastErr=5019`** no primeiro run de cada combinação símbolo/size — benigno.
+- **Precisão de milissegundo no `CMksLogger.FormatTimestamp`** — atualmente `.000Z` fixo. MQL5 não expõe API para "TimeCurrent com millis". TODO no código: caller poderá passar `timeMsc` do tick corrente como contexto futuro.
 
 ---
 
