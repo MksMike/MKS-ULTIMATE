@@ -46,7 +46,7 @@ Slice 3b proper fecha em `a06cbe9`. Após o slice, na mesma sessão, foi feita a
 | ADR | Tema | Status |
 |---|---|---|
 | 014 | Política de rotação e naming do `.mksbk` | **Aceita** (`8e30554`) |
-| 015 | Strategy Tester nativo como ferramenta vs. fonte de verdade | **Pendente** — adicionada pós-auditoria |
+| 015 | Strategy Tester nativo como ferramenta vs. fonte de verdade | **Aceita** (commit deste aceite) |
 | 016 | Interfaces `ISymbol`/`IAccount` + checklist API globais | **Pendente** — adicionada pós-auditoria |
 | 017 | Modelo de confirmação de execução do `CMksMt5Broker` | **Pendente** — adicionada pós-auditoria |
 | 018 | Cálculo do ATR no `CMksAtrBrickSizer` | **Pendente** — adicionada pós-auditoria |
@@ -178,7 +178,6 @@ Estado das ADRs pendentes, atualizado pós-Slice 3b:
 | 005 | Framework de testes unitários | **Pendente** — não enfrentada. Testes atuais (`Test_CMksRenkoBuilder` 428 assertions, `Test_CMksBrickFile` 97 assertions) usam asserções inline, sem framework formal. |
 | 007 | Formato do log estruturado | **Pendente** — bloqueia Fase 8. EA atual usa `Print`/`PrintFormat`. |
 | 008 | Reabertura de mercado no RenkoBuilder | **Pendente com evidência parcial registrada** (`CHECKPOINT-2026-05-20-slice2.md` §6): o builder atual já trata gap de fim de semana via ADR-011 multi-threshold; teste de 7 dias incluindo gap de 49h gerou M=2 sem erros. Evidência insuficiente para generalizar (1 instrumento, 1 broker). |
-| 015 | Strategy Tester nativo como ferramenta vs. fonte de verdade | **Pendente** — adicionada pós-auditoria MQL5. Decisão hoje implícita no princípio norteador e na ADR-012; precisa formalização antes de discussão sobre otimização de parâmetros. |
 | 016 | Interfaces `ISymbol`/`IAccount` + checklist API globais | **Pendente** — adicionada pós-auditoria MQL5. Protocolo 9 já estabelece a fronteira; falta a ADR formal e as interfaces. Bloqueia `CMksTradeManager`/`CMksRiskManager`/estratégias. |
 | 017 | Modelo de confirmação de execução do `CMksMt5Broker` | **Pendente** — adicionada pós-auditoria MQL5. Bloqueia Fase 4 (Broker abstractions). Inclui síncrono vs. assíncrono via `OnTradeTransaction`, filling mode, netting vs. hedging. |
 | 018 | Cálculo do ATR no `CMksAtrBrickSizer` | **Pendente** — adicionada pós-auditoria MQL5. ADR-010 §Consequências adiou explicitamente. Três alternativas mapeadas em `ARCHITECTURE.md` §4. |

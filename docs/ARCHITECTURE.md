@@ -563,6 +563,65 @@ A política de rotação do `.mksbk` no MKS-ULTIMATE assenta sobre três regras:
 
 ---
 
+### ADR-015: Strategy Tester nativo como ferramenta, não fonte de verdade
+
+**Data:** 2026-05-21
+**Status:** Aceita
+
+**Contexto:**
+O Strategy Tester nativo do MT5 é feature central da plataforma: oferece três modos de geração de ticks (every tick, every tick based on real ticks, 1 minute OHLC), otimização genética, walk-forward, visualização do backtest com trades sobre o gráfico, integração com MQL5 Cloud Network para paralelização, e o handler `OnTester` para devolver métrica customizada. O ecossistema MQL5 trata o tester como o caminho padrão de backtest e otimização — qualquer EA novo, a expectativa default é "rode no tester".
+
+O MKS-ULTIMATE escolheu, na ADR-012, gravar ticks crus em arquivo `.mksbk` (e, na nomenclatura desta sessão, em arquivo de captura de ticks separado a ser definido) e ler de volta via `ITickSource` para backtest. Essa decisão implica que **o tester nativo não é a fonte de verdade do backtest deste projeto**. Mas essa implicação nunca foi enunciada como decisão formal — vive escondida na ADR-012 (que fala de fonte de dados, não do papel do tester) e no princípio norteador do `Projeto.md` (paridade backtest/live bit-a-bit). A primeira estratégia que for construída vai disparar a pergunta inevitável: "se o tester roda com real ticks, qual o problema de usá-lo?". A resposta precisa estar pronta, registrada, defensável — não improvisada.
+
+Esta ADR resolve a pergunta antes dela ser feita.
+
+**Decisão:**
+O Strategy Tester nativo do MT5 é usado no MKS-ULTIMATE **como ferramenta de desenvolvimento e visualização**, nunca como fonte de verdade para mérito de estratégia.
+
+1. **Backtest oficial roda fora do tester.** A execução canônica do backtest é um Script ou Service (`MQL5/Scripts/` ou `MQL5/Services/`) que instancia o composition root do framework com `ITickSource` apontando para arquivo de captura. Nenhum resultado de tester é citado em commit message, em CHANGELOG, em entrega de release ou em comparação de fitness entre estratégias.
+
+2. **Tester aceito para uso instrumental.** É permitido — e às vezes útil — rodar um EA no tester para:
+   - **Visualização** do comportamento da estratégia sobre o gráfico (debug visual rápido).
+   - **Smoke test** antes de capturar um arquivo de ticks longo.
+   - **Apresentação** ao dono ou stakeholders.
+
+   Em todos esses casos, o output do tester é **descartável** — não vira métrica de release.
+
+3. **Sem bifurcação de lógica via `MQLInfoInteger(MQL5_TESTING)`.** A REGRAS §1.7 já proíbe isso e o Protocolo 9 reforça. Esta ADR fixa o complemento positivo: o EA nem sabe se está rodando no tester ou em live; o caminho de código é único. Eventualmente, configuração de logger pode ser ajustada via input para reduzir verbosidade em backtest longo — mas isso é configuração de output, não bifurcação de lógica de trading.
+
+4. **Métricas vêm do framework, não do report do tester.** Sharpe ratio, drawdown, profit factor, trade count e equivalentes são computados por código próprio sobre o stream de `MksExecutionResult` produzido pelo backtest. O HTML report do tester é tolerado para inspeção rápida; nunca é a fonte autoritativa.
+
+5. **Otimização de parâmetros é trabalho futuro, fora do escopo das Fases 0–4.** Quando virar problema real (provavelmente Fase 10 ou depois), será implementada pelo framework próprio — não delegada ao optimizer do tester. Isso porque o optimizer do tester usa o engine de backtest do tester, que esta ADR rejeitou como fonte de verdade.
+
+**Alternativas consideradas:**
+
+- **Usar Strategy Tester como fonte de verdade do backtest:** rejeitada. Três razões empilhadas — (a) o tester depende do modo de geração de ticks escolhido, e cada modo produz resultado diferente para o mesmo período; (b) o `.tks` que alimenta o tester é arquivo da MetaQuotes, formato fechado, sujeito a evolução não-documentada entre builds do terminal; (c) o V5 usou o tester como fonte de verdade e o eixo 2 do colapso entrou exatamente por essa porta — múltiplos produtores de bricks (tester com OHLC vs. live com ticks) gerando sequências diferentes para o mesmo intervalo.
+
+- **Híbrido — tester para alguns cenários, framework para outros:** rejeitada. Mistura de métricas vira soup intratável: cada comparação fica dependente de "qual engine produziu este número". Disciplina binária — tester como ferramenta, framework como fonte de verdade — é mais simples de defender e de auditar. Erro de classificação é tipo "olhei o número do tester como se fosse oficial" — fácil de detectar e corrigir; erro de mistura é tipo "metade do relatório veio de A e metade de B" — invisível até dar problema.
+
+- **Adiar a decisão para Fase 9 (validação end-to-end):** rejeitada. A primeira estratégia que rodar — provavelmente bem antes da Fase 9 — vai disparar a pergunta. Decidir sob pressão de timeline ou de resultado é decidir mal. Decidir agora, no calmo, com o post-mortem do V5 fresco e os custos do tester já mapeados, é mais barato.
+
+**Consequências:**
+
+- **Framework reconstrói capabilities que o tester oferece.** Engine de backtest (parcialmente pronto: `ITickSource` + builder + sinks), reporter de métricas (pendente — Sharpe, drawdown, profit factor, equity curve), visualização (pendente). Cada um vira slice próprio do roadmap.
+
+- **Custo aceito de não ter otimização barata.** O tester com MQL5 Cloud Network paraleliza otimização gratuitamente; o framework não. Quando otimização for necessária, será implementação própria — provavelmente fora do MT5, como pipeline em outra linguagem que consome arquivo de captura e itera sobre o framework. Trabalho substancial, registrado como dívida explícita.
+
+- **ADR-018 (cálculo do ATR) herda restrição.** A alternativa (c) da ADR-018 — usar `iATR` nativo — fica vetada por esta ADR: `iATR` em backtest depende das séries que o tester injeta, e o framework rejeita o tester como fonte de verdade. ADR-018, quando for decidida, escolhe entre (a) cálculo próprio sobre ticks ou (b) cálculo próprio sobre bricks fechados.
+
+- **Documentação operacional ajusta.** `docs/PROTOCOLOS.md` Protocolo 2 ("Antes de rodar um EA em backtest pela primeira vez") tem o item "Qualidade de dados do MT5 verificada (ideal: 'Every tick based on real ticks')" — refere ao tester. Não fere esta ADR (uso instrumental é aceito), mas o protocolo ganha item adicional: "se o backtest é para release, foi rodado também via framework (arquivo de captura + script de replay), e os números do release vieram do framework, não do tester". Atualização do PROTOCOLOS é trabalho à parte, após o aceite desta ADR.
+
+- **Tom do projeto preservado.** O MKS-ULTIMATE não é hostil ao tester — usa quando faz sentido. É hostil a tratar o tester como gold standard.
+
+**Fronteiras:**
+
+- Não é a arquitetura do engine de backtest próprio — trabalho de slices futuros (4, 5 ou Fase 7).
+- Não é o formato dos relatórios de release — decisão futura, possivelmente acoplada à ADR-007 (logger).
+- Não é o contrato de integridade dos arquivos de dados — esse é a ADR-012 (ticks) e a ADR-014 (bricks `.mksbk`).
+- Não é sobre como capturar ticks crus em produção — esse é trabalho de Service futuro em `MQL5/Services/`.
+
+---
+
 ## 4. Decisões pendentes
 
 Pontos que precisam virar ADR assim que forem enfrentados:
@@ -570,7 +629,6 @@ Pontos que precisam virar ADR assim que forem enfrentados:
 - **ADR-005 (pendente):** Estrutura e execução dos testes unitários. Framework próprio mínimo ou adaptação de algo existente?
 - **ADR-007 (pendente):** Formato do log estruturado. JSON-line ou key=value? Volume de log esperado em live vs custo de parsing.
 - **ADR-008 (pendente):** Como tratar reabertura de mercado (segunda-feira) no RenkoBuilder. Gap vira brick? Vira múltiplos bricks? Vira nada? Evidência parcial já registrada em `CHECKPOINT-2026-05-20-slice2.md` §6.
-- **ADR-015 (pendente):** Strategy Tester nativo do MT5 como ferramenta vs. fonte de verdade. O backtest oficial do MKS-ULTIMATE roda fora do tester, lendo `.mksbk` via `ITickSource` — decisão hoje implícita no princípio norteador e na ADR-012, mas não formalizada. Bloqueia esclarecimento sobre otimização de parâmetros e visualização de backtest antes da Fase 9.
 - **ADR-016 (pendente):** Interfaces `ISymbol` e `IAccount` + checklist de chamadas API globais proibidas em código de lógica (ver Protocolo 9 em `PROTOCOLOS.md`). Hoje a porta está fechada por convenção — ADR-013 §2 só permite chamadas globais na borda (composition root em `OnInit`/`OnTick`/`OnDeinit`). Precisa virar contrato testável antes de `CMksTradeManager`/`CMksRiskManager`/estratégias serem escritas.
 - **ADR-017 (pendente):** Modelo de confirmação de execução do `CMksMt5Broker`. Síncrono via retcode do `OrderSend` ou assíncrono via `OnTradeTransaction::TRADE_TRANSACTION_DEAL_ADD`? Decide latência vs. fidelidade de `fillPrice`/`slippage`. Inclui também política de filling mode (FOK/IOC/RETURN via `SymbolInfoInteger(SYMBOL_FILLING_MODE)`), uso de `OrderCheck`, e diferença netting vs. hedging. Bloqueia Fase 4 (Broker abstractions).
 - **ADR-018 (pendente):** Cálculo do ATR no `CMksAtrBrickSizer`. Três alternativas: (a) ATR sobre ticks brutos, cálculo próprio; (b) ATR sobre bricks fechados (coerente com filosofia "decisão pós-brick é sobre bricks"); (c) `iATR` nativo (reintroduz dependência do tester, contra ADR-015 quando aceita). ADR-010 §Consequências adiou explicitamente.
