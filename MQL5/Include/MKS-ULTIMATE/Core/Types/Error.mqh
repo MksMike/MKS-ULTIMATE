@@ -25,8 +25,13 @@ enum ENUM_MKS_ERROR_CODE
    MKS_ERR_RENKO_INVALID_TICK = 103,        // tick reprovado por IsValid() (ADR-006)
    MKS_ERR_RENKO_TICK_STREAM_CORRUPT = 104, // L ticks inválidos consecutivos (ADR-006)
 
-   //--- Broker 200–299, Trade 300–399, Risk 400–499,
-   //    StressLab 500–599 — ver ADR-009
+   //--- Broker: faixa 200–299 — ver ADR-009, ADR-017 ---
+   MKS_ERR_BROKER_TIMEOUT = 200,           // DEAL_ADD não chegou no timeout configurado
+   MKS_ERR_BROKER_INVALID_FILL = 201,      // todos os filling modes falharam (caso patológico)
+   MKS_ERR_BROKER_RETRY_EXHAUSTED = 202,   // tentativas esgotadas em retcode retryable
+   MKS_ERR_BROKER_NOT_INITIALIZED = 203,   // Send/Close chamado antes de Init
+
+   //--- Trade 300–399, Risk 400–499, StressLab 500–599 — ver ADR-009
 
    //--- Log: faixa 600–699 — ver ADR-007 ---
    MKS_ERR_LOG_FILE_IO = 600,              // falha de I/O do logger (open/write/close)
