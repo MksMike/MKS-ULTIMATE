@@ -35,6 +35,7 @@ enum ENUM_MKS_ERROR_CODE
    MKS_ERR_DATA_HEADER_INVALID = 803,      // header com tamanho/recordSize inconsistentes
    MKS_ERR_DATA_TRUNCATED = 804,           // arquivo termina antes do brickCount esperado
    MKS_ERR_DATA_STATE_INVALID = 805,       // operação em writer/reader em estado errado
+   MKS_ERR_DATA_FILE_EXISTS = 806,         // arquivo já existe na abertura para escrita (ADR-014)
 };
 
 struct MksError

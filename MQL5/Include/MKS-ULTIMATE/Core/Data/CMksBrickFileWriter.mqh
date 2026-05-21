@@ -97,6 +97,13 @@ public:
          MKS_SET_ERROR(err, MKS_ERR_DATA_STATE_INVALID, "writer já aberto", path);
          return false;
       }
+      // ADR-014 §4: writer não sobrescreve. Producer trata 806 com retry de sufixo.
+      if(FileIsExist(path))
+      {
+         MKS_SET_ERROR(err, MKS_ERR_DATA_FILE_EXISTS,
+                       "arquivo já existe — recusa sobrescrever", path);
+         return false;
+      }
       // FILE_READ|FILE_WRITE permite seek + patch do header no Close.
       m_handle = FileOpen(path, FILE_READ | FILE_WRITE | FILE_BIN);
       if(m_handle == INVALID_HANDLE)
