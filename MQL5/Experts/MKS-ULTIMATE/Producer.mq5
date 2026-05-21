@@ -3,10 +3,12 @@
 //| @project        : MKS-ULTIMATE
 //| @module         : Experts / MKS-ULTIMATE
 //| @responsibility : EA produtor fundido — embute Builder + Sizer +
-//|                   Writer num programa único. OnInit faz fill
-//|                   histórico opcional, OnTick processa ticks live,
-//|                   OnDeinit fecha o arquivo .mksbk. Slice 3b. Combate
-//|                   o eixo 2 do V5 (mesmo motor para histórico e live).
+//|                   Writer + Custom Symbol num programa único. OnInit
+//|                   faz fill histórico opcional, OnTick processa ticks
+//|                   live, OnDeinit fecha o arquivo .mksbk. Slice 3b.
+//|                   Combate o eixo 2 do V5 (mesmo motor para histórico
+//|                   e live). Cada brick é gravado no .mksbk e empurrado
+//|                   como barra no Custom Symbol via multi-sink.
 //| @depends_on     : Core/RenkoBuilder/CMksRenkoBuilder.mqh,
 //|                   Core/RenkoBuilder/CMksFixedBrickSizer.mqh,
 //|                   Core/Data/CMksBrickFileWriter.mqh,
@@ -32,19 +34,22 @@ input int    InpInvalidTickLimit    = 10;    // L (ADR-006 §5)
 input int    InpThresholdLimit      = 20;    // K (ADR-011 §4)
 input bool   InpPrintBricks         = false; // verbose: imprime cada brick no journal
 input int    InpInvalidLogEvery     = 100;   // rate-limit do log 103: imprime 1 a cada N
+input bool   InpResetCustomSymbolBars = true; // wipe bars antigas do Custom Symbol no OnInit
 
-string  g_symbol         = "";
-int     g_digits         = 0;
-string  g_broker         = "";
-long    g_account        = 0;
-string  g_filePath       = "";
-ulong   g_seq            = 0;
-int     g_invalidLogged  = 0;
-int     g_invalidSeen    = 0;
-int     g_k102Seen       = 0;
-bool    g_streamHalted   = false;
-int     g_histLoaded     = 0;
-int     g_histBricks     = 0;
+string   g_symbol         = "";
+int      g_digits         = 0;
+string   g_broker         = "";
+long     g_account        = 0;
+string   g_filePath       = "";
+string   g_csName         = "";
+datetime g_nextBarTime    = 0;
+ulong    g_seq            = 0;
+int      g_invalidLogged  = 0;
+int      g_invalidSeen    = 0;
+int      g_k102Seen       = 0;
+bool     g_streamHalted   = false;
+int      g_histLoaded     = 0;
+int      g_histBricks     = 0;
 
 CMksFixedBrickSizer  *g_sizer   = NULL;
 CMksBrickFileWriter  *g_writer  = NULL;
@@ -97,6 +102,165 @@ public:
 };
 
 CBrickWriterSink *g_sink = NULL;
+
+//+------------------------------------------------------------------+
+//| Sink: empurra cada brick como uma barra no Custom Symbol.         |
+//| Usa slot M1 monotônico (+60s por brick) para evitar colisão de    |
+//| timestamp — CustomRatesUpdate sobrescreve bars com mesmo time.    |
+//| Tempo da bar é índice ordenador, não tempo real do brick.         |
+//+------------------------------------------------------------------+
+class CCustomSymbolSink : public IRenkoSink
+{
+public:
+   string   csName;
+   datetime nextBarTime;
+   int      barsPushed;
+   int      updateFailures;
+
+   CCustomSymbolSink()
+   {
+      csName         = "";
+      nextBarTime    = 0;
+      barsPushed     = 0;
+      updateFailures = 0;
+   }
+
+   void OnBrickClose(const MksBrick &brick) override
+   {
+      if(StringLen(csName) == 0) return;
+      MqlRates rates[1];
+      rates[0].time        = nextBarTime;
+      rates[0].open        = brick.open;
+      rates[0].high        = brick.high;
+      rates[0].low         = brick.low;
+      rates[0].close       = brick.close;
+      rates[0].tick_volume = brick.thresholdsCrossed; // não é volume real
+      rates[0].spread      = 0;
+      rates[0].real_volume = 0;
+      int n = CustomRatesUpdate(csName, rates);
+      if(n < 0)
+      {
+         updateFailures++;
+         PrintFormat("CS UPDATE FAIL: lastErr=%d", GetLastError());
+      }
+      else
+      {
+         barsPushed++;
+      }
+      nextBarTime = (datetime)((long)nextBarTime + 60);
+   }
+};
+
+CCustomSymbolSink *g_csSink = NULL;
+
+//+------------------------------------------------------------------+
+//| Sink composto: delega OnBrickClose a múltiplos sinks reais.       |
+//| Não possui os sinks — apenas os referencia. Cleanup deleta cada   |
+//| sink real separadamente.                                          |
+//+------------------------------------------------------------------+
+class CMultiSink : public IRenkoSink
+{
+public:
+   IRenkoSink *sinks[];
+   int         count;
+
+   CMultiSink()
+   {
+      count = 0;
+   }
+
+   void Add(IRenkoSink *sink)
+   {
+      if(sink == NULL) return;
+      ArrayResize(sinks, count + 1);
+      sinks[count] = sink;
+      count++;
+   }
+
+   void OnBrickClose(const MksBrick &brick) override
+   {
+      for(int i = 0; i < count; i++)
+         if(sinks[i] != NULL)
+            sinks[i].OnBrickClose(brick);
+   }
+};
+
+CMultiSink *g_multiSink = NULL;
+
+//+------------------------------------------------------------------+
+//| Nome do Custom Symbol: <symbol>.MKS_RKN<size>.                    |
+//| Decisão de implementação sem ADR (ADR-014 §6 Fronteiras).          |
+//+------------------------------------------------------------------+
+string BuildCustomSymbolName(const string &symbol, double sizePts)
+{
+   string sizeStr;
+   if(MathAbs(sizePts - MathRound(sizePts)) < 1e-9)
+      sizeStr = StringFormat("%d", (int)MathRound(sizePts));
+   else
+      sizeStr = DoubleToString(sizePts, 2);
+   return StringFormat("%s.MKS_RKN%s", symbol, sizeStr);
+}
+
+//+------------------------------------------------------------------+
+//| Cria ou recupera o Custom Symbol. Replica propriedades imutáveis  |
+//| do símbolo base (Setar SYMBOL_DIGITS/POINT/CHART_MODE/TICK_SIZE   |
+//| APAGA o histórico do CS — efeito simétrico com ADR-014). Seleciona |
+//| em Market Watch (requisito de fato para CustomRatesUpdate).        |
+//+------------------------------------------------------------------+
+bool EnsureCustomSymbolReady(const string &cs, const string &src, MksError &err)
+{
+   bool exists = (SymbolInfoInteger(cs, SYMBOL_CUSTOM) == 1);
+   if(!exists)
+   {
+      if(!CustomSymbolCreate(cs, "MKS-ULTIMATE", src))
+      {
+         int lastErr = GetLastError();
+         if(lastErr != 5304) // 5304 = símbolo já existe (race)
+         {
+            MKS_SET_ERROR(err, MKS_ERR_DATA_FILE_IO,
+                          "CustomSymbolCreate falhou",
+                          StringFormat("cs=%s src=%s lastErr=%d", cs, src, lastErr));
+            return false;
+         }
+      }
+   }
+
+   CustomSymbolSetInteger(cs, SYMBOL_DIGITS,
+                          SymbolInfoInteger(src, SYMBOL_DIGITS));
+   CustomSymbolSetInteger(cs, SYMBOL_CHART_MODE, (long)SYMBOL_CHART_MODE_BID);
+   CustomSymbolSetDouble (cs, SYMBOL_POINT,
+                          SymbolInfoDouble(src, SYMBOL_POINT));
+   CustomSymbolSetDouble (cs, SYMBOL_TRADE_TICK_SIZE,
+                          SymbolInfoDouble(src, SYMBOL_TRADE_TICK_SIZE));
+   CustomSymbolSetDouble (cs, SYMBOL_TRADE_TICK_VALUE,
+                          SymbolInfoDouble(src, SYMBOL_TRADE_TICK_VALUE));
+   CustomSymbolSetDouble (cs, SYMBOL_TRADE_CONTRACT_SIZE,
+                          SymbolInfoDouble(src, SYMBOL_TRADE_CONTRACT_SIZE));
+   CustomSymbolSetString (cs, SYMBOL_CURRENCY_BASE,
+                          SymbolInfoString(src, SYMBOL_CURRENCY_BASE));
+   CustomSymbolSetString (cs, SYMBOL_CURRENCY_PROFIT,
+                          SymbolInfoString(src, SYMBOL_CURRENCY_PROFIT));
+   CustomSymbolSetString (cs, SYMBOL_CURRENCY_MARGIN,
+                          SymbolInfoString(src, SYMBOL_CURRENCY_MARGIN));
+
+   if(!SymbolSelect(cs, true))
+   {
+      MKS_SET_ERROR(err, MKS_ERR_DATA_FILE_IO,
+                    "SymbolSelect falhou — CS não entrou no Market Watch",
+                    StringFormat("cs=%s lastErr=%d", cs, GetLastError()));
+      return false;
+   }
+   return true;
+}
+
+//+------------------------------------------------------------------+
+//| Alinha um datetime para o início do minuto (M1 boundary).         |
+//+------------------------------------------------------------------+
+datetime AlignDownToM1(datetime t)
+{
+   long s = (long)t;
+   return (datetime)((s / 60) * 60);
+}
 
 //+------------------------------------------------------------------+
 //| Gera caminho do .mksbk (ADR-014 §4.2 e §4 cláusula 4).             |
@@ -203,10 +367,12 @@ void RunHistoricalFill(int days)
 //+------------------------------------------------------------------+
 void Cleanup()
 {
-   if(g_builder != NULL) { delete g_builder; g_builder = NULL; }
-   if(g_sink    != NULL) { delete g_sink;    g_sink    = NULL; }
-   if(g_writer  != NULL) { delete g_writer;  g_writer  = NULL; }
-   if(g_sizer   != NULL) { delete g_sizer;   g_sizer   = NULL; }
+   if(g_builder    != NULL) { delete g_builder;    g_builder    = NULL; }
+   if(g_multiSink  != NULL) { delete g_multiSink;  g_multiSink  = NULL; }
+   if(g_csSink     != NULL) { delete g_csSink;     g_csSink     = NULL; }
+   if(g_sink       != NULL) { delete g_sink;       g_sink       = NULL; }
+   if(g_writer     != NULL) { delete g_writer;     g_writer     = NULL; }
+   if(g_sizer      != NULL) { delete g_sizer;      g_sizer      = NULL; }
 }
 
 //+------------------------------------------------------------------+
@@ -221,9 +387,10 @@ int OnInit()
    Print("=== MKS-ULTIMATE Producer (Slice 3b) ===");
    PrintFormat("provenance: broker=\"%s\" account=%I64d symbol=%s digits=%d",
                g_broker, g_account, g_symbol, g_digits);
-   PrintFormat("config: S=%.4f preset=median L=%d K=%d histDays=%d printBricks=%s",
+   PrintFormat("config: S=%.4f preset=median L=%d K=%d histDays=%d printBricks=%s resetCS=%s",
                InpBrickSizePts, InpInvalidTickLimit, InpThresholdLimit,
-               InpHistoricalFillDays, (InpPrintBricks ? "true" : "false"));
+               InpHistoricalFillDays, (InpPrintBricks ? "true" : "false"),
+               (InpResetCustomSymbolBars ? "true" : "false"));
 
    // Pasta destino. FileOpen não cria recursivamente — criar nível por nível.
    FolderCreate("MKS-ULTIMATE");
@@ -280,13 +447,44 @@ int OnInit()
       return INIT_FAILED;
    }
 
-   // Sink (referencia writer) e builder (referencia sizer + sink).
+   // Custom Symbol: replica propriedades do símbolo base, opcionalmente
+   // limpa bars antigas (simétrico com ADR-014: sessão nova = histórico
+   // limpo). Setado APÓS WriteHeader do .mksbk para que uma falha aqui
+   // não bagunce a invariante do writer.
+   g_csName = BuildCustomSymbolName(g_symbol, InpBrickSizePts);
+   PrintFormat("custom symbol: %s", g_csName);
+   if(!EnsureCustomSymbolReady(g_csName, g_symbol, err))
+   {
+      PrintFormat("OnInit: EnsureCustomSymbolReady falhou: %s", err.ToString());
+      Cleanup();
+      return INIT_FAILED;
+   }
+   if(InpResetCustomSymbolBars)
+   {
+      if(!CustomRatesDelete(g_csName, 0, LONG_MAX))
+         PrintFormat("WARN: CustomRatesDelete falhou: lastErr=%d (segue sem wipe)",
+                     GetLastError());
+      else
+         Print("CS: bars antigas removidas");
+   }
+   g_nextBarTime = AlignDownToM1(TimeCurrent());
+
+   // Sinks: writer (.mksbk) + Custom Symbol (chart). Agregados via
+   // multiSink, que apenas referencia — Cleanup deleta cada um.
    g_sink = new CBrickWriterSink();
    g_sink.writer      = g_writer;
    g_sink.printBricks = InpPrintBricks;
    g_sink.digits      = g_digits;
 
-   g_builder = new CMksRenkoBuilder(geom, g_sizer, g_sink,
+   g_csSink = new CCustomSymbolSink();
+   g_csSink.csName      = g_csName;
+   g_csSink.nextBarTime = g_nextBarTime;
+
+   g_multiSink = new CMultiSink();
+   g_multiSink.Add(g_sink);
+   g_multiSink.Add(g_csSink);
+
+   g_builder = new CMksRenkoBuilder(geom, g_sizer, g_multiSink,
                                     InpInvalidTickLimit, InpThresholdLimit);
 
    // Fill histórico opcional (mesmo motor; combate ao eixo 2 do V5).
@@ -318,9 +516,11 @@ void OnDeinit(const int reason)
          PrintFormat("OnDeinit: Close falhou: %s", err.ToString());
    }
 
-   int totalBricks  = (g_sink != NULL) ? g_sink.bricksWritten : 0;
-   int writeFails   = (g_sink != NULL) ? g_sink.writeFailures : 0;
-   long fileBricks  = (g_writer != NULL) ? g_writer.BrickCount() : 0;
+   int totalBricks  = (g_sink   != NULL) ? g_sink.bricksWritten    : 0;
+   int writeFails   = (g_sink   != NULL) ? g_sink.writeFailures    : 0;
+   int csBars       = (g_csSink != NULL) ? g_csSink.barsPushed     : 0;
+   int csFails      = (g_csSink != NULL) ? g_csSink.updateFailures : 0;
+   long fileBricks  = (g_writer != NULL) ? g_writer.BrickCount()   : 0;
 
    Print("");
    Print("=== RELATORIO Producer ===");
@@ -328,6 +528,8 @@ void OnDeinit(const int reason)
    PrintFormat("ticks ingeridos (seq): %I64u", g_seq);
    PrintFormat("bricks: total=%d (writer count=%I64d) writeFailures=%d",
                totalBricks, fileBricks, writeFails);
+   PrintFormat("custom symbol: %s bars=%d updateFailures=%d",
+               g_csName, csBars, csFails);
    PrintFormat("histórico: ticks=%d bricks=%d", g_histLoaded, g_histBricks);
    PrintFormat("erros: 102=%d 103=%d (logados=%d) 104=%s",
                g_k102Seen, g_invalidSeen, g_invalidLogged,
