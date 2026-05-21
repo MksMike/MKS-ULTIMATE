@@ -27,7 +27,9 @@ Após esses, invocar `/status` para confirmar o estado contra `git log` antes da
 
 ---
 
-## 2. Estado do código (HEAD = `a06cbe9`)
+## 2. Estado do código (HEAD do dia = `4756e8e`)
+
+Slice 3b proper fecha em `a06cbe9`. Após o slice, na mesma sessão, foi feita a **integração da auditoria MQL5** (commit `4756e8e`) — distribuição dos 4 sinais novos da auditoria nos documentos existentes, sem criar arquivo de auditoria separado. Ver §3.4 abaixo.
 
 | Camada | Item | Estado |
 |---|---|---|
@@ -37,12 +39,17 @@ Após esses, invocar `/status` para confirmar o estado contra `git log` antes da
 | Slice 3b parte 1 | `MQL5/Scripts/MKS-ULTIMATE/ValidateProducerOutput.mq5` — leitor | **feito** |
 | Slice 3b parte 2 | Custom Symbol no Producer (`CCustomSymbolSink` + `CMultiSink`) | **feito + validado** |
 | ADR-014 | Política de rotação e naming do `.mksbk` | **Aceita** |
+| Auditoria MQL5 | Integração nos docs (ARCHITECTURE §2/§4, Protocolo 9, §6 deste CHECKPOINT) | **feita** (commit `4756e8e`) |
 
 ### ADRs — só o que mudou desde o checkpoint anterior
 
 | ADR | Tema | Status |
 |---|---|---|
 | 014 | Política de rotação e naming do `.mksbk` | **Aceita** (`8e30554`) |
+| 015 | Strategy Tester nativo como ferramenta vs. fonte de verdade | **Pendente** — adicionada pós-auditoria |
+| 016 | Interfaces `ISymbol`/`IAccount` + checklist API globais | **Pendente** — adicionada pós-auditoria |
+| 017 | Modelo de confirmação de execução do `CMksMt5Broker` | **Pendente** — adicionada pós-auditoria |
+| 018 | Cálculo do ATR no `CMksAtrBrickSizer` | **Pendente** — adicionada pós-auditoria |
 
 ADRs 001–013 sem alteração.
 
@@ -52,11 +59,13 @@ ADRs 001–013 sem alteração.
 
 ---
 
-## 3. O que foi feito no Slice 3b
+## 3. O que foi feito no Slice 3b + housekeeping pós-fechamento
 
-5 commits sobre HEAD `918c45f`:
+6 commits sobre HEAD `918c45f` (5 do slice + 1 da integração da auditoria, mais este próprio CHECKPOINT em `f734464`):
 
 ```
+4756e8e docs: integrate MQL5 alignment audit (ADR-015..018, Protocolo 9, Services/)
+f734464 docs: add CHECKPOINT 2026-05-21 slice3b (handoff after Slice 3b)
 a06cbe9 feat(experts): add Custom Symbol second sink to Producer (Slice 3b)
 a3ac944 feat(experts): retry .mksbk filename on collision (ADR-014)
 365931b feat(data): add MKS_ERR_DATA_FILE_EXISTS guard in Writer::Open (ADR-014)
@@ -98,6 +107,22 @@ a3ac944 feat(experts): retry .mksbk filename on collision (ADR-014)
 - **`EnsureCustomSymbolReady(cs, src, err)`** cria/recupera via `CustomSymbolCreate` (trata `lastErr=5304` "symbol already exists" como race), replica propriedades imutáveis do símbolo base (`SYMBOL_DIGITS`, `SYMBOL_CHART_MODE=BID`, `SYMBOL_POINT`, `TICK_SIZE`, `TICK_VALUE`, `CONTRACT_SIZE`, `CURRENCY_*`), e seleciona no Market Watch via `SymbolSelect`.
 - **`BuildCustomSymbolName(symbol, sizePts)`** gera `<symbol>.MKS_RKN<size>` (ex.: `XAUUSDm.MKS_RKN3`). Naming sem ADR — decisão de implementação, ADR-014 §6 Fronteiras.
 - Novo input `InpResetCustomSymbolBars` (default `true`): `CustomRatesDelete(0, LONG_MAX)` no OnInit, simétrico com a política de "sessão nova = limpo" da ADR-014.
+
+### Parte 4 — Integração da auditoria MQL5 (`4756e8e`, pós-slice3b)
+
+Após o fechamento do Slice 3b, o dono colou nesta sessão um relatório de auditoria de alinhamento (`AUDITORIA-MQL5-ALIGNMENT.md`) escrito em paralelo, sem acesso ao filesystem, datado de 2026-05-21 mas referenciando estado **pré-slice3b** (HEAD ≤ `42372f7`, ADR-012 como mais recente). 6 riscos identificados; após análise:
+
+- **Sinais novos:** 4 (broker confirmation, Strategy Tester boundary, ISymbol/IAccount, ATR calculation).
+- **Confirmação de pendências já registradas:** 1 (ADR-007).
+- **Redundante / out-of-date:** o resto (broker já tem ADR-013 sobre outro tema; ADR números 013/014 sugeridos pela auditoria colidem com aceitas).
+- **Discordância explícita:** sugestão de ADR só para "IBroker em vez de CTrade" rejeitada como over-documentation (já decorre de ADR-004 + V5-POSTMORTEM Eixo 1).
+
+**Integração escolhida:** distribuir os 4 sinais novos em documentos existentes, **sem criar `docs/AUDITORIA-MQL5-ALIGNMENT.md`**. O conteúdo original (700 linhas, ~60% meta-conteúdo descartável) ficou só no chat. O sinal preservado:
+
+- `ARCHITECTURE.md` §2: `Services/` na árvore.
+- `ARCHITECTURE.md` §4: ADR-015 a 018 listadas como pendentes, com descrições e bloqueios.
+- `PROTOCOLOS.md`: novo **Protocolo 9** com tabela completa de "chamadas API globais proibidas em código de lógica" (tempo, símbolo, conta, identidade, séries, execução, Custom Symbol) — cada função com substituto canônico. Protocolo 1 atualizado para apontar para Protocolo 9.
+- §6 deste CHECKPOINT: ADRs 015–018 marcadas "adicionada pós-auditoria MQL5".
 
 ---
 
