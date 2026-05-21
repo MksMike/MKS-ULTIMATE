@@ -99,16 +99,20 @@ public:
 CBrickWriterSink *g_sink = NULL;
 
 //+------------------------------------------------------------------+
-//| Gera caminho do .mksbk: MKS-ULTIMATE\Bricks\<symbol>_<TS>.mksbk    |
+//| Gera caminho do .mksbk (ADR-014 §4.2 e §4 cláusula 4).             |
+//| attempt = 0 → nome base; attempt > 0 → sufixo "_<attempt+1>"       |
+//| (primeiro retry é "_2", segundo "_3", etc).                       |
 //+------------------------------------------------------------------+
-string BuildBrickFilePath(const string &symbol, datetime sessionStart)
+string BuildBrickFilePath(const string &symbol, datetime sessionStart, int attempt)
 {
    MqlDateTime dt;
    TimeToStruct(sessionStart, dt);
    string stamp = StringFormat("%04d%02d%02dT%02d%02d%02d",
                                dt.year, dt.mon, dt.day,
                                dt.hour, dt.min, dt.sec);
-   return StringFormat("MKS-ULTIMATE\\Bricks\\%s_%s.mksbk", symbol, stamp);
+   string suffix = (attempt > 0) ? StringFormat("_%d", attempt + 1) : "";
+   return StringFormat("MKS-ULTIMATE\\Bricks\\%s_%s%s.mksbk",
+                       symbol, stamp, suffix);
 }
 
 //+------------------------------------------------------------------+
@@ -224,8 +228,6 @@ int OnInit()
    // Pasta destino. FileOpen não cria recursivamente — criar nível por nível.
    FolderCreate("MKS-ULTIMATE");
    FolderCreate("MKS-ULTIMATE\\Bricks");
-   g_filePath = BuildBrickFilePath(g_symbol, TimeCurrent());
-   PrintFormat("output: %s", g_filePath);
 
    // Sizer (heap para que cleanup parcial seja uniforme).
    g_sizer = new CMksFixedBrickSizer(InpBrickSizePts);
@@ -245,14 +247,31 @@ int OnInit()
       return INIT_PARAMETERS_INCORRECT;
    }
 
-   // Writer (aberto antes do sink — sink mantém ponteiro).
+   // Writer com retry de sufixo numérico em caso de colisão (ADR-014 §4).
+   // Sessão capturada uma vez para que todos os retries usem o mesmo
+   // timestamp — sufixo é o único campo que muda entre tentativas.
    g_writer = new CMksBrickFileWriter();
-   if(!g_writer.Open(g_filePath, err))
+   datetime sessionStart = TimeCurrent();
+   const int kMaxAttempts = 100;
+   bool opened = false;
+   for(int attempt = 0; attempt < kMaxAttempts; attempt++)
+   {
+      g_filePath = BuildBrickFilePath(g_symbol, sessionStart, attempt);
+      if(g_writer.Open(g_filePath, err))
+      {
+         opened = true;
+         break;
+      }
+      if(err.code != MKS_ERR_DATA_FILE_EXISTS) break; // erro real, não retry
+      PrintFormat("OnInit: arquivo existe, tentando próximo sufixo: %s", g_filePath);
+   }
+   if(!opened)
    {
       PrintFormat("OnInit: writer.Open falhou: %s", err.ToString());
       Cleanup();
       return INIT_FAILED;
    }
+   PrintFormat("output: %s", g_filePath);
    if(!g_writer.WriteHeader(g_broker, g_account, g_symbol, g_digits,
                             geom, InpBrickSizePts, err))
    {
