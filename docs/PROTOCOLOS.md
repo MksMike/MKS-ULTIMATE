@@ -40,7 +40,8 @@ Se qualquer item está "não" — o módulo não está pronto.
 ## Protocolo 2 — Antes de rodar um EA em backtest pela primeira vez
 
 - [ ] Símbolo, timeframe e janela temporal conferidos
-- [ ] Qualidade de dados do MT5 verificada (ideal: "Every tick based on real ticks")
+- [ ] Qualidade de dados do MT5 verificada (ideal: "Every tick based on real ticks") — aplicável apenas se rodando via Strategy Tester nativo
+- [ ] Se o backtest produzir métricas para release ou comparação oficial: rodado via framework (arquivo de captura + script de replay), não via Strategy Tester. Números oficiais vêm do framework (ADR-015)
 - [ ] Histórico baixado e validado (sem gaps suspeitos no período testado)
 - [ ] Configuração de custos explícita: spread, comissão, swap
 - [ ] Parâmetros do EA revisados (SL, TP, lot size, horários de trading)
