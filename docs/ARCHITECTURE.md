@@ -649,6 +649,117 @@ O ATR no MKS-ULTIMATE é calculado sobre **bricks fechados**, com a interface `I
 
 ---
 
+### ADR-016: Interfaces ISymbol e IAccount
+
+**Data:** 2026-05-21
+**Status:** Aceita
+
+**Contexto:**
+A ADR-013 §2 estabeleceu que código de lógica não pode chamar a API global do MQL5 — borda (composition root em `OnInit`/`OnTick`/`OnDeinit` e implementações concretas de interfaces) pode; lógica não. O Protocolo 9 (criado na integração da auditoria MQL5, commit `4756e8e`) materializou essa fronteira como tabela: cada função global proibida em código de lógica tem um substituto canônico. Para tempo o substituto é `IClock`; para tick é `ITickSource`; para execução é `IBroker`; para mercado e conta o substituto canônico é `ISymbol.*` e `IAccount.*` — mas essas duas interfaces **ainda não existem**.
+
+A consequência é que código futuro (`CMksTradeManager`, `CMksRiskManager`, estratégias) ou nasce violando o Protocolo 9 (chamando `SymbolInfoDouble`, `AccountInfoInteger` etc. diretamente) ou recria essas chamadas espalhadas pelo framework. O `Producer.mq5` atual usa as funções globais na borda do `OnInit` — permitido por ADR-013 §2 mas exceção, e o padrão se perde sem interfaces formais.
+
+Esta ADR fixa o contrato de `ISymbol` e `IAccount` antes que qualquer módulo de lógica dependa delas. Sem isto, o Protocolo 9 é regra cosmética.
+
+**Decisão:**
+Duas interfaces puras seguindo ADR-004, com escopo focado no que o framework realmente vai consumir — não cobertura completa da API MQL5.
+
+1. **`ISymbol`** — propriedades estáticas/semi-estáticas do instrumento (ficha técnica). Não inclui dados de tick ao vivo.
+
+   ```
+   class ISymbol
+   {
+   public:
+      virtual ~ISymbol() {}
+      virtual string Name()              const = 0;
+      virtual int    Digits()            const = 0;
+      virtual double Point()             const = 0;
+      virtual double TickSize()          const = 0;
+      virtual double TickValue()         const = 0;
+      virtual double ContractSize()      const = 0;
+      virtual double VolumeMin()         const = 0;
+      virtual double VolumeMax()         const = 0;
+      virtual double VolumeStep()        const = 0;
+      virtual int    StopsLevel()        const = 0;
+      virtual int    FreezeLevel()       const = 0;
+      virtual int    FillingMode()       const = 0; // bitmask de ENUM_SYMBOL_FILLING_MODE
+      virtual string BaseCurrency()      const = 0;
+      virtual string ProfitCurrency()    const = 0;
+      virtual string MarginCurrency()    const = 0;
+   };
+   ```
+
+   **Bid/Ask/Spread/Last NÃO entram em ISymbol.** Preço ao vivo vem do `MksTick` via `ITickSource`. Misturar canal de tick com ficha técnica viola single-responsibility e duplica a fonte do tick.
+
+2. **`IAccount`** — estado da conta corrente.
+
+   ```
+   class IAccount
+   {
+   public:
+      virtual ~IAccount() {}
+      virtual long   Login()      const = 0;
+      virtual string Company()    const = 0;
+      virtual string Currency()   const = 0;
+      virtual double Balance()    const = 0;
+      virtual double Equity()     const = 0;
+      virtual double Margin()     const = 0;
+      virtual double FreeMargin() const = 0;
+      virtual int    Leverage()   const = 0;
+      virtual ENUM_ACCOUNT_MARGIN_MODE MarginMode() const = 0;
+      virtual ENUM_ACCOUNT_TRADE_MODE  TradeMode()  const = 0;
+   };
+   ```
+
+3. **Enums nativos do MQL5.** Os métodos `FillingMode`, `MarginMode`, `TradeMode` retornam diretamente os enums da plataforma (`ENUM_SYMBOL_FILLING_MODE` como bitmask `int`, `ENUM_ACCOUNT_MARGIN_MODE`, `ENUM_ACCOUNT_TRADE_MODE`). Framework é MQL5-only (ADR-004 fixou a plataforma) — não há razão para mapear esses enums em enums próprios. Mocks de teste retornam valores dos enums diretamente.
+
+4. **Implementações concretas:**
+   - `Core/Symbol/CMksMt5Symbol.mqh` — construtor `(string symbolName)`, cada método delega para `SymbolInfoString`/`SymbolInfoInteger`/`SymbolInfoDouble`.
+   - `Core/Account/CMksMt5Account.mqh` — sem construtor especial, cada método delega para `AccountInfoString`/`AccountInfoInteger`/`AccountInfoDouble`.
+
+5. **Composition root injeta as instâncias.** EAs e scripts instanciam `CMksMt5Symbol(_Symbol)` e `CMksMt5Account()` no `OnInit`. Módulos de lógica recebem `ISymbol*` e `IAccount*` via construtor — nunca consultam a API global.
+
+6. **Get-on-demand, não snapshot.** Cada chamada faz uma consulta. Razão: Equity, Balance e Margin mudam continuamente; cachear no construtor produz dados defasados. Custo: uma chamada de API por leitura — desprezível (microssegundos) e não está em hot path.
+
+**Alternativas consideradas:**
+
+- **Interface única (`IBrokerEnv` ou `IMarketContext`) cobrindo símbolo + conta + execução:** rejeitada. Viola single-responsibility — broker é executor de ordem (`IBroker.Send/Close/Modify`), não fonte de info. Misturar consultas estáticas com execução assíncrona produz interface enorme e difícil de mockar.
+
+- **Funções livres como helpers (`MksSymbolDigits(name)` etc.):** rejeitada. Não permite injeção em testes — mock ficaria via `#define`, mecanismo frágil em MQL5. Interfaces + injeção é o padrão estabelecido (ADR-004).
+
+- **Pular ISymbol/IAccount e usar API global em todo lugar (ADR-013 §2 só na borda):** rejeitada. O V5 fez exatamente isso e a impossibilidade de mockar levou a "testes" que rodavam contra dados reais, expondo a estratégia a feed do broker durante desenvolvimento.
+
+- **Snapshot no construtor em vez de get-on-demand:** rejeitada para campos dinâmicos (Equity, Margin, FreeMargin). Pode fazer sentido para campos estáticos (Digits, Point) — mas a uniformidade de "tudo via API on demand" simplifica o contrato. Profiling futuro pode justificar cache local; v1 não precisa.
+
+- **Incluir Bid()/Ask()/Spread() em ISymbol:** rejeitada. Duplica fonte com `ITickSource` (canal canônico de tick), e o builder é mid-driven (ADR-010 §4) sobre `MksTick.bid`/`MksTick.ask` — não sobre snapshots de ISymbol. Toda decisão pós-brick é sobre brick; toda decisão pós-tick é sobre tick; ficha técnica do símbolo é coisa diferente.
+
+- **Cobrir 100% da API SymbolInfo/AccountInfo:** rejeitada. A API MQL5 expõe dezenas de campos por símbolo; ISymbol expõe apenas os que o framework consome ou consumirá em breve. Adicionar mais é fácil quando necessário; pré-mapear tudo é trabalho a fundo perdido.
+
+**Consequências:**
+
+- **Duas interfaces novas** em `Core/Interfaces/ISymbol.mqh` e `Core/Interfaces/IAccount.mqh`.
+
+- **Duas classes concretas** em `Core/Symbol/CMksMt5Symbol.mqh` e `Core/Account/CMksMt5Account.mqh`. Pastas novas `Core/Symbol/` e `Core/Account/` na árvore (atualizar `ARCHITECTURE.md` §2 quando implementadas).
+
+- **Producer.mq5 refactor.** Substituir as ~6 chamadas a `SymbolInfo*` e ~2 a `AccountInfo*` (todas em `OnInit`) por chamadas via `g_iSymbol.*` e `g_iAccount.*`. Comportamento idêntico; apenas indireção. Pavimentação para futuros EAs.
+
+- **Protocolo 9 ganha referências concretas.** A tabela "Mercado" e "Conta" hoje referenciam `ISymbol.*`/`IAccount.*` como pendentes (ADR-016). Quando esta ADR for aceita, o protocolo aponta para as interfaces reais.
+
+- **Mocks de teste** (`CMksFakeSymbol`, `CMksFakeAccount`) **não entram nesta ADR.** Serão construídos quando os primeiros testes de Trade Manager / Risk Manager precisarem deles. Slice próprio, possivelmente relacionado à ADR-005 (framework de testes formal).
+
+- **ADR-017 (broker) prepara terreno.** O futuro `CMksMt5Broker` vai consumir `ISymbol` (`FillingMode`, `TickSize`, `ContractSize`, `StopsLevel`) e `IAccount` (`MarginMode`, `Leverage`). Esta ADR é pré-requisito direto.
+
+- **ARCHITECTURE.md §4** perde a entrada ADR-016 pendente quando esta for aceita.
+
+**Fronteiras:**
+
+- Não cobre múltiplos símbolos operando simultaneamente — composition root instancia múltiplos `CMksMt5Symbol(name)` se necessário. EA cross-symbol é tema futuro, fora desta ADR.
+- Não cobre mudança dinâmica de símbolo do chart (caso raro; EAs típicos são chart-bound).
+- Não inclui mocks/fakes — esses são trabalho de slice de testes futuro.
+- Não é fonte de tick ou de bricks — `ITickSource` e `IRenkoSink` continuam canais canônicos para esses.
+
+---
+
 ### ADR-007: Formato e destino do log estruturado
 
 **Data:** 2026-05-21
@@ -811,7 +922,6 @@ Pontos que precisam virar ADR assim que forem enfrentados:
 
 - **ADR-005 (pendente):** Estrutura e execução dos testes unitários. Framework próprio mínimo ou adaptação de algo existente?
 - **ADR-008 (pendente):** Como tratar reabertura de mercado (segunda-feira) no RenkoBuilder. Gap vira brick? Vira múltiplos bricks? Vira nada? Evidência parcial já registrada em `CHECKPOINT-2026-05-20-slice2.md` §6.
-- **ADR-016 (pendente):** Interfaces `ISymbol` e `IAccount` + checklist de chamadas API globais proibidas em código de lógica (ver Protocolo 9 em `PROTOCOLOS.md`). Hoje a porta está fechada por convenção — ADR-013 §2 só permite chamadas globais na borda (composition root em `OnInit`/`OnTick`/`OnDeinit`). Precisa virar contrato testável antes de `CMksTradeManager`/`CMksRiskManager`/estratégias serem escritas.
 - **ADR-017 (pendente):** Modelo de confirmação de execução do `CMksMt5Broker`. Síncrono via retcode do `OrderSend` ou assíncrono via `OnTradeTransaction::TRADE_TRANSACTION_DEAL_ADD`? Decide latência vs. fidelidade de `fillPrice`/`slippage`. Inclui também política de filling mode (FOK/IOC/RETURN via `SymbolInfoInteger(SYMBOL_FILLING_MODE)`), uso de `OrderCheck`, e diferença netting vs. hedging. Bloqueia Fase 4 (Broker abstractions).
 Essas decisões são registradas formalmente quando forem enfrentadas, não antes. Decidir arquitetura no vazio produz decisões erradas.
 
