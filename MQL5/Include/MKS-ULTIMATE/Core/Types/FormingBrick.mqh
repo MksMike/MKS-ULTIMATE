@@ -14,18 +14,20 @@
 
 // Estado do brick em formação. Tipo próprio (ADR-010 §6) — não reusa
 // MksBrick, que é exclusivo de brick fechado por decisão da Fase 1.
-// Obtido por getter do builder; não é emitido por evento.
+// Obtido por getter do builder, ou propagado via IRenkoSink::OnBrickForming
+// (ADR-021) para sinks que queiram render de bar parcial.
 struct MksFormingBrick
 {
    double open;          // = close do último brick fechado (ou mid inicial)
    double high;          // máximo mid observado desde a abertura
    double low;           // mínimo mid observado desde a abertura
+   double currentMid;    // mid do último tick processado (ADR-021 §5)
    ENUM_MKS_BRICK_DIR direction;  // direção do último brick fechado
    bool   hasData;       // false antes da primeira ingestão pós-init
 
    MksFormingBrick()
    {
-      open = 0.0; high = 0.0; low = 0.0;
+      open = 0.0; high = 0.0; low = 0.0; currentMid = 0.0;
       direction = MKS_BRICK_BULL;
       hasData = false;
    }

@@ -425,7 +425,11 @@ int OnInit()
                                     InpInvalidTickLimit, InpThresholdLimit);
 
    // Fill histórico opcional (mesmo motor; combate ao eixo 2 do V5).
+   // Suprime OnBrickForming durante fill (ADR-021): milhões de
+   // CustomRatesUpdate em sequência travariam o terminal.
+   g_builder.SetEmitForming(false);
    RunHistoricalFill(InpHistoricalFillDays);
+   g_builder.SetEmitForming(true);
 
    g_logger.Info("Producer", "ready, processing live ticks", "");
    return INIT_SUCCEEDED;

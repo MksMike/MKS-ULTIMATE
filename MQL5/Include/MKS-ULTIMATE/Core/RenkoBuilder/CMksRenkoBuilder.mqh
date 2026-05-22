@@ -49,6 +49,8 @@ private:
    ENUM_MKS_BRICK_DIR    m_lastDirection;
    double                m_formingHigh;
    double                m_formingLow;
+   double                m_lastMid;       // último mid observado (ADR-021 §5)
+   bool                  m_emitForming;   // dispara OnBrickForming a cada tick (ADR-021)
 
    double ContinuationThreshold(double base, ENUM_MKS_BRICK_DIR dir, double size) const
    {
@@ -108,7 +110,25 @@ public:
       m_lastDirection = MKS_BRICK_BULL; // valor inerte até m_hasFirstBrick = true
       m_formingHigh = 0.0;
       m_formingLow = 0.0;
+      m_lastMid = 0.0;
+      m_emitForming = true;
    }
+
+   // Liga/desliga emissão de OnBrickForming a cada tick (ADR-021). Usado
+   // pelo composition root para suprimir o broadcast durante fill
+   // histórico em massa (evita milhões de CustomRatesUpdate por brick
+   // em formação, travando o terminal).
+   void SetEmitForming(bool v) { m_emitForming = v; }
+   bool EmitForming() const    { return m_emitForming; }
+
+private:
+   void EmitFormingIfEnabled()
+   {
+      if(m_emitForming && m_sink != NULL && m_initialized)
+         m_sink.OnBrickForming(GetFormingBrick());
+   }
+
+public:
 
    bool IngestTick(const MksTick &tick, MksError &err)
    {
@@ -141,6 +161,7 @@ public:
 
       m_consecutiveInvalid = 0;
       double mid = (tick.bid + tick.ask) / 2.0; // ADR-010 §4
+      m_lastMid = mid;                          // ADR-021 §5
 
       if(!m_initialized)
       {
@@ -148,6 +169,7 @@ public:
          m_lastClose = mid;
          m_formingHigh = mid;
          m_formingLow = mid;
+         EmitFormingIfEnabled();
          return true;
       }
 
@@ -155,6 +177,7 @@ public:
       {
          if(mid > m_formingHigh) m_formingHigh = mid;
          if(mid < m_formingLow)  m_formingLow  = mid;
+         EmitFormingIfEnabled();
          return true;
       }
 
@@ -163,6 +186,7 @@ public:
       {
          if(mid > m_formingHigh) m_formingHigh = mid;
          if(mid < m_formingLow)  m_formingLow  = mid;
+         EmitFormingIfEnabled();
          return true;
       }
 
@@ -183,6 +207,7 @@ public:
          {
             if(mid > m_formingHigh) m_formingHigh = mid;
             if(mid < m_formingLow)  m_formingLow  = mid;
+            EmitFormingIfEnabled();
             return true;
          }
          walkDirection = (mid > m_lastClose) ? MKS_BRICK_BULL : MKS_BRICK_BEAR;
@@ -265,12 +290,14 @@ public:
          // m_formingLow <= m_lastClose <= m_formingHigh.
          m_formingHigh = MathMax(walkClose, mid);
          m_formingLow  = MathMin(walkClose, mid);
+         EmitFormingIfEnabled();
          return true;
       }
 
       // Nenhum threshold cruzado — atualiza extremos do brick em formação.
       if(mid > m_formingHigh) m_formingHigh = mid;
       if(mid < m_formingLow)  m_formingLow  = mid;
+      EmitFormingIfEnabled();
       return true;
    }
 
@@ -289,6 +316,7 @@ public:
       fb.open = m_lastClose;
       fb.high = m_formingHigh;
       fb.low = m_formingLow;
+      fb.currentMid = m_lastMid;   // ADR-021 §5
       fb.direction = m_lastDirection;
       fb.hasData = true;
       return fb;

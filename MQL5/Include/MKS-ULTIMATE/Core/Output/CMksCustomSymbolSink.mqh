@@ -3,12 +3,13 @@
 //| @project        : MKS-ULTIMATE
 //| @module         : Core / Output
 //| @responsibility : Sink que empurra cada brick fechado como uma
-//|                   barra no Custom Symbol via CustomRatesUpdate.
-//|                   Conforme ADR-020 regra 3, o CS recebe bricks
-//|                   SEM wicks (caixinhas sólidas — high=max(open,close),
-//|                   low=min(open,close)). Info de excursão fica no
-//|                   .mksbk via CMksBrickWriterSink. Timestamp M1
-//|                   fictício monotônico (ADR-020 regra 4).
+//|                   barra no Custom Symbol via CustomRatesUpdate
+//|                   (ADR-020). Bricks fechados são caixinhas sem
+//|                   wicks (regra 3). A cada tick, OnBrickForming
+//|                   também atualiza a bar parcial no slot do próximo
+//|                   brick — com wicks (excursão), close = mid atual
+//|                   (ADR-021). Quando o brick fecha, OnBrickClose
+//|                   sobrescreve esse slot com a bar definitiva.
 //| @depends_on     : Core/Interfaces/IRenkoSink.mqh, Core/Types/Brick.mqh
 //| @install_path   : MQL5/Include/MKS-ULTIMATE/Core/Output/CMksCustomSymbolSink.mqh
 //+------------------------------------------------------------------+
@@ -68,6 +69,32 @@ public:
          barsPushed++;
       }
       nextBarTime = (datetime)((long)nextBarTime + 60);
+   }
+
+   // ADR-021: a cada tick, atualiza a bar PARCIAL no slot atual de
+   // nextBarTime (a próxima bar, ainda não confirmada por brick fechado).
+   // Empurra COM wicks — excursão durante a formação é informação. Quando
+   // o brick fechar, OnBrickClose vai sobrescrever este mesmo slot com a
+   // bar definitiva sem wicks (ADR-020 regra 3) e incrementar nextBarTime.
+   void OnBrickForming(const MksFormingBrick &fb) override
+   {
+      if(!fb.hasData) return;
+      if(StringLen(csName) == 0) return;
+      MqlRates rates[1];
+      rates[0].time        = nextBarTime;
+      rates[0].open        = fb.open;
+      rates[0].high        = fb.high;          // wicks de excursão
+      rates[0].low         = fb.low;
+      rates[0].close       = fb.currentMid;    // preço atual
+      rates[0].tick_volume = 0;
+      rates[0].spread      = 0;
+      rates[0].real_volume = 0;
+      int n = CustomRatesUpdate(csName, rates);
+      if(n < 0)
+      {
+         updateFailures++;
+         // Sem log a cada tick — emit failures vai pro contador.
+      }
    }
 };
 
