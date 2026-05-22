@@ -1,8 +1,28 @@
-# Test Plan — ADR-005 (Core/Testing framework + migração das suítes)
+# Checkpoint — ADR-005 (Core/Testing framework + migração das suítes)
 
-**Status:** validação pendente (você sem PC no momento da migração)
-**Branch:** `claude/check-ultimate-access-5kshn`
-**Commits da rodada:** `e6e6c4d` → `b122690` (7 commits)
+**Status:** ✅ validado empiricamente em 2026-05-22 (Mike, no PC, MT5 EXNESS).
+**Branch:** `claude/check-ultimate-access-5kshn` (merged em main via fast-forward, depois deletada).
+**Commits da rodada:** `e6e6c4d` → `45c3a67`.
+
+## Resultado da validação
+
+| Fase | Esperado | Observado |
+|---|---|---|
+| 0 — compile gate | 5 scripts sem erro | ✅ 0 errors, 0 warnings em todos |
+| 1 — smoke framework | meta 6/6 ok + 1 fail sintética | ✅ 10/11 in 4 tests (1 failed esperado) |
+| 2.1 — SimulatedBroker | 51/51 in 12 tests | ✅ 51/51 in 12 tests |
+| 2.2 — AtrBrickSizer | 72/72 in 11 tests | ✅ 72/72 in 11 tests |
+| 2.3 — BrickFile | 97/97 in 4 tests + 6 .mksbk gerados | ✅ 97/97 + 6 arquivos (616 bytes cada) |
+| 2.4 — RenkoBuilder | 428/428 in 14 tests | ✅ 428/428 in 14 tests |
+| 3 — agregado | 648/648 in 41 tests | ✅ idêntico |
+
+Discrepância benigna observada e ignorada: o plano dizia `8/9 assertions` no smoke; veio `10/11`. Subestimação do plano, não defeito — meta-sanidade bateu 6/6.
+
+---
+
+_Documento original abaixo, preservado como referência caso seja necessário re-rodar o ciclo no futuro._
+
+---
 
 ## Por que este documento existe
 
