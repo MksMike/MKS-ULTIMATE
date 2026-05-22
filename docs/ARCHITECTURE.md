@@ -1138,6 +1138,109 @@ A ordem real de construção será **`CMksPositionSizer` → `CMksRiskManager` �
 
 ---
 
+### ADR-020: Custom Symbol — semântica, contrato visual e fronteiras de uso
+
+**Data:** 2026-05-22
+**Status:** Proposta
+
+**Contexto:**
+O Slice 3b inaugurou o Custom Symbol no MKS-ULTIMATE via `CCustomSymbolSink` e `EnsureCustomSymbolReady` em `Producer.mq5`. A ADR-014 §Fronteiras delegou explicitamente o naming e os detalhes do Custom Symbol a "decisão de implementação do Producer, sem ADR". Auditoria de 2026-05-22 (registrada em `CHECKPOINT-2026-05-22.md` §A da seção de auditoria) levantou que várias decisões implícitas no código são arquiteturais e merecem contrato formal:
+
+1. Visual no chart do MT5 aparece como "candles M1 normais", não como bricks renko. Reportado empiricamente — usuário não consegue distinguir do M1 do mercado real.
+2. O builder atual rastreia excursão intra-brick via `m_formingHigh`/`m_formingLow`, e o brick fechado carrega esses valores. Como `CCustomSymbolSink` propaga `brick.high` e `brick.low` cruamente, cada candle do CS tem sombras (wicks) — quebrando o visual renko.
+3. `CustomRatesUpdate` foi escolhido em vez de `CustomTicksAdd` sem ADR. Implicações: CS é série OHLC pura, sem tick stream — indicadores baseados em tick não funcionam nele.
+4. Timestamp das bars é fictício monotônico (`nextBarTime += 60s`), pois `CustomRatesUpdate` sobrescreve bars com mesmo `time`. Risco: qualquer código que consuma `iTime()` do CS vê tempo desconectado da realidade.
+5. Não há regra impedindo uso do CS como **fonte de leitura por código de lógica** (estratégias, indicadores, EAs consumer). Risco direto: eixo 2 do `V5-POSTMORTEM` ("múltiplos caminhos de produção de bricks"). Strategy Tester operando no CS injeta série OHLC sintética que diverge do `.mksbk`.
+6. Política de wipe entre sessões existe (`InpResetCustomSymbolBars`) mas seu efeito quando `false` não está documentado — `nextBarTime` começa em "agora" no OnInit, criando gap no eixo de tempo se houver bars antigas.
+7. CSs criados não são deletados — acumulam no Market Watch a cada experimentação com `brickSize` diferente.
+8. Sem definição clara de chart timeframe correto para visualização (M1 obrigatório, M5+ agregaria múltiplos bricks numa candle só).
+
+Esta ADR consolida o desenho do CS, separando o que é **visualização humana** (CS) do que é **fonte de verdade** (`.mksbk` + builder ao vivo), e fixa as decisões implícitas como contrato.
+
+**Decisão:**
+O Custom Symbol no MKS-ULTIMATE é exclusivamente **camada de visualização humana**. As nove regras abaixo formalizam seu contrato.
+
+1. **CS é só visualização.** Nenhum código de lógica do MKS-ULTIMATE (estratégia, indicador customizado, EA consumer) lê dados do CS via `iOpen/iClose/iHigh/iLow/iTime/CopyRates`. Fontes de verdade para bricks: `.mksbk` (histórico) e `IRenkoSink` (live). Esta regra protege contra o eixo 2 do V5 (múltiplos caminhos de produção de bricks).
+
+2. **`CustomRatesUpdate`, não `CustomTicksAdd`.** Empurra 1 bar OHLC por brick fechado. CS não tem tick stream populado. Indicadores baseados em tick (volume real, BBO spread) não funcionam no CS — e isso é intencional, dado a regra 1.
+
+3. **Bricks no CS são SEM WICKS.** `CCustomSymbolSink.OnBrickClose` substitui:
+
+   ```
+   rates[0].high = MathMax(brick.open, brick.close);
+   rates[0].low  = MathMin(brick.open, brick.close);
+   ```
+
+   Cada bar vira uma caixinha sólida no chart de candlestick — visual coerente com renko clássico. O `.mksbk` permanece com `brick.high`/`brick.low` cruamente (info de excursão preservada para análise quant). Os dois sinks DIVERGEM DELIBERADAMENTE.
+
+4. **Timestamp fictício M1 monotônico.** Cada brick fechado = 1 bar a cada 60 segundos no eixo X do CS. Tempo das bars do CS NÃO reflete tempo real do mercado. Quem precisa de timing real consulta `.mksbk` (`closeTimeMsc`). Decorrência: o eixo X do CS é "índice ordenador de brick", não "tempo de mercado".
+
+5. **Chart type recomendado: Candlestick.** Bars chart é aceitável mas inferior visualmente. Line chart é inútil (perde direção da barra). O chart deve abrir **em timeframe M1** — qualquer outro timeframe agrega múltiplos bricks numa candle só, destruindo o visual renko.
+
+6. **Naming fixo: `<symbol>.MKS_RKN<size>`.** Prefixo do símbolo base + sufixo `MKS_RKN` (MKS Renko) + `size` em pontos. Inteiros não levam decimal (`MKS_RKN3`); decimais usam 2 casas (`MKS_RKN3.50`). Sem broker no nome — proveniência completa fica no header do `.mksbk` correspondente da sessão (consistente com ADR-014 §2).
+
+7. **Política de wipe entre sessões: opt-in com default `true`.** `InpResetCustomSymbolBars=true` chama `CustomRatesDelete(cs, 0, LONG_MAX)` no OnInit, limpando histórico do CS. Quando `false`, `nextBarTime` começa em `AlignDownToM1(TimeCurrent())` e bars antigas permanecem — **cria gap deliberado no eixo de tempo** entre bars antigas (passado) e bars novas (a partir de agora). Esse comportamento é documentado como decisão consciente, não bug.
+
+8. **CS não é deletado pelo framework.** `CustomSymbolDelete` não é chamado em OnDeinit nem em outro ponto. Operadores limpam Market Watch manualmente quando experimentação acumular CSs órfãos. Slice futuro opcional: script utility `MksCleanupCustomSymbols.mq5` em `Scripts/`.
+
+9. **Template `.tpl` opcional para o chart.** Slice de implementação fornece `MQL5/Profiles/Templates/MKS-ULTIMATE_Renko.tpl` com candlestick + cores body sólidas (bull verde, bear vermelho) + bordas contrastantes. Usuário aplica via Charts → Template no MT5. Sem .tpl, o usuário configura manualmente conforme nota no Producer.
+
+**Alternativas consideradas:**
+
+- **(a) CS como segunda fonte de bricks (leitura por código de lógica):** rejeitada. Strategy Tester operando no CS injeta série OHLC sintética que diverge do `.mksbk` (cache do tester != cache do terminal real). Recria diretamente o eixo 2 do V5-POSTMORTEM. Regra 1 é o antídoto explícito.
+
+- **(b) Wicks no CS idênticos ao `.mksbk`:** rejeitada. Defeito visual reportado e replicável — candle do CS fica indistinguível de M1 normal. Visual de caixinha sólida é o que o usuário consome, e supressão de wicks no CS preserva info de excursão no arquivo.
+
+- **(c) Bricks sem wicks também no `.mksbk` (renko clássico puro):** rejeitada. Wicks de excursão são informação quant útil para análise post-mortem (overshoot, volatilidade intra-brick). Perder isso para sempre por causa de visual é destruir dado. `.mksbk` preserva tudo; CS é render seletivo.
+
+- **(d) `CustomTicksAdd` com ticks reais:** rejeitada. Custo de I/O por tick (ordens de magnitude maior que por brick). Bricks são a unidade canônica do framework; ticks no CS seriam ruído sem propósito útil dada regra 1.
+
+- **(e) Timestamp real (`brick.closeTimeMsc`) no CS:** rejeitada. `CustomRatesUpdate` sobrescreve bars com mesmo `time`. Bricks fechando mais rápido que 1 por segundo (movimento forte) destruiriam-se mutuamente. Timestamp fictício monotônico é solução estrutural ao limite da API.
+
+- **(f) Indicador renko próprio (canvas / `OBJECT_RECTANGLE`):** adiada (não rejeitada). Cobre 100% do visual sem depender do chart type do MT5. Mas é trabalho significativo (~slice próprio) e candlestick puro sem wicks resolve 90% do caso. Fica como Nível 3 opcional para slice futuro se a regra 3 + template (regra 9) não satisfizer empiricamente.
+
+- **(g) Sub-pasta ou prefixo broker no naming:** rejeitada. Custom Symbols vivem no namespace global do terminal MT5, sem hierarquia. Adicionar `<broker>` ao nome introduz fragilidade (normalização de caracteres, slug instável) sem ganho — proveniência completa está no `.mksbk` header.
+
+- **(h) CS por símbolo + size por brick fixo (sem `MKS_RKN<size>` no nome):** rejeitada. Usuário experimentaria múltiplos tamanhos sobrescrevendo o mesmo CS, sem rastro de qual size cada bar representa. Naming com size separa namespaces explicitamente.
+
+**Consequências:**
+
+- **`CCustomSymbolSink.OnBrickClose` muda** (slice próprio): `rates[0].high = MathMax(brick.open, brick.close)` e `rates[0].low = MathMin(brick.open, brick.close)`. Wicks suprimidos no CS, preservados no `.mksbk`.
+
+- **`CCustomSymbolSink` deve ser extraído** de `Producer.mq5` para `Core/Output/CMksCustomSymbolSink.mqh` (criar nova pasta `Core/Output/` para futuros sinks de visualização/destination). Mesma extração para `CBrickWriterSink` (vai para `Core/Data/`) e `CMultiSink` (para `Core/Output/`). Cobertura: torna sinks reusáveis por EAs futuros (Consumer, replay tools). Slice próprio.
+
+- **Template `.tpl`** em `MQL5/Profiles/Templates/MKS-ULTIMATE_Renko.tpl`. Slice próprio.
+
+- **Producer.mq5** ganha nota no header explicando que o CS é visual + recomendação de M1 + apontador para esta ADR.
+
+- **CHANGELOG.md** registra ADR-020 aceita e suas consequências.
+
+- **README.md** ganha seção "Visualizando bricks no chart" apontando para o template e para esta ADR.
+
+- **Sem mudança no `.mksbk`**, no builder, nem em testes existentes. Apenas o renderer no sink e a documentação.
+
+- **Cobertura de teste:** `CMksCustomSymbolSink` extraído ganha unit test mínimo sobre a transformação OHLC (sem invocar a API global do MT5, apenas a lógica de wipe-wick e timestamp monotônico). Slice próprio.
+
+- **Auditoria CHECKPOINT-2026-05-22 §A**: pontos A1, A2, A3, A6, A7 (parcial) endereçados por esta ADR. A4, A5, A8, A9 ficam como itens menores no roadmap operacional (ver Fronteiras).
+
+**Fronteiras:**
+
+- **Não cobre o indicador renko canvas (Nível 3).** Adiado para slice futuro caso candlestick + template não satisfaçam visualmente.
+
+- **Não cobre o builder.** `m_formingHigh`/`m_formingLow` e o cálculo de `brick.high`/`brick.low` em `CMksRenkoBuilder.mqh:77-78` permanecem intactos. Esta ADR só decide o que o renderer faz com a info.
+
+- **Não cobre o `.mksbk`.** Formato e conteúdo já fixados por ADR-012/013/014.
+
+- **Não cobre o ponto A4 (gap entre sessões com wipe=false)** além do que a regra 7 fixa — é comportamento documentado.
+
+- **Não cobre limpeza automática de CSs órfãos.** Regra 8 fica como dívida operacional; script utility fica para slice opcional.
+
+- **Não cobre multi-símbolo no mesmo Producer.** EA atual é per-símbolo (consistente com ADR-017 §2 sobre broker per-símbolo).
+
+- **Não cobre uso do CS por EAs do usuário fora do MKS-ULTIMATE.** Eles podem ler do CS — regra 1 vincula apenas código DENTRO do framework. Mas o usuário que fizer isso opera sob seu próprio risco de paridade.
+
+---
+
 ## 4. Decisões pendentes
 
 Pontos que precisam virar ADR assim que forem enfrentados:
