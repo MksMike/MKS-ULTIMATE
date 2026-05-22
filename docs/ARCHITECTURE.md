@@ -1341,6 +1341,84 @@ O Custom Symbol passa a receber a **bar do brick em formação** a cada tick pro
 
 ---
 
+### ADR-022: Producer dinâmico — tipo, geometria, wicks toggle, naming estendido, auto-open
+
+**Data:** 2026-05-22
+**Status:** Aceita
+**Relação com ADR-020:** Substitui parcialmente as regras 3 e 6. ADR-020 permanece Aceita; ADR-022 estende.
+
+**Contexto:**
+Após ADR-020 (Custom Symbol básico) e ADR-021 (bar parcial), o Producer ainda tem hardcodings que limitam o uso real: `MksGeometryMedian()` fixo (sem Classic ou Custom), `InpHistoricalFillDays=0` default (usuário precisa lembrar de setar 30 dias), naming `<symbol>.MKS_RKN<size>` que não distingue Median de Classic (mesma combinação `size=3` sobrescreve a mesma série, perdendo histórico do tipo anterior), e nenhuma abertura automática do chart do CS — usuário precisa abrir manualmente em M1 toda vez. Comparado ao V5 (Code-Review confirma `<symbol>_MKS_<size>_<mode>_<preset>` com Validate abrangente), o Producer atual é cru.
+
+Pedido empírico de 2026-05-22:
+> "atualmente o producer deve fazer o papel do generator e liveengine e ter as mesmas configurações básicas do V5 e ser aberto automaticamente e mostrar o renko de acordo com as configurações... quando inserir o producer no gráfico M1, quero que abra a caixa de configuração igual a do V5, após confirmar deve abrir automaticamente o CS no M1"
+
+Tensões com ADR-020:
+- **Regra 3** ("bricks no CS sem wicks") fixou ausência de wicks. Usuário quer toggle (default false continua).
+- **Regra 6** ("naming `<symbol>.MKS_RKN<size>`") não comporta variação de tipo/preset. Configurações diferentes precisam de namespaces diferentes para não sobrescrever histórico anterior.
+
+**Decisão:**
+O Producer ganha configurabilidade rica via inputs nativos do MQL5 (popup ao arrastar EA no chart), naming carrega tipo+pro+po, wicks no CS são opcionais, e o chart do CS abre automaticamente em M1 após init. Sete regras:
+
+1. **Tipo de geometria selecionável via `InpGeometryType`** — enum com três opções: `Median` (default, equivale a `MksGeometryMedian` = pro/po 0.50/0.50), `Classic` (pro/po 0.00/0.00, brick clássico simétrico), `Custom` (pro/po livres via `InpPro`/`InpPo`). Demais geometrias (ATR-based) ficam fora deste slice.
+
+2. **`InpPro` e `InpPo` configuráveis** — defaults `0.50` e `0.50`. **Usados apenas quando `InpGeometryType == Custom`**. Em Median/Classic, ignorados (valores derivam do preset).
+
+3. **`InpShowWicksInCS` default `false`** — quando `true`, `CMksCustomSymbolSink` empurra `brick.high`/`brick.low` cruamente (com wicks de excursão); quando `false`, empurra `max/min(open, close)` (caixinhas sem wicks, comportamento atual). Substitui a parte fixa da ADR-020 regra 3 — wicks viram preferência do operador.
+
+4. **`InpHistoricalFillDays` default vira `30`** — alinhado com V5. Operador que quer apenas live seta `0`. Trade-off aceito: cold start passa a carregar 30 dias por padrão, mais lento mas com história visível imediatamente.
+
+5. **Naming estendido — substitui ADR-020 regra 6.** Formato: `<symbol>.MKS_<typeCode>_<sizeStr>` para Median/Classic; `<symbol>.MKS_X_<sizeStr>_<proInt>_<poInt>` para Custom. Códigos: `M` = Median, `C` = Classic, `X` = Custom. `sizeStr` é inteiro quando size é inteiro (ex.: `3`), com 2 decimais quando fracionário (ex.: `3.50`). `proInt`/`poInt` = `round(pro*100)`/`round(po*100)` (ex.: `0.65` vira `65`). Exemplos: `XAUUSDm.MKS_M_3`, `XAUUSDm.MKS_C_3`, `XAUUSDm.MKS_X_3_30_70`. Limite de 32 chars do MT5 verificado em runtime via comprimento total — se ultrapassar, Producer aborta com `INIT_PARAMETERS_INCORRECT` e log explicativo.
+
+6. **`ChartOpen(csName, PERIOD_M1)` ao final do `OnInit`** — após geometry, writer, sinks e builder estarem prontos e `RunHistoricalFill` ter rodado, o Producer abre o chart do CS em M1 automaticamente. Se o chart já estiver aberto (mesmo CS), `ChartOpen` retorna o handle existente — comportamento desejado. Se falhar, Producer apenas loga warning (não aborta) — chart é cosmético.
+
+7. **Inputs organizados em grupos via `input group`** (recurso MQL5 build 3000+): "Brick", "Risco/Volatilidade", "Histórico/Live", "Logging", "Custom Symbol". Tooltips em cada input. Popup nativo do MT5 ao arrastar EA já é a "caixa de configuração" do V5 — não há janela customizada (decisão pragmática registrada).
+
+**Alternativas consideradas:**
+
+- **Janela customizada com `ChartObjectCreate`/`EditCreate`** (popup próprio): rejeitada. ~500 linhas de UI code MQL5, frágil entre versões do MT5, e o popup nativo já cobre o caso. Investimento alto, retorno baixo.
+- **Naming completo com `<symbol>_MKS_<size>_<mode>_<preset>` (igual V5):** próximo do escolhido, mas formatação ligeiramente diferente. Decisão: usar `.` como separador entre símbolo e namespace (consistente com convenção atual) e `_` dentro do namespace. `MKS_M_3` em vez de `_MKS_3_M`. Limite 32 chars respeitado.
+- **Adicionar tipo ATR neste slice:** rejeitada por escopo. ATR exige `CMksAtrBrickSizer` + período + warm-up — slice próprio. ADR-022 cobre só os 3 tipos imediatos.
+- **`InpShowWicksInCS` default `true`:** rejeitada. ADR-020 fechou em "sem wicks" pra visual renko clean. Mudar default reabre confusão visual já resolvida. Quem quer wicks ativa explicitamente.
+- **Deletar+recriar CS quando configs diferem:** rejeitada. Naming estendido (regra 5) já resolve — configs diferentes geram CSs diferentes, sem sobrescrever. `CustomSymbolDelete` automático fica fora; cleanup utility (ADR-020 regra 8) cuida disso quando o operador quiser.
+- **Naming sem `_` interno (collapsed):** ex.: `XAUUSDm.MKSM3` ou `XAUUSDm.MKSX36570`. Rejeitada — ilegível. O custo de 1-2 chars extras compensa legibilidade.
+
+**Consequências:**
+
+- **`Producer.mq5` ganha inputs novos**: `InpGeometryType` (enum), `InpPro` (double), `InpPo` (double), `InpShowWicksInCS` (bool), reorganização em grupos. `InpHistoricalFillDays` default muda 0→30.
+
+- **`Producer.OnInit` faz build dinâmico da `MksRenkoGeometry`**: switch no `InpGeometryType` → escolhe Median/Classic/Custom; valida via `geometry.Validate(err)`.
+
+- **`Producer.BuildCustomSymbolName`** é estendida: passa a aceitar `type/pro/po` além de symbol/size. Formato conforme regra 5.
+
+- **`CMksCustomSymbolSink` ganha campo público `showWicks` (default `false`)**: `OnBrickClose` lê `showWicks` para decidir se empurra `brick.high`/`brick.low` cruamente ou `max/min(open, close)`. Mesma flag controla `OnBrickForming` (consistente).
+
+- **`Producer.OnInit` chama `ChartOpen(csName, PERIOD_M1)` ao final**, após `RunHistoricalFill`. Resultado loga via `g_logger.Info` com chartId.
+
+- **Sem mudança nos testes existentes** — `Test_CMksRenkoBuilder` etc. não são afetados (mudança é no Producer, que é EA, não tem testes unitários hoje).
+
+- **ADR-020 regra 3** passa a ser interpretada como "default sem wicks; configurável via `InpShowWicksInCS` (ADR-022)".
+
+- **ADR-020 regra 6** passa a ser superseded por ADR-022 regra 5.
+
+- **CHANGELOG.md** registra ADR-022 + reorganização de inputs + auto-open.
+
+**Fronteiras:**
+
+- **Não cobre ATR como tipo de geometria.** Hoje temos `CMksAtrBrickSizer` pronto, mas ADR-018 fixou que ele lê bricks fechados — então o sizer alimenta o builder, mas a "geometria" continua sendo Median/Classic/Custom. Adicionar `InpGeometryType=ATR` seria uma simplificação tendenciosa porque mistura o eixo "preço dos thresholds" (pro/po) com o eixo "tamanho do brick" (sizer). Fica fora.
+
+- **Não cobre delete automático de CS antigos.** Operador limpa Market Watch manualmente ou via script utility (ADR-020 regra 8, ainda dívida pendente).
+
+- **Não cobre validação de path de inputs interdependentes** (ex.: usuário escolhe Median mas seta `InpPro=0.7`). Producer ignora `InpPro/InpPo` quando type≠Custom; é decisão de implementação, não erro.
+
+- **Não cobre persistência das configs entre sessões** além do que o MT5 já faz nativamente (last-used inputs).
+
+- **Não cobre multi-símbolo.** Producer continua per-símbolo (ADR-017 §2).
+
+- **Não cobre input para `revSizeRatio` da geometry.** Continua fixo em `1.0` (default da `MksRenkoGeometry`). Se virar necessidade, ADR posterior.
+
+---
+
 ## 4. Decisões pendentes
 
 Pontos que precisam virar ADR assim que forem enfrentados:
