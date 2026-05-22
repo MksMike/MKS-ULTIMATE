@@ -1421,6 +1421,96 @@ O Producer ganha configurabilidade rica via inputs nativos do MQL5 (popup ao arr
 
 ---
 
+### ADR-023: Timeline híbrida no Custom Symbol (real + bump)
+
+**Data:** 2026-05-22
+**Status:** Proposta (implementação adiada para fase de produto — ver §Implementação)
+**Relação com ADR-020:** Substituirá parcialmente regra 4 quando implementada. ADR-020 permanece Aceita; ADR-023 estende.
+
+**Contexto:**
+ADR-020 regra 4 fixou que o timestamp das bars do Custom Symbol é **fictício M1 monotônico** (`nextBarTime += 60s` por brick, independente do tempo real). Essa decisão resolve estruturalmente o problema de `CustomRatesUpdate` sobrescrever bars com mesmo `time` — cada brick precisa de slot único, então +60s garante separação visual em chart M1.
+
+Auditoria de 2026-05-22 (discussão com o dono em chat) identificou que o tempo fake gera dor real para visão de produto, mesmo sem quebrar nada técnico do core:
+
+- Análise temporal visual empobrecida (não dá pra ver se um rally durou 5min ou 5h olhando o chart)
+- Sessões (Sydney/Tokyo/London/NY) invisíveis no eixo X
+- Gaps de fim de semana somem (sexta 23h e segunda 00:01 ficam encostados visualmente)
+- Múltiplos CSs com `size` diferentes não dá pra comparar visualmente
+- Timestamps no futuro (após 9430 bricks em fill histórico, chart mostra bricks até 6.5 dias adiante em tempo fake) — fricção imediata em onboarding de cliente
+- Integração com news feed / calendar API fica inutilizada (eixo X não bate com tempo real)
+
+Investigação do projeto `Renko-MQL5` (auditado em paralelo, [`Renko-MQL5/mql5/Include/RenkoCharts.mqh:172-177`](Renko-MQL5/mql5/Include/RenkoCharts.mqh#L172-L177)) revelou padrão **híbrido real + bump** que resolve 80% do problema sem mudar visual:
+
+```cpp
+if(time <= renko_buffer[index-1].time)
+   renko_buffer[index].time = renko_buffer[index-1].time + 60;
+else 
+   renko_buffer[index].time = time;
+```
+
+Em mercado calmo (1 brick a cada vários minutos): time real é maior que `último+60s` → usa real, **granularidade de segundos aparece naturalmente**. Em mercado frenético (vários bricks por minuto): bump +60s garante visual separado. Catch-up automático quando mercado fica parado por longos períodos.
+
+Alternativa "+1s entre bricks rápidos" foi considerada e rejeitada: chart M1 do MT5 **agrega** bricks do mesmo minuto numa única candle composta, destruindo o visual renko exatamente em momentos de alta volatilidade (notícias, NFP, FOMC) — quando mais se quer ver os bricks individualmente. MT5 não tem timeframes sub-minuto nativos.
+
+Alternativa "CustomTicksAdd em vez de CustomRatesUpdate" também foi considerada e rejeitada: ganho de timeline perfeita, mas perda do visual renko com sobreposição (ADR-022 regra 8), perda da bar parcial em formação (ADR-021), perda do controle de wicks por brick. CS viraria "candle M1 normal filtrada por bricks", indistinguível de outras séries.
+
+**Decisão:**
+O CS adota timeline **híbrida real + bump** quando esta ADR for implementada. Quatro regras substituem parcialmente a ADR-020 regra 4:
+
+1. **Inicialização do `nextBarTime` em `0`** (epoch) em vez de `AlignDownToM1(TimeCurrent())`. O primeiro brick decide o slot de partida.
+
+2. **Por brick fechado:**
+   ```cpp
+   datetime realTime = (datetime)(brick.closeTimeMsc / 1000);
+   datetime brickTime = (realTime > nextBarTime) ? realTime : nextBarTime;
+   rates[0].time = brickTime;
+   // ... grava brick
+   nextBarTime = brickTime + 60; // próximo slot mínimo
+   ```
+   Logic: se o tempo real do tick que disparou o brick é maior que o último slot+60s, usa real. Senão, usa último+60s (bump).
+
+3. **Bar parcial (`OnBrickForming`) usa `nextBarTime` atual** (igual hoje). Em mercado calmo, isso pode resultar em "bar parcial presa em um slot do passado" enquanto preço se move agora — aceitável, é o que `Renko-MQL5` faz. Alternativa (atualizar slot da parcial por tick) destruiria visual.
+
+4. **Fill histórico opera idêntico ao live** — `closeTimeMsc` do tick histórico já é o tempo real do passado. Resultado: 9430 bricks de 30 dias ficam **distribuídos nos 30 dias reais** (não em 6.5 dias futuros como hoje).
+
+**Alternativas consideradas (todas rejeitadas):**
+
+- **`+1s` literal entre bricks consecutivos:** quebra visual em mercado frenético (60 bricks/min agregam em 1 candle M1 composta). Pior em momentos críticos.
+- **`CustomTicksAdd` (ticks reais no CS):** timeline perfeita mas destrói visual renko, bar parcial, controle de wicks. Sacrifício alto demais.
+- **Dois CSs paralelos (rates + ticks):** dobra complexidade. CS rates pra visual, CS ticks pra timeline. Usuário escolheria qual abrir. Adiado.
+- **Manter timeline fake permanentemente:** posição padrão do framework atualmente. Aceitável para uso interno / lab pessoal, inaceitável para produto.
+
+**Consequências:**
+
+- **`CMksCustomSymbolSink.OnBrickClose`** muda ~5 linhas — usa `brick.closeTimeMsc` para decidir slot.
+- **`CMksCustomSymbolSink.OnBrickForming`** sem mudança — continua usando `nextBarTime` como slot.
+- **`Producer.OnInit`** inicializa `g_nextBarTime = 0` em vez de `AlignDownToM1(TimeCurrent())`.
+- **ADR-020 regra 4** fica explicitamente substituída por esta ADR-023 quando implementada. Documentação cruzada.
+- **ADR-020 regra 5** ("chart timeframe M1") permanece intacta — granularidade ≥ 60s entre bricks consecutivos é mantida pelo bump.
+- **`.mksbk` intacto** — `closeTimeMsc` real já é gravado.
+- **Sem regressão em testes existentes** — `Test_CMksRenkoBuilder` etc. não dependem do sink timing.
+- **Possível teste novo:** `Test_CMksCustomSymbolSink_Timeline` validando os 3 cenários (calmo / frenético / catch-up) com mocks de tempo. Slice da implementação.
+
+**Implementação:**
+
+**Adiada deliberadamente.** Esta ADR fica como Proposta até a fase de produto do framework. Razão: nenhum impacto técnico funcional do core; impacto é puramente de UX/percepção. Outras frentes (Slice 5b TradeManager, Slice 6.2/6.3 Risk camadas restantes, painel UX, log-diff tool) têm prioridade. Quando o framework for empacotado como produto comercial ou abrir para usuários externos, esta ADR é uma das primeiras a executar — custo trivial (~20 linhas de código + testes), benefício grande de UX.
+
+Critério para promover de Proposta para Aceita + executar: qualquer um dos eventos abaixo:
+- Decisão de produtizar o framework (alpha externo, beta fechado, lançamento comercial)
+- Primeira demo para terceiro (cliente, contratante, parceiro) — timestamps fake são deal-breaker visual
+- Integração com calendar API / news feed (não há sentido em overlay de eventos sobre eixo X fake)
+- Suporte requerido a múltiplos CSs comparativos (size 3 vs size 5 lado a lado)
+
+**Fronteiras:**
+
+- Não cobre granularidade sub-segundo. `MqlRates.time` é `datetime` (segundo). Bricks que fecham no mesmo segundo bumpam +60s — colisões de segundo são raras mas tratadas.
+- Não cobre múltiplos CSs comparativos (cada Producer roda independente). Comparação visual entre CSs depende de cada um adotar esta ADR.
+- Não cobre `CustomTicksAdd` (decisão de não usar ticks, ADR-020 regra 2).
+- Não cobre Strategy Tester. O tester continua usando série OHLC do CS — com timeline real do passado quando esta ADR estiver ativa, o backtest sintético do tester reflete melhor o tempo real, mas continua armadilha (ADR-020 regra: bricks como fonte de verdade vêm de `.mksbk`, não do CS via tester).
+- Não cobre indicador customizado com bid/ask em tempo real (item separado, futuro).
+
+---
+
 ## 4. Decisões pendentes
 
 Pontos que precisam virar ADR assim que forem enfrentados:
