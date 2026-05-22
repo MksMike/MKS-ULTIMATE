@@ -1141,7 +1141,7 @@ A ordem real de construção será **`CMksPositionSizer` → `CMksRiskManager` �
 ### ADR-020: Custom Symbol — semântica, contrato visual e fronteiras de uso
 
 **Data:** 2026-05-22
-**Status:** Proposta
+**Status:** Aceita
 
 **Contexto:**
 O Slice 3b inaugurou o Custom Symbol no MKS-ULTIMATE via `CCustomSymbolSink` e `EnsureCustomSymbolReady` em `Producer.mq5`. A ADR-014 §Fronteiras delegou explicitamente o naming e os detalhes do Custom Symbol a "decisão de implementação do Producer, sem ADR". Auditoria de 2026-05-22 (registrada em `CHECKPOINT-2026-05-22.md` §A da seção de auditoria) levantou que várias decisões implícitas no código são arquiteturais e merecem contrato formal:
@@ -1181,7 +1181,7 @@ O Custom Symbol no MKS-ULTIMATE é exclusivamente **camada de visualização hum
 
 7. **Política de wipe entre sessões: opt-in com default `true`.** `InpResetCustomSymbolBars=true` chama `CustomRatesDelete(cs, 0, LONG_MAX)` no OnInit, limpando histórico do CS. Quando `false`, `nextBarTime` começa em `AlignDownToM1(TimeCurrent())` e bars antigas permanecem — **cria gap deliberado no eixo de tempo** entre bars antigas (passado) e bars novas (a partir de agora). Esse comportamento é documentado como decisão consciente, não bug.
 
-8. **CS não é deletado pelo framework.** `CustomSymbolDelete` não é chamado em OnDeinit nem em outro ponto. Operadores limpam Market Watch manualmente quando experimentação acumular CSs órfãos. Slice futuro opcional: script utility `MksCleanupCustomSymbols.mq5` em `Scripts/`.
+8. **CS não é deletado pelo framework, mas script de cleanup é entregável obrigatório.** `CustomSymbolDelete` não é chamado em OnDeinit (cada sessão deve poder sobreviver a um restart sem perder histórico do chart). Acúmulo de CSs órfãos por experimentação é problema operacional real, então o framework provê um utility executável: `MQL5/Scripts/MKS-ULTIMATE/MksCleanupCustomSymbols.mq5`, que lista todos os CSs com sufixo `.MKS_RKN*` e permite ao operador deletar os selecionados. Faz parte do slice de implementação desta ADR — não é opcional nem futuro.
 
 9. **Template `.tpl` opcional para o chart.** Slice de implementação fornece `MQL5/Profiles/Templates/MKS-ULTIMATE_Renko.tpl` com candlestick + cores body sólidas (bull verde, bear vermelho) + bordas contrastantes. Usuário aplica via Charts → Template no MT5. Sem .tpl, o usuário configura manualmente conforme nota no Producer.
 
@@ -1238,6 +1238,8 @@ O Custom Symbol no MKS-ULTIMATE é exclusivamente **camada de visualização hum
 - **Não cobre multi-símbolo no mesmo Producer.** EA atual é per-símbolo (consistente com ADR-017 §2 sobre broker per-símbolo).
 
 - **Não cobre uso do CS por EAs do usuário fora do MKS-ULTIMATE.** Eles podem ler do CS — regra 1 vincula apenas código DENTRO do framework. Mas o usuário que fizer isso opera sob seu próprio risco de paridade.
+
+- **Armadilha conhecida — backtest do EA do usuário no Strategy Tester apontado para o CS.** O Strategy Tester do MT5 mantém seu próprio cache de séries históricas isolado do terminal real. Um EA backtestado no Strategy Tester apontando para o Custom Symbol `<symbol>.MKS_RKN<size>` **não vê os mesmos bricks** que o `.mksbk` da sessão real produziu — o tester pode regenerar a série OHLC sinteticamente a partir de ticks aproximados, ou simplesmente não ter dado. Esta ADR não impede esse uso, mas registra como **armadilha**: bricks como fonte de verdade para backtest são consumidos exclusivamente do `.mksbk` via leitor próprio (futuro), nunca do CS via Strategy Tester. Lição V5 #2 ("um único produtor de bricks") aplicada literalmente.
 
 ---
 
