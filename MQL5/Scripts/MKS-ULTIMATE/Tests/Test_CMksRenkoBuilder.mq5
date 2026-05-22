@@ -475,6 +475,134 @@ void Test_FormingBrickBeforeAnyTick()
    MKS_ASSERT_FALSE(fb.hasData, "hasData=false antes de qualquer tick");
 }
 
+//==================================================================
+// OnBrickForming — ADR-021
+//==================================================================
+
+//+------------------------------------------------------------------+
+//| Antes de qualquer tick, OnBrickForming não foi chamado            |
+//+------------------------------------------------------------------+
+void Test_OnBrickForming_NotEmittedBeforeFirstTick()
+{
+   CMksCapturingSink sink;
+   CMksFixedBrickSizer sizer(5.0);
+   MksRenkoGeometry geom = MksGeometryMedian();
+   CMksRenkoBuilder b(geom, GetPointer(sizer), GetPointer(sink));
+   MKS_ASSERT_EQ_INT(0, sink.formingCount, "formingCount=0 antes de ticks");
+}
+
+//+------------------------------------------------------------------+
+//| Cada tick válido emite uma chamada de OnBrickForming              |
+//+------------------------------------------------------------------+
+void Test_OnBrickForming_EmittedOnEachValidTick()
+{
+   CMksCapturingSink sink;
+   CMksFixedBrickSizer sizer(5.0);
+   MksRenkoGeometry geom = MksGeometryMedian();
+   CMksRenkoBuilder b(geom, GetPointer(sizer), GetPointer(sink));
+   MksError err;
+   // 5 ticks válidos, mids dentro do band (não fecham brick)
+   b.IngestTick(MakeTickByMid(2000.0, 1, 1000), err);
+   b.IngestTick(MakeTickByMid(2000.5, 2, 1100), err);
+   b.IngestTick(MakeTickByMid(2001.0, 3, 1200), err);
+   b.IngestTick(MakeTickByMid(2000.7, 4, 1300), err);
+   b.IngestTick(MakeTickByMid(2001.5, 5, 1400), err);
+   MKS_ASSERT_EQ_INT(5, sink.formingCount, "5 ticks = 5 formings");
+}
+
+//+------------------------------------------------------------------+
+//| Tick inválido (ask < bid) NÃO dispara OnBrickForming              |
+//+------------------------------------------------------------------+
+void Test_OnBrickForming_NotEmittedOnInvalidTick()
+{
+   CMksCapturingSink sink;
+   CMksFixedBrickSizer sizer(5.0);
+   MksRenkoGeometry geom = MksGeometryMedian();
+   CMksRenkoBuilder b(geom, GetPointer(sizer), GetPointer(sink));
+   MksError err;
+   b.IngestTick(MakeTickByMid(2000.0, 1, 1000), err);     // válido
+   b.IngestTick(MakeTick(2000.5, 1999.5, 2, 1100), err);  // inválido (ask < bid)
+   b.IngestTick(MakeTickByMid(2001.0, 3, 1200), err);     // válido
+   MKS_ASSERT_EQ_INT(2, sink.formingCount,
+                     "só ticks válidos contam para forming");
+}
+
+//+------------------------------------------------------------------+
+//| currentMid no fb captura o mid do último tick processado          |
+//+------------------------------------------------------------------+
+void Test_OnBrickForming_CurrentMidReflectsLastTick()
+{
+   CMksCapturingSink sink;
+   CMksFixedBrickSizer sizer(5.0);
+   MksRenkoGeometry geom = MksGeometryMedian();
+   CMksRenkoBuilder b(geom, GetPointer(sizer), GetPointer(sink));
+   MksError err;
+   b.IngestTick(MakeTickByMid(2000.0, 1, 1000), err);
+   b.IngestTick(MakeTickByMid(2001.5, 2, 1100), err);
+   b.IngestTick(MakeTickByMid(2002.7, 3, 1200), err);
+   MKS_ASSERT_EQ_INT(3, sink.formingCount, "3 forming captures");
+   MKS_ASSERT_NEAR_DOUBLE(2000.0, sink.formings[0].currentMid, 1e-9, "mid 1");
+   MKS_ASSERT_NEAR_DOUBLE(2001.5, sink.formings[1].currentMid, 1e-9, "mid 2");
+   MKS_ASSERT_NEAR_DOUBLE(2002.7, sink.formings[2].currentMid, 1e-9, "mid 3");
+}
+
+//+------------------------------------------------------------------+
+//| SetEmitForming(false) suprime emissão                             |
+//+------------------------------------------------------------------+
+void Test_OnBrickForming_SuppressedWhenDisabled()
+{
+   CMksCapturingSink sink;
+   CMksFixedBrickSizer sizer(5.0);
+   MksRenkoGeometry geom = MksGeometryMedian();
+   CMksRenkoBuilder b(geom, GetPointer(sizer), GetPointer(sink));
+   MKS_ASSERT_TRUE(b.EmitForming(), "default true");
+   b.SetEmitForming(false);
+   MKS_ASSERT_FALSE(b.EmitForming(), "depois disable");
+   MksError err;
+   b.IngestTick(MakeTickByMid(2000.0, 1, 1000), err);
+   b.IngestTick(MakeTickByMid(2001.5, 2, 1100), err);
+   MKS_ASSERT_EQ_INT(0, sink.formingCount, "0 formings quando desabilitado");
+}
+
+//+------------------------------------------------------------------+
+//| Re-habilitar via flag volta a emitir                              |
+//+------------------------------------------------------------------+
+void Test_OnBrickForming_ReEnabledByFlag()
+{
+   CMksCapturingSink sink;
+   CMksFixedBrickSizer sizer(5.0);
+   MksRenkoGeometry geom = MksGeometryMedian();
+   CMksRenkoBuilder b(geom, GetPointer(sizer), GetPointer(sink));
+   MksError err;
+   b.SetEmitForming(false);
+   b.IngestTick(MakeTickByMid(2000.0, 1, 1000), err);    // suprimido
+   b.SetEmitForming(true);
+   b.IngestTick(MakeTickByMid(2001.0, 2, 1100), err);    // emite
+   b.IngestTick(MakeTickByMid(2002.0, 3, 1200), err);    // emite
+   MKS_ASSERT_EQ_INT(2, sink.formingCount,
+                     "2 formings após re-habilitar");
+}
+
+//+------------------------------------------------------------------+
+//| Quando um tick fecha brick, OnBrickClose vem antes; OnBrickForming|
+//| vem depois e reflete o NOVO state (open = close do brick fechado).|
+//+------------------------------------------------------------------+
+void Test_OnBrickForming_EmittedAfterBrickClose()
+{
+   CMksCapturingSink sink;
+   CMksFixedBrickSizer sizer(5.0);
+   MksRenkoGeometry geom = MksGeometryMedian();
+   CMksRenkoBuilder b(geom, GetPointer(sizer), GetPointer(sink));
+   MksError err;
+   b.IngestTick(MakeTickByMid(2000.0, 1, 1000), err);   // init
+   b.IngestTick(MakeTickByMid(2003.0, 2, 1100), err);   // forma brick BULL (close=2002.5)
+   MKS_ASSERT_EQ_INT(1, sink.count, "1 brick fechado");
+   MKS_ASSERT_EQ_INT(2, sink.formingCount, "2 formings (1 por tick)");
+   // O 2o forming reflete novo state: open = close do brick fechado (2002.5).
+   MKS_ASSERT_NEAR_DOUBLE(sink.bricks[0].close, sink.formings[1].open, 1e-9,
+                          "forming.open == bricks[0].close após emissão");
+}
+
 //+------------------------------------------------------------------+
 void OnStart()
 {
@@ -494,6 +622,15 @@ void OnStart()
    MKS_RUN(Test_ClassicPreset);
    MKS_RUN(Test_FirstBrickBear);
    MKS_RUN(Test_FormingBrickBeforeAnyTick);
+
+   // ADR-021 — OnBrickForming
+   MKS_RUN(Test_OnBrickForming_NotEmittedBeforeFirstTick);
+   MKS_RUN(Test_OnBrickForming_EmittedOnEachValidTick);
+   MKS_RUN(Test_OnBrickForming_NotEmittedOnInvalidTick);
+   MKS_RUN(Test_OnBrickForming_CurrentMidReflectsLastTick);
+   MKS_RUN(Test_OnBrickForming_SuppressedWhenDisabled);
+   MKS_RUN(Test_OnBrickForming_ReEnabledByFlag);
+   MKS_RUN(Test_OnBrickForming_EmittedAfterBrickClose);
 
    g_mksTestRunner.Summary();
 }
