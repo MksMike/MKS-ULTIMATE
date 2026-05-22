@@ -32,6 +32,7 @@
 #include <MKS-ULTIMATE/Core/Data/CMksBrickWriterSink.mqh>
 #include <MKS-ULTIMATE/Core/Output/CMksCustomSymbolSink.mqh>
 #include <MKS-ULTIMATE/Core/Output/CMksMultiSink.mqh>
+#include <MKS-ULTIMATE/Core/Output/CMksProgressPanel.mqh>
 #include <MKS-ULTIMATE/Core/Log/CMksLogger.mqh>
 #include <MKS-ULTIMATE/Core/Symbol/CMksMt5Symbol.mqh>
 #include <MKS-ULTIMATE/Core/Account/CMksMt5Account.mqh>
@@ -97,6 +98,25 @@ IAccount             *g_iAccount = NULL;
 CMksBrickWriterSink  *g_sink      = NULL;
 CMksCustomSymbolSink *g_csSink    = NULL;
 CMksMultiSink        *g_multiSink = NULL;
+
+// Painel UX (ADR-022). Painel só existe em chart real (não em backtest).
+CMksProgressPanel    g_panel;
+bool                 g_isTesting = false;
+
+// Estado do fill histórico em chunks (refactor OnInit -> OnTimer):
+// CopyTicksRange retorna tudo de uma vez, mas o loop de IngestOne é
+// dividido em fatias para permitir update do painel a cada chunk.
+MqlTick              g_histTicks[];
+int                  g_histPos          = 0;
+int                  g_histTotalTicks   = 0;
+int                  g_bricksAtFillStart = 0;
+bool                 g_fillRunning      = false;
+bool                 g_fillRequested    = false; // OnInit pediu fill?
+
+// Para Ticks/s no modo live.
+ulong                g_lastSeqLive = 0;
+uint                 g_lastTimerMs = 0;
+double               g_ticksPerSec = 0.0;
 
 //+------------------------------------------------------------------+
 //| Nome do Custom Symbol — ADR-022 regra 5.                           |
@@ -295,36 +315,79 @@ void IngestOne(const MksTick &tick)
 }
 
 //+------------------------------------------------------------------+
-//| Fill histórico (ADR-013 §2 — broker/account capturados antes).     |
+//| Histórico em chunks. CopyTicksRange é síncrono (1-3s para 1.7M    |
+//| ticks), mas o LOOP de IngestOne é dividido em fatias via OnTimer  |
+//| para permitir update do painel UX. Suprime OnBrickForming durante |
+//| fill (ADR-021): milhões de CustomRatesUpdate travariam o terminal.|
 //+------------------------------------------------------------------+
-void RunHistoricalFill(int days)
+const int kHistChunkSize = 10000; // ticks por chunk no OnTimer
+
+bool StartHistoricalFill(int days)
 {
-   if(days <= 0) return;
+   if(days <= 0)
+   {
+      g_logger.Info("Producer", "historical fill: skipped (days=0)", "");
+      return false;
+   }
    long toMsc   = (long)TimeCurrent() * 1000;
    long fromMsc = toMsc - (long)days * 24L * 3600L * 1000L;
 
-   MqlTick ticks[];
-   int n = CopyTicksRange(g_symbol, ticks, COPY_TICKS_ALL, fromMsc, toMsc);
+   int n = CopyTicksRange(g_symbol, g_histTicks, COPY_TICKS_ALL, fromMsc, toMsc);
    if(n <= 0)
    {
       g_logger.Warn("Producer", "historical fill: CopyTicksRange failed",
          StringFormat("\"ret\":%d,\"lastErr\":%d", n, GetLastError()));
-      return;
+      return false;
    }
-   g_histLoaded = n;
+   g_histLoaded         = n;
+   g_histTotalTicks     = n;
+   g_histPos            = 0;
+   g_bricksAtFillStart  = g_sink.bricksWritten;
+   g_fillRunning        = true;
+   g_builder.SetEmitForming(false); // evita 1.7M CustomRatesUpdate durante fill
+
    g_logger.Info("Producer", "historical fill: ticks loaded",
       StringFormat("\"ticks\":%d,\"days\":%d", n, days));
+   return true;
+}
 
-   int bricksBefore = g_sink.bricksWritten;
-   for(int i = 0; i < n; i++)
+// Processa próximo chunk. Retorna true se ainda há ticks a processar.
+bool ProcessHistoricalChunk()
+{
+   if(!g_fillRunning) return false;
+   int end = MathMin(g_histPos + kHistChunkSize, g_histTotalTicks);
+   for(int i = g_histPos; i < end; i++)
    {
-      MksTick t = ToMksTick(ticks[i]);
+      MksTick t = ToMksTick(g_histTicks[i]);
       IngestOne(t);
       if(g_streamHalted) break;
    }
-   g_histBricks = g_sink.bricksWritten - bricksBefore;
+   g_histPos = end;
+   return (g_histPos < g_histTotalTicks) && !g_streamHalted;
+}
+
+// Termina o fill: libera builder.SetEmitForming, loga totais.
+void FinalizeHistoricalFill()
+{
+   if(!g_fillRunning) return;
+   g_fillRunning = false;
+   g_builder.SetEmitForming(true);
+   g_histBricks = g_sink.bricksWritten - g_bricksAtFillStart;
+   ArrayFree(g_histTicks);
    g_logger.Info("Producer", "historical fill: bricks emitted",
       StringFormat("\"bricks\":%d", g_histBricks));
+}
+
+// Helper: nome legível do tipo de geometria (pra painel/log).
+string GeometryTypeName(ENUM_MKS_GEOMETRY_TYPE t)
+{
+   switch(t)
+   {
+      case MKS_GEOM_MEDIAN:  return "Median";
+      case MKS_GEOM_CLASSIC: return "Classic";
+      case MKS_GEOM_CUSTOM:  return "Custom";
+   }
+   return "?";
 }
 
 //+------------------------------------------------------------------+
@@ -348,6 +411,20 @@ int OnInit()
 {
    g_symbol = _Symbol;
 
+   // Backtest guard (ADR-022): painel UX só aparece em chart real.
+   // No tester, MQLInfoInteger(MQL5_TESTING) == 1 — consulta na borda
+   // do composition root é permitida (ADR-015 §3) para ajuste de output.
+   g_isTesting = (bool)MQLInfoInteger(MQL_TESTER);
+
+   // Painel UX: criar IMEDIATAMENTE para feedback de "EA está vivo".
+   // Setup pode demorar 1-3s (CustomSymbolCreate, wipe), fill 20-40s.
+   // Sem o painel agora, usuário pensa que travou.
+   if(!g_isTesting)
+   {
+      g_panel.InitMode(g_symbol, "<calculando>",
+                       "Inicializando MKS-ULTIMATE...");
+   }
+
    // Composition root: instancia as interfaces para o instrumento e a
    // conta corrente. ADR-016: lógica futura consulta via interface; só
    // a borda do composition root toca CMksMt5Symbol/Account direto.
@@ -369,6 +446,8 @@ int OnInit()
    FolderCreate("MKS-ULTIMATE");
    FolderCreate("MKS-ULTIMATE\\Bricks");
    FolderCreate("MKS-ULTIMATE\\Logs");
+
+   if(!g_isTesting) g_panel.UpdateSubtitle("Inicializando logger...");
 
    // Logger antes de tudo — todas mensagens posteriores vão para JSON-line.
    g_logger = new CMksLogger();
@@ -413,6 +492,8 @@ int OnInit()
    g_logger.Info("Producer", "geometry",
       StringFormat("\"type\":%d,\"pro\":%.4f,\"po\":%.4f",
                    (int)InpGeometryType, geom.pro, geom.po));
+
+   if(!g_isTesting) g_panel.UpdateSubtitle("Abrindo arquivo .mksbk...");
 
    // Writer com retry de sufixo numérico em caso de colisão (ADR-014 §4).
    // Reutiliza sessionStart já capturado para o log (mesmo timestamp em
@@ -468,15 +549,26 @@ int OnInit()
    }
    g_logger.Info("Producer", "custom symbol",
       StringFormat("\"name\":\"%s\"", MksJsonEscape(g_csName)));
+
+   // Atualiza painel: agora temos o csName real para mostrar.
+   if(!g_isTesting)
+   {
+      ObjectSetString(ChartID(), MKS_PANEL_PREFIX + "FLOW", OBJPROP_TEXT,
+                      g_symbol + " -> " + g_csName);
+      g_panel.UpdateSubtitle("Criando Custom Symbol...");
+   }
+
    if(!EnsureCustomSymbolReady(g_csName, g_iSymbol, err))
    {
       g_logger.Error("Producer", "EnsureCustomSymbolReady failed",
          StringFormat("\"err\":\"%s\"", MksJsonEscape(err.ToString())));
+      if(!g_isTesting) g_panel.ShowError("Falha ao criar Custom Symbol");
       Cleanup();
       return INIT_FAILED;
    }
    if(InpResetCustomSymbolBars)
    {
+      if(!g_isTesting) g_panel.UpdateSubtitle("Limpando histórico anterior...");
       if(!CustomRatesDelete(g_csName, 0, LONG_MAX))
          g_logger.Warn("Producer", "CustomRatesDelete failed (continues without wipe)",
             StringFormat("\"lastErr\":%d", GetLastError()));
@@ -505,15 +597,34 @@ int OnInit()
    g_builder = new CMksRenkoBuilder(geom, g_sizer, g_multiSink,
                                     InpInvalidTickLimit, InpThresholdLimit);
 
-   // Fill histórico opcional (mesmo motor; combate ao eixo 2 do V5).
-   // Suprime OnBrickForming durante fill (ADR-021): milhões de
-   // CustomRatesUpdate em sequência travariam o terminal.
-   g_builder.SetEmitForming(false);
-   RunHistoricalFill(InpHistoricalFillDays);
-   g_builder.SetEmitForming(true);
+   // Fill histórico em chunks via OnTimer (ADR-022 §UX): OnInit precisa
+   // retornar rápido para o terminal renderizar o painel. CopyTicksRange
+   // é síncrono (alguns segundos), mas o LOOP de IngestOne é dividido.
+   if(!g_isTesting)
+      g_panel.UpdateSubtitle(StringFormat("Carregando %d dias de histórico...",
+                                          InpHistoricalFillDays));
+   g_fillRequested = StartHistoricalFill(InpHistoricalFillDays);
 
-   // ADR-022 §6: abre o chart do CS em M1 automaticamente. Falha não
-   // é fatal — chart é cosmético, framework continua funcionando.
+   // Dispara o ciclo de OnTimer. 50ms é granular o bastante para o painel
+   // parecer animado, e processa ~10k ticks por tick de timer (>= 200k tps
+   // em throughput, suficiente para 1.7M ticks em < 10s no fluxo real).
+   EventSetMillisecondTimer(50);
+
+   g_logger.Info("Producer", "OnInit done; fill+ChartOpen via OnTimer",
+      StringFormat("\"fillRequested\":%s", (g_fillRequested ? "true" : "false")));
+   return INIT_SUCCEEDED;
+}
+
+//+------------------------------------------------------------------+
+//| Finaliza o ciclo de init: abre chart do CS, transição do painel   |
+//| para modo live, troca timer para 1Hz. Chamado quando fill termina |
+//| (ou imediatamente se !g_fillRequested).                            |
+//+------------------------------------------------------------------+
+void FinishInitAndGoLive()
+{
+   FinalizeHistoricalFill();
+
+   // ADR-022 §6: abre chart do CS em M1.
    long chartId = ChartOpen(g_csName, PERIOD_M1);
    if(chartId == 0)
    {
@@ -528,14 +639,31 @@ int OnInit()
                       MksJsonEscape(g_csName), chartId));
    }
 
+   // Transição painel para modo live.
+   if(!g_isTesting)
+   {
+      g_panel.LiveMode(g_symbol, g_csName,
+                       GeometryTypeName(InpGeometryType),
+                       InpBrickSizePts, TimeCurrent());
+   }
+
    g_logger.Info("Producer", "ready, processing live ticks", "");
-   return INIT_SUCCEEDED;
+
+   // Reduz frequência do timer: live só precisa de update 1Hz para
+   // ticks/sec, último brick, sync.
+   EventKillTimer();
+   EventSetTimer(1);
+   g_lastSeqLive = g_seq;
+   g_lastTimerMs = GetTickCount();
 }
 
 //+------------------------------------------------------------------+
 void OnTick()
 {
    if(g_streamHalted || g_builder == NULL) return;
+   // Durante fill histórico, ignorar ticks live (eles entram via OnTick
+   // depois que FinishInitAndGoLive transiciona para modo live).
+   if(g_fillRunning) return;
 
    MqlTick mt;
    if(!SymbolInfoTick(g_symbol, mt)) return;
@@ -545,8 +673,67 @@ void OnTick()
 }
 
 //+------------------------------------------------------------------+
+//| OnTimer — duas funções por fase:                                  |
+//|   Fase init (g_fillRunning): processa próximo chunk de ticks      |
+//|     históricos; quando termina, chama FinishInitAndGoLive.        |
+//|   Fase live: atualiza painel com ticks/sec, último brick, sync.   |
+//+------------------------------------------------------------------+
+void OnTimer()
+{
+   if(g_fillRunning)
+   {
+      bool more = ProcessHistoricalChunk();
+      // Atualiza painel.
+      if(!g_isTesting)
+      {
+         double pct = 0.0;
+         if(g_histTotalTicks > 0)
+            pct = 100.0 * g_histPos / g_histTotalTicks;
+         g_panel.UpdateProgress(pct, g_histPos, g_histTotalTicks,
+                                 g_sink != NULL ? g_sink.bricksWritten : 0);
+      }
+      if(!more)
+         FinishInitAndGoLive();
+      return;
+   }
+
+   // Modo live: update painel 1Hz.
+   if(!g_isTesting && g_panel.Mode() == MKS_PANEL_MODE_LIVE)
+   {
+      uint nowMs = GetTickCount();
+      double elapsedSec = (nowMs - g_lastTimerMs) / 1000.0;
+      if(elapsedSec > 0.05)
+      {
+         ulong dseq = g_seq - g_lastSeqLive;
+         g_ticksPerSec = dseq / elapsedSec;
+         g_lastSeqLive = g_seq;
+         g_lastTimerMs = nowMs;
+      }
+      long bricksTotal = g_sink != NULL ? g_sink.bricksWritten : 0;
+      long writerCount = g_writer != NULL ? g_writer.BrickCount() : 0;
+      string lastInfo = "—";
+      // Pequena info do último brick (lê do builder snapshot).
+      // GetFormingBrick() é leve: snapshot de campos.
+      if(g_builder != NULL)
+      {
+         MksFormingBrick fb = g_builder.GetFormingBrick();
+         if(fb.hasData)
+         {
+            lastInfo = StringFormat("%s @ %s",
+                                     fb.direction == MKS_BRICK_BULL ? "BULL" : "BEAR",
+                                     DoubleToString(fb.open, g_digits));
+         }
+      }
+      g_panel.UpdateLive(bricksTotal, writerCount, lastInfo, g_ticksPerSec);
+   }
+}
+
+//+------------------------------------------------------------------+
 void OnDeinit(const int reason)
 {
+   EventKillTimer();
+   if(!g_isTesting) g_panel.Clear();
+
    if(g_writer != NULL)
    {
       MksError err;
