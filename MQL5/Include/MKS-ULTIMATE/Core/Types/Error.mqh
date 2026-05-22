@@ -36,7 +36,14 @@ enum ENUM_MKS_ERROR_CODE
    MKS_ERR_TRADE_SIZER_OUT_OF_RANGE = 301,  // lots calculado fora de [VolumeMin, VolumeMax]
    MKS_ERR_TRADE_SIZER_INVALID_INPUT = 302, // input em ComputeLots inválido (slDistance<=0, balance<=0, etc.)
 
-   //--- Risk 400–499, StressLab 500–599 — ver ADR-009
+   //--- Risk: faixa 400–499 — ver ADR-009, ADR-019 ---
+   MKS_ERR_RISK_REJECTED_SL_MISSING = 400,    // SL obrigatório e não informado em request
+   MKS_ERR_RISK_REJECTED_TP_MISSING = 401,    // TP obrigatório e não informado em request
+   MKS_ERR_RISK_REJECTED_LOTS_EXCEEDED = 402, // req.lots > maxLotsPerTrade configurado
+   MKS_ERR_RISK_REJECTED_LOTS_VS_SIZER = 403, // req.lots > sizer.ComputeLots(req.slPoints)
+   MKS_ERR_RISK_INVALID_PARAM = 404,          // config do Risk Manager inválida
+
+   //--- StressLab 500–599 — ver ADR-009
 
    //--- Log: faixa 600–699 — ver ADR-007 ---
    MKS_ERR_LOG_FILE_IO = 600,              // falha de I/O do logger (open/write/close)

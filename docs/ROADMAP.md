@@ -179,6 +179,8 @@ Este documento define **o que construir e em que ordem**. Cada fase tem entregá
 
 **Status:** Não iniciada
 
+**Nota (ADR-019):** Sub-dividida em três sub-slices **executados na mesma ordem**, apenas em commits/rodadas separadas: **6.1 Por trade** (SL/TP obrigatórios, max lots, limite via Sizer), **6.2 Por estratégia** (max posições simultâneas, exposure total), **6.3 Por conta** (daily loss limit, max drawdown, circuit breaker). A sub-divisão **não viola** a cláusula anti-precedente da ADR-019 porque não inverte ordem (todas vêm antes da Fase 7). Cumpre o critério de saída só quando 6.1, 6.2 e 6.3 estão fechados e o teste end-to-end passa.
+
 **Entregáveis:**
 - `Core/Risk/CMksRiskManager.mqh` — middleware que toda `OrderRequest` atravessa antes de virar ordem real
 - Camadas:
