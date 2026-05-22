@@ -5,86 +5,24 @@
 //| @responsibility : Testes do CMksRenkoBuilder — determinismo,
 //|                   formação, reversão, multi-threshold, guarda de
 //|                   tick inválido, limiar K, boundary de geometria.
+//|                   Migrado para o framework Core/Testing (ADR-005).
 //| @depends_on     : Core/RenkoBuilder/CMksRenkoBuilder.mqh,
-//|                   Core/RenkoBuilder/CMksFixedBrickSizer.mqh
+//|                   Core/RenkoBuilder/CMksFixedBrickSizer.mqh,
+//|                   Core/Testing/Asserts.mqh,
+//|                   Core/Testing/Mocks/CMksCapturingSink.mqh
 //| @install_path   : MQL5/Scripts/MKS-ULTIMATE/Tests/Test_CMksRenkoBuilder.mq5
 //+------------------------------------------------------------------+
 #property script_show_inputs
 
 #include <MKS-ULTIMATE/Core/RenkoBuilder/CMksRenkoBuilder.mqh>
 #include <MKS-ULTIMATE/Core/RenkoBuilder/CMksFixedBrickSizer.mqh>
+#include <MKS-ULTIMATE/Core/Testing/Asserts.mqh>
+#include <MKS-ULTIMATE/Core/Testing/Mocks/CMksCapturingSink.mqh>
 #include <MKS-ULTIMATE/Core/Types/RenkoGeometry.mqh>
 #include <MKS-ULTIMATE/Core/Types/Tick.mqh>
 #include <MKS-ULTIMATE/Core/Types/Brick.mqh>
 #include <MKS-ULTIMATE/Core/Types/FormingBrick.mqh>
 #include <MKS-ULTIMATE/Core/Types/Error.mqh>
-#include <MKS-ULTIMATE/Core/Interfaces/IRenkoSink.mqh>
-
-//+------------------------------------------------------------------+
-//| Estado global de teste e helpers de assertion                     |
-//+------------------------------------------------------------------+
-int    g_passed = 0;
-int    g_failed = 0;
-string g_currentTest = "";
-
-void StartTest(const string name)
-{
-   g_currentTest = name;
-}
-
-void AssertEqualInt(int expected, int actual, const string what)
-{
-   if(expected == actual) { g_passed++; return; }
-   g_failed++;
-   PrintFormat("FAIL [%s] %s: expected=%d actual=%d", g_currentTest, what, expected, actual);
-}
-
-void AssertEqualDouble(double expected, double actual, const string what)
-{
-   if(MathAbs(expected - actual) < 1e-9) { g_passed++; return; }
-   g_failed++;
-   PrintFormat("FAIL [%s] %s: expected=%.6f actual=%.6f", g_currentTest, what, expected, actual);
-}
-
-void AssertEqualUlong(ulong expected, ulong actual, const string what)
-{
-   if(expected == actual) { g_passed++; return; }
-   g_failed++;
-   PrintFormat("FAIL [%s] %s: expected=%I64u actual=%I64u", g_currentTest, what, expected, actual);
-}
-
-void AssertTrue(bool cond, const string what)
-{
-   if(cond) { g_passed++; return; }
-   g_failed++;
-   PrintFormat("FAIL [%s] %s: expected=true", g_currentTest, what);
-}
-
-void AssertFalse(bool cond, const string what)
-{
-   if(!cond) { g_passed++; return; }
-   g_failed++;
-   PrintFormat("FAIL [%s] %s: expected=false", g_currentTest, what);
-}
-
-//+------------------------------------------------------------------+
-//| Sink que captura todos os bricks emitidos                         |
-//+------------------------------------------------------------------+
-class CCapturingSink : public IRenkoSink
-{
-public:
-   MksBrick bricks[];
-   int      count;
-
-   CCapturingSink() { count = 0; }
-
-   void OnBrickClose(const MksBrick &brick) override
-   {
-      ArrayResize(bricks, count + 1);
-      bricks[count] = brick;
-      count++;
-   }
-};
 
 //+------------------------------------------------------------------+
 //| Helpers de construção de tick                                     |
@@ -111,8 +49,6 @@ MksTick MakeTickByMid(double mid, ulong seq, long timeMsc)
 //+------------------------------------------------------------------+
 void Test_Determinism()
 {
-   StartTest("01_determinism_long_stream");
-
    // Stream sintético de 60 ticks com mix:
    //   - BULL continuação contínua
    //   - reversão BULL→BEAR e BEAR continuação
@@ -143,8 +79,8 @@ void Test_Determinism()
       ticks[i] = MakeTickByMid(mid, (ulong)(i + 1), (long)(1000 + i * 100));
    }
 
-   CCapturingSink s1;
-   CCapturingSink s2;
+   CMksCapturingSink s1;
+   CMksCapturingSink s2;
    CMksFixedBrickSizer sz1(10.0);
    CMksFixedBrickSizer sz2(10.0);
    MksRenkoGeometry geom = MksGeometryMedian();
@@ -155,28 +91,28 @@ void Test_Determinism()
    for(int i = 0; i < N; i++) b1.IngestTick(ticks[i], err);
    for(int i = 0; i < N; i++) b2.IngestTick(ticks[i], err);
 
-   AssertTrue(s1.count > 0, "stream produz bricks");
-   AssertEqualInt(s1.count, s2.count, "brick count");
+   MKS_ASSERT_TRUE(s1.count > 0, "stream produz bricks");
+   MKS_ASSERT_EQ_INT(s1.count, s2.count, "brick count");
    for(int i = 0; i < s1.count && i < s2.count; i++)
    {
-      AssertEqualDouble(s1.bricks[i].open,              s2.bricks[i].open,              StringFormat("b%d open", i));
-      AssertEqualDouble(s1.bricks[i].close,             s2.bricks[i].close,             StringFormat("b%d close", i));
-      AssertEqualDouble(s1.bricks[i].high,              s2.bricks[i].high,              StringFormat("b%d high", i));
-      AssertEqualDouble(s1.bricks[i].low,               s2.bricks[i].low,               StringFormat("b%d low", i));
-      AssertEqualInt   ((int)s1.bricks[i].direction,    (int)s2.bricks[i].direction,    StringFormat("b%d direction", i));
-      AssertEqualInt   (s1.bricks[i].thresholdsCrossed, s2.bricks[i].thresholdsCrossed, StringFormat("b%d M", i));
-      AssertEqualDouble(s1.bricks[i].triggerPrice,      s2.bricks[i].triggerPrice,      StringFormat("b%d triggerPrice", i));
-      AssertEqualUlong (s1.bricks[i].triggerTickId,     s2.bricks[i].triggerTickId,     StringFormat("b%d triggerTickId", i));
+      MKS_ASSERT_EQ_DOUBLE(s1.bricks[i].open,              s2.bricks[i].open,              StringFormat("b%d open", i));
+      MKS_ASSERT_EQ_DOUBLE(s1.bricks[i].close,             s2.bricks[i].close,             StringFormat("b%d close", i));
+      MKS_ASSERT_EQ_DOUBLE(s1.bricks[i].high,              s2.bricks[i].high,              StringFormat("b%d high", i));
+      MKS_ASSERT_EQ_DOUBLE(s1.bricks[i].low,               s2.bricks[i].low,               StringFormat("b%d low", i));
+      MKS_ASSERT_EQ_INT   ((int)s1.bricks[i].direction,    (int)s2.bricks[i].direction,    StringFormat("b%d direction", i));
+      MKS_ASSERT_EQ_INT   (s1.bricks[i].thresholdsCrossed, s2.bricks[i].thresholdsCrossed, StringFormat("b%d M", i));
+      MKS_ASSERT_EQ_DOUBLE(s1.bricks[i].triggerPrice,      s2.bricks[i].triggerPrice,      StringFormat("b%d triggerPrice", i));
+      MKS_ASSERT_EQ_ULONG (s1.bricks[i].triggerTickId,     s2.bricks[i].triggerTickId,     StringFormat("b%d triggerTickId", i));
    }
 
    // Estado interno final também deve casar
    MksFormingBrick fb1 = b1.GetFormingBrick();
    MksFormingBrick fb2 = b2.GetFormingBrick();
-   AssertEqualDouble(fb1.open, fb2.open, "forming open match");
-   AssertEqualDouble(fb1.high, fb2.high, "forming high match");
-   AssertEqualDouble(fb1.low,  fb2.low,  "forming low match");
-   AssertEqualInt((int)fb1.direction, (int)fb2.direction, "forming direction match");
-   AssertEqualInt(b1.IsStreamCorrupt() ? 1 : 0, b2.IsStreamCorrupt() ? 1 : 0, "stream corrupt flag match");
+   MKS_ASSERT_EQ_DOUBLE(fb1.open, fb2.open, "forming open match");
+   MKS_ASSERT_EQ_DOUBLE(fb1.high, fb2.high, "forming high match");
+   MKS_ASSERT_EQ_DOUBLE(fb1.low,  fb2.low,  "forming low match");
+   MKS_ASSERT_EQ_INT((int)fb1.direction, (int)fb2.direction, "forming direction match");
+   MKS_ASSERT_EQ_INT(b1.IsStreamCorrupt() ? 1 : 0, b2.IsStreamCorrupt() ? 1 : 0, "stream corrupt flag match");
 }
 
 //+------------------------------------------------------------------+
@@ -184,15 +120,13 @@ void Test_Determinism()
 //+------------------------------------------------------------------+
 void Test_BullContinuation()
 {
-   StartTest("02_bull_continuation_median");
-
    MksTick ticks[4];
    ticks[0] = MakeTickByMid(2000.0, 1, 1000);
    ticks[1] = MakeTickByMid(2005.0, 2, 2000);
    ticks[2] = MakeTickByMid(2010.0, 3, 3000);
    ticks[3] = MakeTickByMid(2015.0, 4, 4000);
 
-   CCapturingSink sink;
+   CMksCapturingSink sink;
    CMksFixedBrickSizer sizer(10.0);
    MksRenkoGeometry geom = MksGeometryMedian();
    CMksRenkoBuilder b(geom, GetPointer(sizer), GetPointer(sink));
@@ -200,15 +134,15 @@ void Test_BullContinuation()
    MksError err;
    for(int i = 0; i < 4; i++) b.IngestTick(ticks[i], err);
 
-   AssertEqualInt(3, sink.count, "brick count");
-   AssertEqualDouble(2000.0, sink.bricks[0].open,  "b0 open");
-   AssertEqualDouble(2005.0, sink.bricks[0].close, "b0 close");
-   AssertEqualInt(MKS_BRICK_BULL, (int)sink.bricks[0].direction, "b0 BULL");
-   AssertEqualInt(1, sink.bricks[0].thresholdsCrossed, "b0 M=1");
-   AssertEqualDouble(2005.0, sink.bricks[1].open,  "b1 open");
-   AssertEqualDouble(2010.0, sink.bricks[1].close, "b1 close");
-   AssertEqualDouble(2010.0, sink.bricks[2].open,  "b2 open");
-   AssertEqualDouble(2015.0, sink.bricks[2].close, "b2 close");
+   MKS_ASSERT_EQ_INT(3, sink.count, "brick count");
+   MKS_ASSERT_EQ_DOUBLE(2000.0, sink.bricks[0].open,  "b0 open");
+   MKS_ASSERT_EQ_DOUBLE(2005.0, sink.bricks[0].close, "b0 close");
+   MKS_ASSERT_EQ_INT(MKS_BRICK_BULL, (int)sink.bricks[0].direction, "b0 BULL");
+   MKS_ASSERT_EQ_INT(1, sink.bricks[0].thresholdsCrossed, "b0 M=1");
+   MKS_ASSERT_EQ_DOUBLE(2005.0, sink.bricks[1].open,  "b1 open");
+   MKS_ASSERT_EQ_DOUBLE(2010.0, sink.bricks[1].close, "b1 close");
+   MKS_ASSERT_EQ_DOUBLE(2010.0, sink.bricks[2].open,  "b2 open");
+   MKS_ASSERT_EQ_DOUBLE(2015.0, sink.bricks[2].close, "b2 close");
 }
 
 //+------------------------------------------------------------------+
@@ -216,15 +150,13 @@ void Test_BullContinuation()
 //+------------------------------------------------------------------+
 void Test_BearContinuation()
 {
-   StartTest("03_bear_continuation_median");
-
    MksTick ticks[4];
    ticks[0] = MakeTickByMid(2000.0, 1, 1000);
    ticks[1] = MakeTickByMid(1995.0, 2, 2000);
    ticks[2] = MakeTickByMid(1990.0, 3, 3000);
    ticks[3] = MakeTickByMid(1985.0, 4, 4000);
 
-   CCapturingSink sink;
+   CMksCapturingSink sink;
    CMksFixedBrickSizer sizer(10.0);
    MksRenkoGeometry geom = MksGeometryMedian();
    CMksRenkoBuilder b(geom, GetPointer(sizer), GetPointer(sink));
@@ -232,12 +164,12 @@ void Test_BearContinuation()
    MksError err;
    for(int i = 0; i < 4; i++) b.IngestTick(ticks[i], err);
 
-   AssertEqualInt(3, sink.count, "brick count");
-   AssertEqualInt(MKS_BRICK_BEAR, (int)sink.bricks[0].direction, "b0 BEAR");
-   AssertEqualDouble(2000.0, sink.bricks[0].open,  "b0 open");
-   AssertEqualDouble(1995.0, sink.bricks[0].close, "b0 close");
-   AssertEqualDouble(1990.0, sink.bricks[1].close, "b1 close");
-   AssertEqualDouble(1985.0, sink.bricks[2].close, "b2 close");
+   MKS_ASSERT_EQ_INT(3, sink.count, "brick count");
+   MKS_ASSERT_EQ_INT(MKS_BRICK_BEAR, (int)sink.bricks[0].direction, "b0 BEAR");
+   MKS_ASSERT_EQ_DOUBLE(2000.0, sink.bricks[0].open,  "b0 open");
+   MKS_ASSERT_EQ_DOUBLE(1995.0, sink.bricks[0].close, "b0 close");
+   MKS_ASSERT_EQ_DOUBLE(1990.0, sink.bricks[1].close, "b1 close");
+   MKS_ASSERT_EQ_DOUBLE(1985.0, sink.bricks[2].close, "b2 close");
 }
 
 //+------------------------------------------------------------------+
@@ -245,8 +177,6 @@ void Test_BearContinuation()
 //+------------------------------------------------------------------+
 void Test_SimpleReversal()
 {
-   StartTest("04_simple_reversal");
-
    MksTick ticks[5];
    ticks[0] = MakeTickByMid(2000.0, 1, 1000);
    ticks[1] = MakeTickByMid(2005.0, 2, 2000);
@@ -254,7 +184,7 @@ void Test_SimpleReversal()
    ticks[3] = MakeTickByMid(2005.0, 4, 4000);
    ticks[4] = MakeTickByMid(2000.0, 5, 5000);
 
-   CCapturingSink sink;
+   CMksCapturingSink sink;
    CMksFixedBrickSizer sizer(10.0);
    MksRenkoGeometry geom = MksGeometryMedian();
    CMksRenkoBuilder b(geom, GetPointer(sizer), GetPointer(sink));
@@ -262,14 +192,14 @@ void Test_SimpleReversal()
    MksError err;
    for(int i = 0; i < 5; i++) b.IngestTick(ticks[i], err);
 
-   AssertEqualInt(4, sink.count, "brick count");
-   AssertEqualInt(MKS_BRICK_BULL, (int)sink.bricks[1].direction, "b1 BULL");
-   AssertEqualInt(MKS_BRICK_BEAR, (int)sink.bricks[2].direction, "b2 BEAR (reversal)");
-   AssertEqualInt(1, sink.bricks[2].thresholdsCrossed, "b2 M=1");
-   AssertEqualDouble(2010.0, sink.bricks[2].open,  "b2 open=last close");
-   AssertEqualDouble(2005.0, sink.bricks[2].close, "b2 close=revThr");
-   AssertEqualInt(MKS_BRICK_BEAR, (int)sink.bricks[3].direction, "b3 BEAR cont");
-   AssertEqualDouble(2000.0, sink.bricks[3].close, "b3 close");
+   MKS_ASSERT_EQ_INT(4, sink.count, "brick count");
+   MKS_ASSERT_EQ_INT(MKS_BRICK_BULL, (int)sink.bricks[1].direction, "b1 BULL");
+   MKS_ASSERT_EQ_INT(MKS_BRICK_BEAR, (int)sink.bricks[2].direction, "b2 BEAR (reversal)");
+   MKS_ASSERT_EQ_INT(1, sink.bricks[2].thresholdsCrossed, "b2 M=1");
+   MKS_ASSERT_EQ_DOUBLE(2010.0, sink.bricks[2].open,  "b2 open=last close");
+   MKS_ASSERT_EQ_DOUBLE(2005.0, sink.bricks[2].close, "b2 close=revThr");
+   MKS_ASSERT_EQ_INT(MKS_BRICK_BEAR, (int)sink.bricks[3].direction, "b3 BEAR cont");
+   MKS_ASSERT_EQ_DOUBLE(2000.0, sink.bricks[3].close, "b3 close");
 }
 
 //+------------------------------------------------------------------+
@@ -279,15 +209,13 @@ void Test_SimpleReversal()
 //+------------------------------------------------------------------+
 void Test_ReversalMultiThreshold()
 {
-   StartTest("05_reversal_multi_threshold");
-
    MksTick ticks[4];
    ticks[0] = MakeTickByMid(2000.0, 1, 1000);
    ticks[1] = MakeTickByMid(2005.0, 2, 2000);
    ticks[2] = MakeTickByMid(2010.0, 3, 3000);
    ticks[3] = MakeTickByMid(1990.0, 4, 4000); // big drop: rev(2005) + cont(2000) + cont(1995) + cont(1990) = M=4 BEAR
 
-   CCapturingSink sink;
+   CMksCapturingSink sink;
    CMksFixedBrickSizer sizer(10.0);
    MksRenkoGeometry geom = MksGeometryMedian();
    CMksRenkoBuilder b(geom, GetPointer(sizer), GetPointer(sink));
@@ -295,15 +223,15 @@ void Test_ReversalMultiThreshold()
    MksError err;
    for(int i = 0; i < 4; i++) b.IngestTick(ticks[i], err);
 
-   AssertEqualInt(3, sink.count, "brick count (2 BULL + 1 multi BEAR)");
-   AssertEqualInt(MKS_BRICK_BEAR, (int)sink.bricks[2].direction, "b2 BEAR (multi)");
-   AssertEqualInt(4, sink.bricks[2].thresholdsCrossed, "b2 M=4");
-   AssertEqualDouble(2010.0, sink.bricks[2].open,  "b2 open=last bull close");
-   AssertEqualDouble(1990.0, sink.bricks[2].close, "b2 close=4th threshold");
-   AssertEqualDouble(1990.0, sink.bricks[2].triggerPrice, "b2 triggerPrice=mid (final, não 2005)");
-   AssertEqualDouble(0.0, sink.bricks[2].Overshoot(), "b2 overshoot=0 (mid==4th threshold)");
-   AssertEqualDouble(2010.0, sink.bricks[2].high, "b2 high=open (no wick acima)");
-   AssertEqualDouble(1990.0, sink.bricks[2].low,  "b2 low=close (no wick abaixo)");
+   MKS_ASSERT_EQ_INT(3, sink.count, "brick count (2 BULL + 1 multi BEAR)");
+   MKS_ASSERT_EQ_INT(MKS_BRICK_BEAR, (int)sink.bricks[2].direction, "b2 BEAR (multi)");
+   MKS_ASSERT_EQ_INT(4, sink.bricks[2].thresholdsCrossed, "b2 M=4");
+   MKS_ASSERT_EQ_DOUBLE(2010.0, sink.bricks[2].open,  "b2 open=last bull close");
+   MKS_ASSERT_EQ_DOUBLE(1990.0, sink.bricks[2].close, "b2 close=4th threshold");
+   MKS_ASSERT_EQ_DOUBLE(1990.0, sink.bricks[2].triggerPrice, "b2 triggerPrice=mid (final, não 2005)");
+   MKS_ASSERT_EQ_DOUBLE(0.0, sink.bricks[2].Overshoot(), "b2 overshoot=0 (mid==4th threshold)");
+   MKS_ASSERT_EQ_DOUBLE(2010.0, sink.bricks[2].high, "b2 high=open (no wick acima)");
+   MKS_ASSERT_EQ_DOUBLE(1990.0, sink.bricks[2].low,  "b2 low=close (no wick abaixo)");
 }
 
 //+------------------------------------------------------------------+
@@ -311,13 +239,11 @@ void Test_ReversalMultiThreshold()
 //+------------------------------------------------------------------+
 void Test_BullMultiThreshold()
 {
-   StartTest("06_bull_multi_threshold");
-
    MksTick ticks[2];
    ticks[0] = MakeTickByMid(2000.0, 1, 1000);
    ticks[1] = MakeTickByMid(2015.0, 2, 2000); // M=3: thresholds 2005, 2010, 2015
 
-   CCapturingSink sink;
+   CMksCapturingSink sink;
    CMksFixedBrickSizer sizer(10.0);
    MksRenkoGeometry geom = MksGeometryMedian();
    CMksRenkoBuilder b(geom, GetPointer(sizer), GetPointer(sink));
@@ -325,13 +251,13 @@ void Test_BullMultiThreshold()
    MksError err;
    for(int i = 0; i < 2; i++) b.IngestTick(ticks[i], err);
 
-   AssertEqualInt(1, sink.count, "brick count");
-   AssertEqualInt(MKS_BRICK_BULL, (int)sink.bricks[0].direction, "BULL");
-   AssertEqualInt(3, sink.bricks[0].thresholdsCrossed, "M=3");
-   AssertEqualDouble(2000.0, sink.bricks[0].open,  "open");
-   AssertEqualDouble(2015.0, sink.bricks[0].close, "close");
-   AssertEqualDouble(2015.0, sink.bricks[0].triggerPrice, "triggerPrice");
-   AssertEqualDouble(0.0,    sink.bricks[0].Overshoot(),  "overshoot=0");
+   MKS_ASSERT_EQ_INT(1, sink.count, "brick count");
+   MKS_ASSERT_EQ_INT(MKS_BRICK_BULL, (int)sink.bricks[0].direction, "BULL");
+   MKS_ASSERT_EQ_INT(3, sink.bricks[0].thresholdsCrossed, "M=3");
+   MKS_ASSERT_EQ_DOUBLE(2000.0, sink.bricks[0].open,  "open");
+   MKS_ASSERT_EQ_DOUBLE(2015.0, sink.bricks[0].close, "close");
+   MKS_ASSERT_EQ_DOUBLE(2015.0, sink.bricks[0].triggerPrice, "triggerPrice");
+   MKS_ASSERT_EQ_DOUBLE(0.0,    sink.bricks[0].Overshoot(),  "overshoot=0");
 }
 
 //+------------------------------------------------------------------+
@@ -339,13 +265,11 @@ void Test_BullMultiThreshold()
 //+------------------------------------------------------------------+
 void Test_Overshoot()
 {
-   StartTest("07_overshoot");
-
    MksTick ticks[2];
    ticks[0] = MakeTickByMid(2000.0, 1, 1000);
    ticks[1] = MakeTickByMid(2007.0, 2, 2000); // contThr=2005, mid=2007 → close=2005, overshoot=2
 
-   CCapturingSink sink;
+   CMksCapturingSink sink;
    CMksFixedBrickSizer sizer(10.0);
    MksRenkoGeometry geom = MksGeometryMedian();
    CMksRenkoBuilder b(geom, GetPointer(sizer), GetPointer(sink));
@@ -353,12 +277,12 @@ void Test_Overshoot()
    MksError err;
    for(int i = 0; i < 2; i++) b.IngestTick(ticks[i], err);
 
-   AssertEqualInt(1, sink.count, "brick count");
-   AssertEqualDouble(2005.0, sink.bricks[0].close, "close=math threshold");
-   AssertEqualDouble(2007.0, sink.bricks[0].triggerPrice, "triggerPrice=mid");
-   AssertEqualDouble(2.0,    sink.bricks[0].Overshoot(),  "overshoot=2");
-   AssertEqualDouble(2005.0, sink.bricks[0].high, "high=close (no extremo prévio)");
-   AssertEqualDouble(2000.0, sink.bricks[0].low,  "low=open");
+   MKS_ASSERT_EQ_INT(1, sink.count, "brick count");
+   MKS_ASSERT_EQ_DOUBLE(2005.0, sink.bricks[0].close, "close=math threshold");
+   MKS_ASSERT_EQ_DOUBLE(2007.0, sink.bricks[0].triggerPrice, "triggerPrice=mid");
+   MKS_ASSERT_EQ_DOUBLE(2.0,    sink.bricks[0].Overshoot(),  "overshoot=2");
+   MKS_ASSERT_EQ_DOUBLE(2005.0, sink.bricks[0].high, "high=close (no extremo prévio)");
+   MKS_ASSERT_EQ_DOUBLE(2000.0, sink.bricks[0].low,  "low=open");
 }
 
 //+------------------------------------------------------------------+
@@ -366,9 +290,7 @@ void Test_Overshoot()
 //+------------------------------------------------------------------+
 void Test_FormingBrickAfterEmission()
 {
-   StartTest("08_forming_brick_after_emission");
-
-   CCapturingSink sink;
+   CMksCapturingSink sink;
    CMksFixedBrickSizer sizer(10.0);
    MksRenkoGeometry geom = MksGeometryMedian();
    CMksRenkoBuilder b(geom, GetPointer(sizer), GetPointer(sink));
@@ -381,11 +303,11 @@ void Test_FormingBrickAfterEmission()
    b.IngestTick(t2, err);
 
    MksFormingBrick fb = b.GetFormingBrick();
-   AssertTrue(fb.hasData, "hasData");
-   AssertEqualDouble(2005.0, fb.open, "forming open = last close");
-   AssertEqualDouble(2007.0, fb.high, "forming high = MathMax(walkClose, mid)");
-   AssertEqualDouble(2005.0, fb.low,  "forming low  = MathMin(walkClose, mid)");
-   AssertEqualInt(MKS_BRICK_BULL, (int)fb.direction, "forming direction");
+   MKS_ASSERT_TRUE(fb.hasData, "hasData");
+   MKS_ASSERT_EQ_DOUBLE(2005.0, fb.open, "forming open = last close");
+   MKS_ASSERT_EQ_DOUBLE(2007.0, fb.high, "forming high = MathMax(walkClose, mid)");
+   MKS_ASSERT_EQ_DOUBLE(2005.0, fb.low,  "forming low  = MathMin(walkClose, mid)");
+   MKS_ASSERT_EQ_INT(MKS_BRICK_BULL, (int)fb.direction, "forming direction");
 }
 
 //+------------------------------------------------------------------+
@@ -393,29 +315,27 @@ void Test_FormingBrickAfterEmission()
 //+------------------------------------------------------------------+
 void Test_BoundaryGeometry()
 {
-   StartTest("09_boundary_geometry");
-
    // PO/PRO no limite (close to 1.0 strict bound); revSizeRatio=1.0 mantém
    // o degrau de reversão simétrico ao de continuação. O foco do teste é
    // PO/PRO, não o ratio — usa default para reduzir variáveis.
    MksRenkoGeometry g = MksGeometryCustom(0.99, 0.99, 1.0);
    MksError vErr;
-   AssertTrue(g.Validate(vErr), "geom extrema valida");
+   MKS_ASSERT_TRUE(g.Validate(vErr), "geom extrema valida");
 
    // contThr offset = (1-0.99)*10 = 0.1
    MksTick ticks[2];
    ticks[0] = MakeTickByMid(2000.00, 1, 1000);
    ticks[1] = MakeTickByMid(2000.10, 2, 2000); // exatamente no threshold
 
-   CCapturingSink sink;
+   CMksCapturingSink sink;
    CMksFixedBrickSizer sizer(10.0);
    CMksRenkoBuilder b(g, GetPointer(sizer), GetPointer(sink));
 
    MksError err;
    for(int i = 0; i < 2; i++) b.IngestTick(ticks[i], err);
 
-   AssertEqualInt(1, sink.count, "brick count");
-   AssertEqualDouble(2000.10, sink.bricks[0].close, "close no threshold fino");
+   MKS_ASSERT_EQ_INT(1, sink.count, "brick count");
+   MKS_ASSERT_EQ_DOUBLE(2000.10, sink.bricks[0].close, "close no threshold fino");
 }
 
 //+------------------------------------------------------------------+
@@ -423,9 +343,7 @@ void Test_BoundaryGeometry()
 //+------------------------------------------------------------------+
 void Test_InvalidTickGuard()
 {
-   StartTest("10_invalid_tick_guard");
-
-   CCapturingSink sink;
+   CMksCapturingSink sink;
    CMksFixedBrickSizer sizer(10.0);
    MksRenkoGeometry geom = MksGeometryMedian();
    CMksRenkoBuilder b(geom, GetPointer(sizer), GetPointer(sink)); // L=10 default
@@ -433,34 +351,34 @@ void Test_InvalidTickGuard()
    MksError err;
 
    MksTick t1 = MakeTickByMid(2000.0, 1, 1000);
-   AssertTrue(b.IngestTick(t1, err), "valid init returns true");
-   AssertFalse(b.IsStreamCorrupt(), "not corrupt after init");
+   MKS_ASSERT_TRUE(b.IngestTick(t1, err), "valid init returns true");
+   MKS_ASSERT_FALSE(b.IsStreamCorrupt(), "not corrupt after init");
 
    MksTick t2 = MakeTick(2010.0, 2009.0, 2, 2000); // ask < bid
-   AssertFalse(b.IngestTick(t2, err), "invalid returns false");
-   AssertEqualInt(MKS_ERR_RENKO_INVALID_TICK, (int)err.code, "err=103");
-   AssertFalse(b.IsStreamCorrupt(), "not corrupt after 1 invalid");
+   MKS_ASSERT_FALSE(b.IngestTick(t2, err), "invalid returns false");
+   MKS_ASSERT_EQ_INT(MKS_ERR_RENKO_INVALID_TICK, (int)err.code, "err=103");
+   MKS_ASSERT_FALSE(b.IsStreamCorrupt(), "not corrupt after 1 invalid");
 
    MksTick t3 = MakeTickByMid(2005.0, 3, 3000);
-   AssertTrue(b.IngestTick(t3, err), "valid resets counter, emits brick");
-   AssertEqualInt(1, sink.count, "1 brick");
+   MKS_ASSERT_TRUE(b.IngestTick(t3, err), "valid resets counter, emits brick");
+   MKS_ASSERT_EQ_INT(1, sink.count, "1 brick");
 
    for(int i = 0; i < 10; i++)
    {
       MksTick ti = MakeTick(2000.0 + i, 1999.0 + i, (ulong)(4 + i), (long)(4000 + i * 1000));
       bool ok = b.IngestTick(ti, err);
-      AssertFalse(ok, StringFormat("invalid #%d returns false", i + 1));
+      MKS_ASSERT_FALSE(ok, StringFormat("invalid #%d returns false", i + 1));
       if(i < 9)
-         AssertEqualInt(MKS_ERR_RENKO_INVALID_TICK, (int)err.code, StringFormat("invalid #%d err=103", i + 1));
+         MKS_ASSERT_EQ_INT(MKS_ERR_RENKO_INVALID_TICK, (int)err.code, StringFormat("invalid #%d err=103", i + 1));
       else
-         AssertEqualInt(MKS_ERR_RENKO_TICK_STREAM_CORRUPT, (int)err.code, "10th invalid err=104");
+         MKS_ASSERT_EQ_INT(MKS_ERR_RENKO_TICK_STREAM_CORRUPT, (int)err.code, "10th invalid err=104");
    }
 
-   AssertTrue(b.IsStreamCorrupt(), "corrupt após 10 invalids");
+   MKS_ASSERT_TRUE(b.IsStreamCorrupt(), "corrupt após 10 invalids");
 
    MksTick tValid = MakeTickByMid(2010.0, 100, 100000);
-   AssertFalse(b.IngestTick(tValid, err), "post-corrupt valid returns false");
-   AssertEqualInt(MKS_ERR_RENKO_TICK_STREAM_CORRUPT, (int)err.code, "post-corrupt err=104");
+   MKS_ASSERT_FALSE(b.IngestTick(tValid, err), "post-corrupt valid returns false");
+   MKS_ASSERT_EQ_INT(MKS_ERR_RENKO_TICK_STREAM_CORRUPT, (int)err.code, "post-corrupt err=104");
 }
 
 //+------------------------------------------------------------------+
@@ -468,9 +386,7 @@ void Test_InvalidTickGuard()
 //+------------------------------------------------------------------+
 void Test_ThresholdLimitExceeded()
 {
-   StartTest("11_threshold_limit_exceeded");
-
-   CCapturingSink sink;
+   CMksCapturingSink sink;
    CMksFixedBrickSizer sizer(10.0);
    MksRenkoGeometry geom = MksGeometryMedian(); // degrau 5
    CMksRenkoBuilder b(geom, GetPointer(sizer), GetPointer(sink), 10, 20); // K=20
@@ -482,15 +398,15 @@ void Test_ThresholdLimitExceeded()
    // Salto pra cruzar 21 thresholds (5 cada): 2000 + 21*5 = 2105
    MksTick t2 = MakeTickByMid(2105.0, 2, 2000);
    bool ok = b.IngestTick(t2, err);
-   AssertFalse(ok, "K exceeded returns false");
-   AssertEqualInt(MKS_ERR_RENKO_THRESHOLD_LIMIT_EXCEEDED, (int)err.code, "err=102");
-   AssertEqualInt(0, sink.count, "no brick");
+   MKS_ASSERT_FALSE(ok, "K exceeded returns false");
+   MKS_ASSERT_EQ_INT(MKS_ERR_RENKO_THRESHOLD_LIMIT_EXCEEDED, (int)err.code, "err=102");
+   MKS_ASSERT_EQ_INT(0, sink.count, "no brick");
 
    // Tick normal subsequente: estado preservado, deve formar brick
    MksTick t3 = MakeTickByMid(2005.0, 3, 3000);
-   AssertTrue(b.IngestTick(t3, err), "normal tick após K-exceeded works");
-   AssertEqualInt(1, sink.count, "1 brick after recovery");
-   AssertEqualDouble(2005.0, sink.bricks[0].close, "close no threshold esperado");
+   MKS_ASSERT_TRUE(b.IngestTick(t3, err), "normal tick após K-exceeded works");
+   MKS_ASSERT_EQ_INT(1, sink.count, "1 brick after recovery");
+   MKS_ASSERT_EQ_DOUBLE(2005.0, sink.bricks[0].close, "close no threshold esperado");
 }
 
 //+------------------------------------------------------------------+
@@ -498,8 +414,6 @@ void Test_ThresholdLimitExceeded()
 //+------------------------------------------------------------------+
 void Test_ClassicPreset()
 {
-   StartTest("12_classic_preset");
-
    MksRenkoGeometry g = MksGeometryClassic(); // PO=0, PRO=0, revSizeRatio=1
    // S=10 → degrau (1-0)*10 = 10. Body = 10.
 
@@ -508,19 +422,19 @@ void Test_ClassicPreset()
    ticks[1] = MakeTickByMid(2010.0, 2, 2000);
    ticks[2] = MakeTickByMid(2020.0, 3, 3000);
 
-   CCapturingSink sink;
+   CMksCapturingSink sink;
    CMksFixedBrickSizer sizer(10.0);
    CMksRenkoBuilder b(g, GetPointer(sizer), GetPointer(sink));
 
    MksError err;
    for(int i = 0; i < 3; i++) b.IngestTick(ticks[i], err);
 
-   AssertEqualInt(2, sink.count, "brick count");
-   AssertEqualDouble(10.0, MathAbs(sink.bricks[0].close - sink.bricks[0].open), "b0 body = S");
-   AssertEqualDouble(2000.0, sink.bricks[0].open,  "b0 open");
-   AssertEqualDouble(2010.0, sink.bricks[0].close, "b0 close");
-   AssertEqualDouble(2010.0, sink.bricks[1].open,  "b1 open");
-   AssertEqualDouble(2020.0, sink.bricks[1].close, "b1 close");
+   MKS_ASSERT_EQ_INT(2, sink.count, "brick count");
+   MKS_ASSERT_EQ_DOUBLE(10.0, MathAbs(sink.bricks[0].close - sink.bricks[0].open), "b0 body = S");
+   MKS_ASSERT_EQ_DOUBLE(2000.0, sink.bricks[0].open,  "b0 open");
+   MKS_ASSERT_EQ_DOUBLE(2010.0, sink.bricks[0].close, "b0 close");
+   MKS_ASSERT_EQ_DOUBLE(2010.0, sink.bricks[1].open,  "b1 open");
+   MKS_ASSERT_EQ_DOUBLE(2020.0, sink.bricks[1].close, "b1 close");
 }
 
 //+------------------------------------------------------------------+
@@ -528,13 +442,11 @@ void Test_ClassicPreset()
 //+------------------------------------------------------------------+
 void Test_FirstBrickBear()
 {
-   StartTest("13_first_brick_bear");
-
    MksTick ticks[2];
    ticks[0] = MakeTickByMid(2000.0, 1, 1000);
    ticks[1] = MakeTickByMid(1995.0, 2, 2000); // primeiro movimento desce → BEAR
 
-   CCapturingSink sink;
+   CMksCapturingSink sink;
    CMksFixedBrickSizer sizer(10.0);
    MksRenkoGeometry geom = MksGeometryMedian();
    CMksRenkoBuilder b(geom, GetPointer(sizer), GetPointer(sink));
@@ -542,11 +454,11 @@ void Test_FirstBrickBear()
    MksError err;
    for(int i = 0; i < 2; i++) b.IngestTick(ticks[i], err);
 
-   AssertEqualInt(1, sink.count, "brick count");
-   AssertEqualInt(MKS_BRICK_BEAR, (int)sink.bricks[0].direction, "BEAR");
-   AssertEqualInt(1, sink.bricks[0].thresholdsCrossed, "M=1");
-   AssertEqualDouble(2000.0, sink.bricks[0].open,  "open");
-   AssertEqualDouble(1995.0, sink.bricks[0].close, "close");
+   MKS_ASSERT_EQ_INT(1, sink.count, "brick count");
+   MKS_ASSERT_EQ_INT(MKS_BRICK_BEAR, (int)sink.bricks[0].direction, "BEAR");
+   MKS_ASSERT_EQ_INT(1, sink.bricks[0].thresholdsCrossed, "M=1");
+   MKS_ASSERT_EQ_DOUBLE(2000.0, sink.bricks[0].open,  "open");
+   MKS_ASSERT_EQ_DOUBLE(1995.0, sink.bricks[0].close, "close");
 }
 
 //+------------------------------------------------------------------+
@@ -554,40 +466,35 @@ void Test_FirstBrickBear()
 //+------------------------------------------------------------------+
 void Test_FormingBrickBeforeAnyTick()
 {
-   StartTest("14_forming_brick_before_any_tick");
-
-   CCapturingSink sink;
+   CMksCapturingSink sink;
    CMksFixedBrickSizer sizer(10.0);
    MksRenkoGeometry geom = MksGeometryMedian();
    CMksRenkoBuilder b(geom, GetPointer(sizer), GetPointer(sink));
 
    MksFormingBrick fb = b.GetFormingBrick();
-   AssertFalse(fb.hasData, "hasData=false antes de qualquer tick");
+   MKS_ASSERT_FALSE(fb.hasData, "hasData=false antes de qualquer tick");
 }
 
 //+------------------------------------------------------------------+
 void OnStart()
 {
-   g_passed = 0;
-   g_failed = 0;
+   Print("=== Test_CMksRenkoBuilder ===");
 
-   Test_Determinism();
-   Test_BullContinuation();
-   Test_BearContinuation();
-   Test_SimpleReversal();
-   Test_ReversalMultiThreshold();
-   Test_BullMultiThreshold();
-   Test_Overshoot();
-   Test_FormingBrickAfterEmission();
-   Test_BoundaryGeometry();
-   Test_InvalidTickGuard();
-   Test_ThresholdLimitExceeded();
-   Test_ClassicPreset();
-   Test_FirstBrickBear();
-   Test_FormingBrickBeforeAnyTick();
+   MKS_RUN(Test_Determinism);
+   MKS_RUN(Test_BullContinuation);
+   MKS_RUN(Test_BearContinuation);
+   MKS_RUN(Test_SimpleReversal);
+   MKS_RUN(Test_ReversalMultiThreshold);
+   MKS_RUN(Test_BullMultiThreshold);
+   MKS_RUN(Test_Overshoot);
+   MKS_RUN(Test_FormingBrickAfterEmission);
+   MKS_RUN(Test_BoundaryGeometry);
+   MKS_RUN(Test_InvalidTickGuard);
+   MKS_RUN(Test_ThresholdLimitExceeded);
+   MKS_RUN(Test_ClassicPreset);
+   MKS_RUN(Test_FirstBrickBear);
+   MKS_RUN(Test_FormingBrickBeforeAnyTick);
 
-   Print("");
-   PrintFormat("=== %d passed, %d failed ===", g_passed, g_failed);
-   if(g_failed > 0)
-      Alert(StringFormat("Test_CMksRenkoBuilder: %d FAILED", g_failed));
+   g_mksTestRunner.Summary();
 }
+//+------------------------------------------------------------------+
