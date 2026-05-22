@@ -42,14 +42,33 @@
 #include <MKS-ULTIMATE/Core/Interfaces/ISymbol.mqh>
 #include <MKS-ULTIMATE/Core/Interfaces/IAccount.mqh>
 
-input double InpBrickSizePts          = 3.0;   // tamanho do brick em pontos
-input int    InpHistoricalFillDays    = 0;     // 0 = sem fill histórico; >0 = CopyTicksRange(now-N*86400, now)
-input int    InpInvalidTickLimit      = 10;    // L (ADR-006 §5)
-input int    InpThresholdLimit        = 20;    // K (ADR-011 §4)
-input bool   InpPrintBricks           = false; // verbose: imprime cada brick no journal
-input int    InpInvalidLogEvery       = 100;   // rate-limit do log 103: imprime 1 a cada N
-input bool   InpResetCustomSymbolBars = true;  // wipe bars antigas do Custom Symbol no OnInit
-input bool   InpLogToFile             = true;  // grava .log em MKS-ULTIMATE\Logs\ (ADR-007)
+// ADR-022: inputs em grupos. Tipo de geometria selecionável.
+enum ENUM_MKS_GEOMETRY_TYPE
+{
+   MKS_GEOM_MEDIAN  = 0,  // Median Renko (pro/po 0.50/0.50)
+   MKS_GEOM_CLASSIC = 1,  // Classic Renko (pro/po 0.00/0.00)
+   MKS_GEOM_CUSTOM  = 2   // Custom (usa InpPro/InpPo)
+};
+
+input group "=== Brick / Geometria ==="
+input ENUM_MKS_GEOMETRY_TYPE InpGeometryType = MKS_GEOM_MEDIAN; // Tipo (Median/Classic/Custom)
+input double InpBrickSizePts          = 3.0;   // Brick Size (em pontos do símbolo)
+input double InpPro                   = 0.50;  // PRO — só usado se Type = Custom
+input double InpPo                    = 0.50;  // PO  — só usado se Type = Custom
+
+input group "=== Histórico / Live ==="
+input int    InpHistoricalFillDays    = 30;    // Histórico (dias). 0 = só live.
+input int    InpInvalidTickLimit      = 10;    // L: ticks inválidos consecutivos antes de halt (ADR-006)
+input int    InpThresholdLimit        = 20;    // K: máx thresholds em um tick (ADR-011)
+
+input group "=== Custom Symbol ==="
+input bool   InpShowWicksInCS         = false; // Mostrar wicks de excursão no CS (ADR-022 §3)
+input bool   InpResetCustomSymbolBars = true;  // Wipe bars antigas no OnInit
+
+input group "=== Logging ==="
+input bool   InpPrintBricks           = false; // Verbose: imprime cada brick no journal
+input int    InpInvalidLogEvery       = 100;   // Rate-limit do log 103 (1 a cada N)
+input bool   InpLogToFile             = true;  // Grava .log em MKS-ULTIMATE\Logs\ (ADR-007)
 
 string   g_symbol         = "";
 int      g_digits         = 0;
@@ -80,17 +99,62 @@ CMksCustomSymbolSink *g_csSink    = NULL;
 CMksMultiSink        *g_multiSink = NULL;
 
 //+------------------------------------------------------------------+
-//| Nome do Custom Symbol: <symbol>.MKS_RKN<size>.                    |
-//| Decisão de implementação sem ADR (ADR-014 §6 Fronteiras).          |
+//| Nome do Custom Symbol — ADR-022 regra 5.                           |
+//| Formato:                                                            |
+//|   Median/Classic:  <symbol>.MKS_<typeCode>_<sizeStr>                |
+//|   Custom:          <symbol>.MKS_X_<sizeStr>_<proInt>_<poInt>        |
+//| typeCode: M / C / X. sizeStr inteiro quando size é inteiro, senão  |
+//| 2 casas decimais. proInt/poInt = round(pro*100), round(po*100).    |
 //+------------------------------------------------------------------+
-string BuildCustomSymbolName(const string &symbol, double sizePts)
+string BuildCustomSymbolName(const string &symbol,
+                             ENUM_MKS_GEOMETRY_TYPE type,
+                             double sizePts,
+                             double pro,
+                             double po)
 {
    string sizeStr;
    if(MathAbs(sizePts - MathRound(sizePts)) < 1e-9)
       sizeStr = StringFormat("%d", (int)MathRound(sizePts));
    else
       sizeStr = DoubleToString(sizePts, 2);
-   return StringFormat("%s.MKS_RKN%s", symbol, sizeStr);
+
+   string typeCode;
+   switch(type)
+   {
+      case MKS_GEOM_MEDIAN:  typeCode = "M"; break;
+      case MKS_GEOM_CLASSIC: typeCode = "C"; break;
+      case MKS_GEOM_CUSTOM:  typeCode = "X"; break;
+      default:               typeCode = "?"; break;
+   }
+
+   if(type == MKS_GEOM_CUSTOM)
+   {
+      int proInt = (int)MathRound(pro * 100.0);
+      int poInt  = (int)MathRound(po  * 100.0);
+      return StringFormat("%s.MKS_X_%s_%d_%d", symbol, sizeStr, proInt, poInt);
+   }
+   return StringFormat("%s.MKS_%s_%s", symbol, typeCode, sizeStr);
+}
+
+//+------------------------------------------------------------------+
+//| Constrói a MksRenkoGeometry conforme InpGeometryType (ADR-022 §1). |
+//+------------------------------------------------------------------+
+MksRenkoGeometry BuildGeometry(ENUM_MKS_GEOMETRY_TYPE type, double pro, double po)
+{
+   switch(type)
+   {
+      case MKS_GEOM_MEDIAN:  return MksGeometryMedian();
+      case MKS_GEOM_CLASSIC: return MksGeometryClassic();
+      case MKS_GEOM_CUSTOM:
+      {
+         MksRenkoGeometry g;
+         g.pro = pro;
+         g.po  = po;
+         g.revSizeRatio = 1.0;
+         return g;
+      }
+   }
+   return MksGeometryMedian(); // fallback inerte; OnInit aborta antes
 }
 
 //+------------------------------------------------------------------+
@@ -336,14 +400,19 @@ int OnInit()
       return INIT_PARAMETERS_INCORRECT;
    }
 
-   MksRenkoGeometry geom = MksGeometryMedian();
+   // ADR-022: geometry dinâmica via InpGeometryType.
+   MksRenkoGeometry geom = BuildGeometry(InpGeometryType, InpPro, InpPo);
    if(!geom.Validate(err))
    {
       g_logger.Error("Producer", "geometry invalid",
-         StringFormat("\"err\":\"%s\"", MksJsonEscape(err.ToString())));
+         StringFormat("\"type\":%d,\"err\":\"%s\"",
+                      (int)InpGeometryType, MksJsonEscape(err.ToString())));
       Cleanup();
       return INIT_PARAMETERS_INCORRECT;
    }
+   g_logger.Info("Producer", "geometry",
+      StringFormat("\"type\":%d,\"pro\":%.4f,\"po\":%.4f",
+                   (int)InpGeometryType, geom.pro, geom.po));
 
    // Writer com retry de sufixo numérico em caso de colisão (ADR-014 §4).
    // Reutiliza sessionStart já capturado para o log (mesmo timestamp em
@@ -386,7 +455,17 @@ int OnInit()
    // limpa bars antigas (simétrico com ADR-014: sessão nova = histórico
    // limpo). Setado APÓS WriteHeader do .mksbk para que uma falha aqui
    // não bagunce a invariante do writer.
-   g_csName = BuildCustomSymbolName(g_symbol, InpBrickSizePts);
+   // ADR-022: naming carrega tipo + tamanho + pro/po (se Custom).
+   g_csName = BuildCustomSymbolName(g_symbol, InpGeometryType,
+                                    InpBrickSizePts, InpPro, InpPo);
+   if(StringLen(g_csName) > 32)
+   {
+      g_logger.Error("Producer", "custom symbol name exceeds 32 chars",
+         StringFormat("\"name\":\"%s\",\"len\":%d",
+                      MksJsonEscape(g_csName), StringLen(g_csName)));
+      Cleanup();
+      return INIT_PARAMETERS_INCORRECT;
+   }
    g_logger.Info("Producer", "custom symbol",
       StringFormat("\"name\":\"%s\"", MksJsonEscape(g_csName)));
    if(!EnsureCustomSymbolReady(g_csName, g_iSymbol, err))
@@ -416,6 +495,7 @@ int OnInit()
    g_csSink = new CMksCustomSymbolSink();
    g_csSink.csName      = g_csName;
    g_csSink.nextBarTime = g_nextBarTime;
+   g_csSink.showWicks   = InpShowWicksInCS; // ADR-022 regra 3
 
    g_multiSink = new CMksMultiSink();
    g_multiSink.Add(g_sink);
@@ -430,6 +510,22 @@ int OnInit()
    g_builder.SetEmitForming(false);
    RunHistoricalFill(InpHistoricalFillDays);
    g_builder.SetEmitForming(true);
+
+   // ADR-022 §6: abre o chart do CS em M1 automaticamente. Falha não
+   // é fatal — chart é cosmético, framework continua funcionando.
+   long chartId = ChartOpen(g_csName, PERIOD_M1);
+   if(chartId == 0)
+   {
+      g_logger.Warn("Producer", "ChartOpen failed (continues without auto-open)",
+         StringFormat("\"cs\":\"%s\",\"lastErr\":%d",
+                      MksJsonEscape(g_csName), GetLastError()));
+   }
+   else
+   {
+      g_logger.Info("Producer", "cs chart opened",
+         StringFormat("\"cs\":\"%s\",\"chartId\":%I64d",
+                      MksJsonEscape(g_csName), chartId));
+   }
 
    g_logger.Info("Producer", "ready, processing live ticks", "");
    return INIT_SUCCEEDED;

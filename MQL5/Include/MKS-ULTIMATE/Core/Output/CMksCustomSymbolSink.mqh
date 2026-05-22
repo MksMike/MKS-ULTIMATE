@@ -35,6 +35,8 @@ public:
    datetime nextBarTime;
    int      barsPushed;
    int      updateFailures;
+   bool     showWicks;     // ADR-022 regra 3: false (default) = caixinhas;
+                           // true = wicks de excursão preservados no CS
 
    CMksCustomSymbolSink()
    {
@@ -42,6 +44,7 @@ public:
       nextBarTime    = 0;
       barsPushed     = 0;
       updateFailures = 0;
+      showWicks      = false;
    }
 
    void OnBrickClose(const MksBrick &brick) override
@@ -50,10 +53,19 @@ public:
       MqlRates rates[1];
       rates[0].time        = nextBarTime;
       rates[0].open        = brick.open;
-      // ADR-020 regra 3: bricks no CS são caixinhas puras, sem wicks.
-      // .mksbk preserva brick.high/brick.low (excursão intra-brick).
-      rates[0].high        = MathMax(brick.open, brick.close);
-      rates[0].low         = MathMin(brick.open, brick.close);
+      // ADR-020 regra 3 + ADR-022 regra 3: bricks no CS são caixinhas
+      // sem wicks por default; com showWicks=true, propaga excursão
+      // intra-brick. .mksbk sempre preserva brick.high/brick.low.
+      if(showWicks)
+      {
+         rates[0].high = brick.high;
+         rates[0].low  = brick.low;
+      }
+      else
+      {
+         rates[0].high = MathMax(brick.open, brick.close);
+         rates[0].low  = MathMin(brick.open, brick.close);
+      }
       rates[0].close       = brick.close;
       rates[0].tick_volume = brick.thresholdsCrossed; // não é volume real
       rates[0].spread      = 0;
