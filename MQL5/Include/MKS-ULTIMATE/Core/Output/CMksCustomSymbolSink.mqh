@@ -33,6 +33,7 @@ class CMksCustomSymbolSink : public IRenkoSink
 public:
    string   csName;
    datetime nextBarTime;
+   double   brickSizePts;  // ADR-022 regra 8: tamanho VISUAL full do brick
    int      barsPushed;
    int      updateFailures;
    bool     showWicks;     // ADR-022 regra 3: false (default) = caixinhas;
@@ -42,6 +43,7 @@ public:
    {
       csName         = "";
       nextBarTime    = 0;
+      brickSizePts   = 0.0;
       barsPushed     = 0;
       updateFailures = 0;
       showWicks      = false;
@@ -51,11 +53,23 @@ public:
    {
       if(StringLen(csName) == 0) return;
       MqlRates rates[1];
-      rates[0].time        = nextBarTime;
-      rates[0].open        = brick.open;
-      // ADR-020 regra 3 + ADR-022 regra 3: bricks no CS são caixinhas
-      // sem wicks por default; com showWicks=true, propaga excursão
-      // intra-brick. .mksbk sempre preserva brick.high/brick.low.
+      rates[0].time = nextBarTime;
+
+      // ADR-022 regra 8: bricks no CS têm tamanho VISUAL full (=
+      // brickSizePts), independentemente de PO/PRO. close visual =
+      // open ± size na direção. Reproduz visual Median Renko V5
+      // (sobreposição = PO*size). Fallback: se brickSizePts não foi
+      // configurado (0), usa close matemático (modo legado).
+      double visualClose = brick.close;
+      if(brickSizePts > 0.0)
+         visualClose = brick.open + (brick.IsBull() ? brickSizePts : -brickSizePts);
+
+      rates[0].open  = brick.open;
+      rates[0].close = visualClose;
+
+      // ADR-020 regra 3 + ADR-022 regra 3: caixinhas sem wicks por
+      // default; showWicks=true propaga excursão intra-brick.
+      // .mksbk sempre preserva brick.high/brick.low.
       if(showWicks)
       {
          rates[0].high = brick.high;
@@ -63,10 +77,9 @@ public:
       }
       else
       {
-         rates[0].high = MathMax(brick.open, brick.close);
-         rates[0].low  = MathMin(brick.open, brick.close);
+         rates[0].high = MathMax(brick.open, visualClose);
+         rates[0].low  = MathMin(brick.open, visualClose);
       }
-      rates[0].close       = brick.close;
       rates[0].tick_volume = brick.thresholdsCrossed; // não é volume real
       rates[0].spread      = 0;
       rates[0].real_volume = 0;

@@ -493,9 +493,10 @@ int OnInit()
    g_sink.digits      = g_digits;
 
    g_csSink = new CMksCustomSymbolSink();
-   g_csSink.csName      = g_csName;
-   g_csSink.nextBarTime = g_nextBarTime;
-   g_csSink.showWicks   = InpShowWicksInCS; // ADR-022 regra 3
+   g_csSink.csName       = g_csName;
+   g_csSink.nextBarTime  = g_nextBarTime;
+   g_csSink.brickSizePts = InpBrickSizePts;  // ADR-022 regra 8
+   g_csSink.showWicks    = InpShowWicksInCS; // ADR-022 regra 3
 
    g_multiSink = new CMksMultiSink();
    g_multiSink.Add(g_sink);

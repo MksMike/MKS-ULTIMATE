@@ -1374,6 +1374,8 @@ O Producer ganha configurabilidade rica via inputs nativos do MQL5 (popup ao arr
 
 7. **Inputs organizados em grupos via `input group`** (recurso MQL5 build 3000+): "Brick", "Risco/Volatilidade", "Histórico/Live", "Logging", "Custom Symbol". Tooltips em cada input. Popup nativo do MT5 ao arrastar EA já é a "caixa de configuração" do V5 — não há janela customizada (decisão pragmática registrada).
 
+8. **CS renderiza bricks com tamanho visual FULL** (= `InpBrickSizePts`), independentemente do `PO`/`PRO` da geometria. Especificamente, o `CMksCustomSymbolSink.OnBrickClose` desenha bar com `open = brick.open`, `close = brick.open ± InpBrickSizePts` (sinal pela direção). Isso reproduz o visual Median Renko tradicional do V5 — bricks de tamanho cheio com sobreposição igual a `PO*size` no eixo de preço. O `.mksbk` continua gravando `brick.close = open + (1-PO)*size` (close matemático, ADR-010). Divergência deliberada entre CS (visual) e `.mksbk` (matemática) — coerente com ADR-020 regra 1 (CS é só visualização humana, código de lógica consome `.mksbk` ou direto do builder, não o CS). Para Classic (`PO=0`), visual = matemático (sem diferença). Para Median (`PO=0.5`) e Custom (`PO>0`), visual estende além do matemático.
+
 **Alternativas consideradas:**
 
 - **Janela customizada com `ChartObjectCreate`/`EditCreate`** (popup próprio): rejeitada. ~500 linhas de UI code MQL5, frágil entre versões do MT5, e o popup nativo já cobre o caso. Investimento alto, retorno baixo.
