@@ -1081,7 +1081,7 @@ O MKS-ULTIMATE adota um framework próprio mínimo de testes em `MQL5/Include/MK
 ### ADR-019: Ordem de construção `PositionSizer → RiskManager → TradeManager`
 
 **Data:** 2026-05-22
-**Status:** Proposta
+**Status:** Aceita
 
 **Contexto:**
 O `ROADMAP.md` na sua forma original lista as fases pendentes do core na ordem **Fase 5 (Trade Management) → Fase 6 (Risk Management) → Fase 7 (StressLab)**. A Fase 5 agrega dois componentes em um pacote único: `CMksTradeManager` (BE, trailing, partial close, state machine) e `CMksPositionSizer` (4 modos de sizing). A "regra de ouro" no topo do `ROADMAP.md` é explícita: "nenhuma fase começa antes da anterior ter todos os critérios de saída cumpridos. Pular fases foi um erro do V5 e não se repete aqui".
@@ -1116,6 +1116,8 @@ A ordem real de construção será **`CMksPositionSizer` → `CMksRiskManager` �
 - **(d) Construir `PositionSizer` como detalhe interno do `RiskManager` (sem classe própria).** Rejeitada. `PositionSizer` é consumido também pela estratégia diretamente — ela calcula `lots` antes de montar `OrderRequest` para passar pela rede de Risk. Esconder dentro do Risk obriga a estratégia a chamar Risk só pra obter sizing, acoplando demais. Manter como classe própria em `Core/Trade/CMksPositionSizer.mqh` preserva a separação Trade/Risk.
 
 **Consequências:**
+
+- **Cláusula anti-precedente.** Sub-dividir uma fase do `ROADMAP.md` em sub-slices fora da ordem original é permitido **apenas via ADR própria**, nunca como prática informal ou nota de commit. Sem isso, a "regra de ouro" perde força com cada exceção bem-intencionada. Esta ADR-019 cria o primeiro precedente; futuras sub-divisões reaproveitam a forma (ADR justificando + sub-letras na fase) ou não acontecem.
 
 - **`ROADMAP.md` ganha nota na Fase 5** dizendo que ela está sub-dividida (5a/Sizer, 5b/TradeManager) e que 5a vem antes da Fase 6, 5b depois. Não altera entregáveis, só a sequência interna.
 

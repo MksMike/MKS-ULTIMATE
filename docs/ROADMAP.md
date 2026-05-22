@@ -152,6 +152,8 @@ Este documento define **o que construir e em que ordem**. Cada fase tem entregá
 
 **Status:** Não iniciada
 
+**Nota (ADR-019):** A fase está sub-dividida em **5a (`CMksPositionSizer`)** e **5b (`CMksTradeManager`)**. Sequência real: **5a → Fase 6 → 5b**. Razão: o Risk Manager (Fase 6) consome o Sizer; construir o Risk antes do TradeManager faz a rede de segurança nascer antes do gatilho. Cláusula anti-precedente: outras sub-divisões de fase só são permitidas via ADR própria.
+
 **Entregáveis:**
 - `Core/Trade/CMksTradeManager.mqh` — gestão de trade aberto
   - Break-even
