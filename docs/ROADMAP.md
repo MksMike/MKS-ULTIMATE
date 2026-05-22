@@ -97,9 +97,9 @@ Este documento define **o que construir e em que ordem**. Cada fase tem entregá
 
 ## Fase 3 — Testes unitários do core
 
-**Status:** Parcialmente concluída
+**Status:** Concluída
 
-**Nota:** Cobertura de testes existe e passa — 648 assertions distribuídas entre `Test_CMksRenkoBuilder` (428), `Test_CMksBrickFile` (97), `Test_CMksAtrBrickSizer` (72) e `Test_CMksSimulatedBroker` (51). Porém, os testes usam asserções inline; o critério de framework formal em `Core/Testing/` permanece aberto e depende da ADR-005.
+**Nota:** Framework formal `Core/Testing/` materializado e validado empiricamente em 2026-05-22 (ADR-005 aceita). Inventário: `Asserts.mqh` (macros `MKS_ASSERT_*` com `__FILE__:__LINE__`), `TestRunner.mqh` (registro automático via `MKS_RUN(#funcname)`, summary com Alert em falha), mocks (`CMksCapturingSink`, `CMksFakeSymbol`, `CMksFakeAccount`). As 4 suítes pré-existentes foram migradas (redução de -55% a -67% em linhas) + smoke test do próprio framework. Total atual: **648/648 assertions** em **41 tests** + smoke. Detalhes em `docs/CHECKPOINT-2026-05-22.md`.
 
 **Entregáveis:**
 - Estrutura de testes em `tests/` (formato a decidir — pode ser scripts `.mq5` que rodam asserções, ou infra externa)
@@ -218,7 +218,9 @@ Este documento define **o que construir e em que ordem**. Cada fase tem entregá
 
 ## Fase 8 — Logging e observabilidade
 
-**Status:** Não iniciada
+**Status:** Parcialmente concluída
+
+**Nota:** `CMksLogger` (`Core/Log/CMksLogger.mqh`) materializado via ADR-007 e em uso no `Producer.mq5` desde slice3b. Cobre: formato JSON-line, níveis TRACE/DEBUG/INFO/WARN/ERROR + META, output dual (Print + arquivo), header de sessão com proveniência (broker/account/symbol/digits/EA/sessionStartMsc), timestamp ISO 8601 UTC, contexto livre via `ctxJson` parametrizável. Pendente para Concluir: **ferramenta de log-diff** que compara um log de backtest com um de live e aponta a primeira divergência (último item do critério de saída abaixo).
 
 **Entregáveis:**
 - `Core/Log/CMksLogger.mqh` — logger estruturado
