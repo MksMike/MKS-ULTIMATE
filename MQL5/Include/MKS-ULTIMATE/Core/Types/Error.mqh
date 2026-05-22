@@ -31,7 +31,12 @@ enum ENUM_MKS_ERROR_CODE
    MKS_ERR_BROKER_RETRY_EXHAUSTED = 202,   // tentativas esgotadas em retcode retryable
    MKS_ERR_BROKER_NOT_INITIALIZED = 203,   // Send/Close chamado antes de Init
 
-   //--- Trade 300–399, Risk 400–499, StressLab 500–599 — ver ADR-009
+   //--- Trade: faixa 300–399 — ver ADR-009, ADR-019 ---
+   MKS_ERR_TRADE_SIZER_INVALID_PARAM = 300, // configuração do sizer inválida (riskPct<=0, fixedLots<=0)
+   MKS_ERR_TRADE_SIZER_OUT_OF_RANGE = 301,  // lots calculado fora de [VolumeMin, VolumeMax]
+   MKS_ERR_TRADE_SIZER_INVALID_INPUT = 302, // input em ComputeLots inválido (slDistance<=0, balance<=0, etc.)
+
+   //--- Risk 400–499, StressLab 500–599 — ver ADR-009
 
    //--- Log: faixa 600–699 — ver ADR-007 ---
    MKS_ERR_LOG_FILE_IO = 600,              // falha de I/O do logger (open/write/close)
