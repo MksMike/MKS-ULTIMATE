@@ -48,9 +48,9 @@ data/processed/
 *.csv.backup
 
 # Material de referência local — não vai pro repo público
-# (V5 = projeto antigo do dono; Renko-MQL5 = referência community MQL5;
+# (Renko-MQL5 = referência community MQL5;
 #  Renko-Ultimate = sub-pasta com code-review V5)
-V5/
+# V5 foi promovido para reference/V5/ — agora no repo.
 RENKO-MQL5/
 Renko-MQL5/
 Renko-Ultimate/
