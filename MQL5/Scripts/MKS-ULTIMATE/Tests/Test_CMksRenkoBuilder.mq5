@@ -16,6 +16,7 @@
 
 #include <MKS-ULTIMATE/Core/RenkoBuilder/CMksRenkoBuilder.mqh>
 #include <MKS-ULTIMATE/Core/RenkoBuilder/CMksFixedBrickSizer.mqh>
+#include <MKS-ULTIMATE/Core/Output/CMksMultiSink.mqh>
 #include <MKS-ULTIMATE/Core/Testing/Asserts.mqh>
 #include <MKS-ULTIMATE/Core/Testing/Mocks/CMksCapturingSink.mqh>
 #include <MKS-ULTIMATE/Core/Types/RenkoGeometry.mqh>
@@ -584,6 +585,32 @@ void Test_OnBrickForming_ReEnabledByFlag()
 }
 
 //+------------------------------------------------------------------+
+//| Regressão: builder com MultiSink propaga OnBrickForming para     |
+//| TODOS os sinks contidos. Cobre bug encontrado em 2026-05-22 onde |
+//| MultiSink herdava o default vazio do IRenkoSink em vez de        |
+//| delegar (ADR-021).                                                |
+//+------------------------------------------------------------------+
+void Test_OnBrickForming_PropagatesThroughMultiSink()
+{
+   CMksCapturingSink sinkA, sinkB;
+   CMksMultiSink multi;
+   multi.Add(GetPointer(sinkA));
+   multi.Add(GetPointer(sinkB));
+   CMksFixedBrickSizer sizer(5.0);
+   MksRenkoGeometry geom = MksGeometryMedian();
+   CMksRenkoBuilder b(geom, GetPointer(sizer), GetPointer(multi));
+   MksError err;
+   b.IngestTick(MakeTickByMid(2000.0, 1, 1000), err);
+   b.IngestTick(MakeTickByMid(2001.0, 2, 1100), err);
+   b.IngestTick(MakeTickByMid(2002.0, 3, 1200), err);
+   MKS_ASSERT_EQ_INT(3, sinkA.formingCount, "sinkA recebe 3 formings");
+   MKS_ASSERT_EQ_INT(3, sinkB.formingCount, "sinkB recebe 3 formings");
+   MKS_ASSERT_NEAR_DOUBLE(sinkA.formings[2].currentMid,
+                          sinkB.formings[2].currentMid, 1e-9,
+                          "ambos os sinks recebem mesmo fb");
+}
+
+//+------------------------------------------------------------------+
 //| Quando um tick fecha brick, OnBrickClose vem antes; OnBrickForming|
 //| vem depois e reflete o NOVO state (open = close do brick fechado).|
 //+------------------------------------------------------------------+
@@ -630,6 +657,7 @@ void OnStart()
    MKS_RUN(Test_OnBrickForming_CurrentMidReflectsLastTick);
    MKS_RUN(Test_OnBrickForming_SuppressedWhenDisabled);
    MKS_RUN(Test_OnBrickForming_ReEnabledByFlag);
+   MKS_RUN(Test_OnBrickForming_PropagatesThroughMultiSink);
    MKS_RUN(Test_OnBrickForming_EmittedAfterBrickClose);
 
    g_mksTestRunner.Summary();
