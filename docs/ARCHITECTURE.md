@@ -1246,7 +1246,7 @@ O Custom Symbol no MKS-ULTIMATE é exclusivamente **camada de visualização hum
 ### ADR-021: Bar parcial do brick em formação no Custom Symbol
 
 **Data:** 2026-05-22
-**Status:** Proposta
+**Status:** Aceita
 **Relação com ADR-020:** Substitui parcialmente as regras 2 e 4. ADR-020 permanece Aceita; ADR-021 estende.
 
 **Contexto:**
@@ -1275,7 +1275,9 @@ O Custom Symbol passa a receber a **bar do brick em formação** a cada tick pro
 
 3. **`IRenkoSink` ganha método `OnBrickForming(const MksFormingBrick &fb)`** como `virtual` com corpo default vazio (NÃO pure virtual). Sinks que não precisam (writer, capturing-sink dos testes existentes) seguem ignorando silenciosamente. Apenas `CMksCustomSymbolSink` implementa.
 
-4. **`CMksRenkoBuilder.IngestTick`** ao final de toda chamada bem-sucedida (inclusive em ticks que fecharam brick e dispararam `OnBrickClose`) chama `m_sink.OnBrickForming(GetFormingBrick())`. A ordem é: primeiro `OnBrickClose` (se brick fechou nesse tick, dispara dentro do `IngestTick` como hoje), depois `OnBrickForming` ao fim do `IngestTick`. Nunca há race — sequência síncrona dentro de uma única chamada.
+4. **`CMksRenkoBuilder.IngestTick`** ao final de toda chamada bem-sucedida (inclusive em ticks que fecharam brick e dispararam `OnBrickClose`) chama `m_sink.OnBrickForming(GetFormingBrick())` — **mas apenas quando a flag interna `m_emitForming` está em `true`**. A ordem é: primeiro `OnBrickClose` (se brick fechou nesse tick, dispara dentro do `IngestTick` como hoje), depois `OnBrickForming` ao fim do `IngestTick`. Nunca há race — sequência síncrona dentro de uma única chamada.
+
+   **Flag `m_emitForming` default `true`.** O builder expõe `SetEmitForming(bool)` para o composition root controlar. Uso esperado: o EA (Producer) chama `builder.SetEmitForming(false)` antes de `RunHistoricalFill` (que processa centenas de milhares ou milhões de ticks), e `builder.SetEmitForming(true)` depois — assim o fill histórico não dispara `CustomRatesUpdate` por tick (que travaria o terminal por minutos). Em live, OnBrickForming é emitido normalmente.
 
 5. **`MksFormingBrick` ganha campo `currentMid` (double).** Carrega o último `mid` observado pelo builder. Permite ao sink desenhar `close` da bar parcial igual ao preço atual. Antes do primeiro tick, `currentMid == 0.0` e `hasData == false` (sink ignora).
 
@@ -1307,7 +1309,11 @@ O Custom Symbol passa a receber a **bar do brick em formação** a cada tick pro
 
 - **`CMksRenkoBuilder` armazena `m_lastMid`** (`double`), atualizado a cada `IngestTick` válido. `GetFormingBrick().currentMid = m_lastMid`.
 
-- **`CMksRenkoBuilder.IngestTick`** ganha 1 linha ao final: `if(m_sink != NULL) m_sink.OnBrickForming(GetFormingBrick());`. Chamado SEMPRE — em ticks válidos que fecharam brick, em ticks válidos que não fecharam, e em ticks inválidos? Decisão: **apenas em ticks válidos** (após a guarda de invalidação retornar OK). Tick inválido não atualiza estado interno do builder, não faz sentido emitir forming sobre estado obsoleto.
+- **`CMksRenkoBuilder` ganha membro `m_emitForming` (`bool`, default `true`)** + método público `SetEmitForming(bool v)`. Permite ao composition root suprimir o broadcast de forming sem mexer em sink.
+
+- **`CMksRenkoBuilder.IngestTick`** ganha 1 linha ao final: `if(m_emitForming && m_sink != NULL) m_sink.OnBrickForming(GetFormingBrick());`. Chamado SEMPRE — em ticks válidos que fecharam brick, em ticks válidos que não fecharam, e em ticks inválidos? Decisão: **apenas em ticks válidos** (após a guarda de invalidação retornar OK). Tick inválido não atualiza estado interno do builder, não faz sentido emitir forming sobre estado obsoleto.
+
+- **`Producer.mq5` integra o ciclo de fill histórico**: chama `g_builder.SetEmitForming(false)` antes de `RunHistoricalFill(InpHistoricalFillDays)` e `SetEmitForming(true)` depois. Apenas o último `OnBrickForming` (após o último tick processado em live) reflete o estado final — o fill histórico não toca o CS para bar parcial.
 
 - **`IRenkoSink.OnBrickForming`** novo método virtual default vazio. Sinks existentes (`CMksBrickWriterSink`, `CMksCapturingSink`, `CMksFakeSymbol`, etc.) **não precisam mudar**.
 
