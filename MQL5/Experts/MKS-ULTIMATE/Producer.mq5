@@ -12,12 +12,14 @@
 //| @depends_on     : Core/RenkoBuilder/CMksRenkoBuilder.mqh,
 //|                   Core/RenkoBuilder/CMksFixedBrickSizer.mqh,
 //|                   Core/Data/CMksBrickFileWriter.mqh,
+//|                   Core/Data/CMksBrickWriterSink.mqh,
+//|                   Core/Output/CMksCustomSymbolSink.mqh,
+//|                   Core/Output/CMksMultiSink.mqh,
 //|                   Core/Log/CMksLogger.mqh,
 //|                   Core/Symbol/CMksMt5Symbol.mqh,
 //|                   Core/Account/CMksMt5Account.mqh,
 //|                   Core/Types/RenkoGeometry.mqh, Core/Types/Tick.mqh,
 //|                   Core/Types/Brick.mqh, Core/Types/Error.mqh,
-//|                   Core/Interfaces/IRenkoSink.mqh,
 //|                   Core/Interfaces/ISymbol.mqh,
 //|                   Core/Interfaces/IAccount.mqh
 //| @install_path   : MQL5/Experts/MKS-ULTIMATE/Producer.mq5
@@ -27,6 +29,9 @@
 #include <MKS-ULTIMATE/Core/RenkoBuilder/CMksRenkoBuilder.mqh>
 #include <MKS-ULTIMATE/Core/RenkoBuilder/CMksFixedBrickSizer.mqh>
 #include <MKS-ULTIMATE/Core/Data/CMksBrickFileWriter.mqh>
+#include <MKS-ULTIMATE/Core/Data/CMksBrickWriterSink.mqh>
+#include <MKS-ULTIMATE/Core/Output/CMksCustomSymbolSink.mqh>
+#include <MKS-ULTIMATE/Core/Output/CMksMultiSink.mqh>
 #include <MKS-ULTIMATE/Core/Log/CMksLogger.mqh>
 #include <MKS-ULTIMATE/Core/Symbol/CMksMt5Symbol.mqh>
 #include <MKS-ULTIMATE/Core/Account/CMksMt5Account.mqh>
@@ -34,7 +39,6 @@
 #include <MKS-ULTIMATE/Core/Types/Tick.mqh>
 #include <MKS-ULTIMATE/Core/Types/Brick.mqh>
 #include <MKS-ULTIMATE/Core/Types/Error.mqh>
-#include <MKS-ULTIMATE/Core/Interfaces/IRenkoSink.mqh>
 #include <MKS-ULTIMATE/Core/Interfaces/ISymbol.mqh>
 #include <MKS-ULTIMATE/Core/Interfaces/IAccount.mqh>
 
@@ -70,137 +74,10 @@ CMksLogger           *g_logger   = NULL;
 ISymbol              *g_iSymbol  = NULL;
 IAccount             *g_iAccount = NULL;
 
-//+------------------------------------------------------------------+
-//| Sink: encaminha cada brick fechado para o writer e contabiliza.   |
-//+------------------------------------------------------------------+
-class CBrickWriterSink : public IRenkoSink
-{
-public:
-   CMksBrickFileWriter *writer;
-   int  bricksWritten;
-   int  writeFailures;
-   bool printBricks;
-   int  digits;
-
-   CBrickWriterSink()
-   {
-      writer = NULL;
-      bricksWritten = 0;
-      writeFailures = 0;
-      printBricks = false;
-      digits = 2;
-   }
-
-   void OnBrickClose(const MksBrick &brick) override
-   {
-      if(writer == NULL) return;
-      MksError err;
-      if(!writer.WriteBrick(brick, err))
-      {
-         writeFailures++;
-         PrintFormat("WRITE FAIL: %s", err.ToString());
-         return;
-      }
-      bricksWritten++;
-      if(printBricks)
-      {
-         PrintFormat("BRICK %s open=%s close=%s M=%d trigger=%s time=%s",
-                     brick.IsBull() ? "BULL" : "BEAR",
-                     DoubleToString(brick.open, digits),
-                     DoubleToString(brick.close, digits),
-                     brick.thresholdsCrossed,
-                     DoubleToString(brick.triggerPrice, digits),
-                     TimeToString((datetime)(brick.closeTimeMsc / 1000),
-                                  TIME_DATE|TIME_SECONDS));
-      }
-   }
-};
-
-CBrickWriterSink *g_sink = NULL;
-
-//+------------------------------------------------------------------+
-//| Sink: empurra cada brick como uma barra no Custom Symbol.         |
-//| Usa slot M1 monotônico (+60s por brick) para evitar colisão de    |
-//| timestamp — CustomRatesUpdate sobrescreve bars com mesmo time.    |
-//| Tempo da bar é índice ordenador, não tempo real do brick.         |
-//+------------------------------------------------------------------+
-class CCustomSymbolSink : public IRenkoSink
-{
-public:
-   string   csName;
-   datetime nextBarTime;
-   int      barsPushed;
-   int      updateFailures;
-
-   CCustomSymbolSink()
-   {
-      csName         = "";
-      nextBarTime    = 0;
-      barsPushed     = 0;
-      updateFailures = 0;
-   }
-
-   void OnBrickClose(const MksBrick &brick) override
-   {
-      if(StringLen(csName) == 0) return;
-      MqlRates rates[1];
-      rates[0].time        = nextBarTime;
-      rates[0].open        = brick.open;
-      rates[0].high        = brick.high;
-      rates[0].low         = brick.low;
-      rates[0].close       = brick.close;
-      rates[0].tick_volume = brick.thresholdsCrossed; // não é volume real
-      rates[0].spread      = 0;
-      rates[0].real_volume = 0;
-      int n = CustomRatesUpdate(csName, rates);
-      if(n < 0)
-      {
-         updateFailures++;
-         PrintFormat("CS UPDATE FAIL: lastErr=%d", GetLastError());
-      }
-      else
-      {
-         barsPushed++;
-      }
-      nextBarTime = (datetime)((long)nextBarTime + 60);
-   }
-};
-
-CCustomSymbolSink *g_csSink = NULL;
-
-//+------------------------------------------------------------------+
-//| Sink composto: delega OnBrickClose a múltiplos sinks reais.       |
-//| Não possui os sinks — apenas os referencia. Cleanup deleta cada   |
-//| sink real separadamente.                                          |
-//+------------------------------------------------------------------+
-class CMultiSink : public IRenkoSink
-{
-public:
-   IRenkoSink *sinks[];
-   int         count;
-
-   CMultiSink()
-   {
-      count = 0;
-   }
-
-   void Add(IRenkoSink *sink)
-   {
-      if(sink == NULL) return;
-      ArrayResize(sinks, count + 1);
-      sinks[count] = sink;
-      count++;
-   }
-
-   void OnBrickClose(const MksBrick &brick) override
-   {
-      for(int i = 0; i < count; i++)
-         if(sinks[i] != NULL)
-            sinks[i].OnBrickClose(brick);
-   }
-};
-
-CMultiSink *g_multiSink = NULL;
+// Sinks extraídos para Core/Output/ e Core/Data/ (ADR-020 §Consequências).
+CMksBrickWriterSink  *g_sink      = NULL;
+CMksCustomSymbolSink *g_csSink    = NULL;
+CMksMultiSink        *g_multiSink = NULL;
 
 //+------------------------------------------------------------------+
 //| Nome do Custom Symbol: <symbol>.MKS_RKN<size>.                    |
@@ -531,16 +408,16 @@ int OnInit()
 
    // Sinks: writer (.mksbk) + Custom Symbol (chart). Agregados via
    // multiSink, que apenas referencia — Cleanup deleta cada um.
-   g_sink = new CBrickWriterSink();
+   g_sink = new CMksBrickWriterSink();
    g_sink.writer      = g_writer;
    g_sink.printBricks = InpPrintBricks;
    g_sink.digits      = g_digits;
 
-   g_csSink = new CCustomSymbolSink();
+   g_csSink = new CMksCustomSymbolSink();
    g_csSink.csName      = g_csName;
    g_csSink.nextBarTime = g_nextBarTime;
 
-   g_multiSink = new CMultiSink();
+   g_multiSink = new CMksMultiSink();
    g_multiSink.Add(g_sink);
    g_multiSink.Add(g_csSink);
 
