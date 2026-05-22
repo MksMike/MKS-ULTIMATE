@@ -4,10 +4,11 @@
 //| @module         : Core / Output
 //| @responsibility : Sink que empurra cada brick fechado como uma
 //|                   barra no Custom Symbol via CustomRatesUpdate.
-//|                   Timestamp M1 fictício monotônico (ADR-020 regra 4).
-//|                   ATENÇÃO: esta versão preserva wicks (extração
-//|                   sem mudança comportamental). ADR-020 regra 3
-//|                   é aplicada em commit subsequente.
+//|                   Conforme ADR-020 regra 3, o CS recebe bricks
+//|                   SEM wicks (caixinhas sólidas — high=max(open,close),
+//|                   low=min(open,close)). Info de excursão fica no
+//|                   .mksbk via CMksBrickWriterSink. Timestamp M1
+//|                   fictício monotônico (ADR-020 regra 4).
 //| @depends_on     : Core/Interfaces/IRenkoSink.mqh, Core/Types/Brick.mqh
 //| @install_path   : MQL5/Include/MKS-ULTIMATE/Core/Output/CMksCustomSymbolSink.mqh
 //+------------------------------------------------------------------+
@@ -48,8 +49,10 @@ public:
       MqlRates rates[1];
       rates[0].time        = nextBarTime;
       rates[0].open        = brick.open;
-      rates[0].high        = brick.high;
-      rates[0].low         = brick.low;
+      // ADR-020 regra 3: bricks no CS são caixinhas puras, sem wicks.
+      // .mksbk preserva brick.high/brick.low (excursão intra-brick).
+      rates[0].high        = MathMax(brick.open, brick.close);
+      rates[0].low         = MathMin(brick.open, brick.close);
       rates[0].close       = brick.close;
       rates[0].tick_volume = brick.thresholdsCrossed; // não é volume real
       rates[0].spread      = 0;
