@@ -1243,6 +1243,98 @@ O Custom Symbol no MKS-ULTIMATE é exclusivamente **camada de visualização hum
 
 ---
 
+### ADR-021: Bar parcial do brick em formação no Custom Symbol
+
+**Data:** 2026-05-22
+**Status:** Proposta
+**Relação com ADR-020:** Substitui parcialmente as regras 2 e 4. ADR-020 permanece Aceita; ADR-021 estende.
+
+**Contexto:**
+ADR-020 fixou que o Custom Symbol recebe 1 bar OHLC por brick fechado (regra 2 + 4), via `CustomRatesUpdate`, sem tick stream populado. Após validação visual empírica (chart M1 do CS com bars sem wicks, em 2026-05-22), o usuário reportou:
+
+> O brick atual deveria ter uma linha ask ou bid igual ao M1 normal, mostrando o brick em formação.
+
+O efeito observado: no chart do CS, enquanto um brick está se formando (preço se movendo dentro dos limites do brick atual), **nada aparece**. A última bar visível é o último brick fechado. Em comparação, no chart M1 normal o último candle "cresce" tick a tick — comportamento esperado em qualquer plataforma de trading.
+
+O builder atual já rastreia o brick em formação internamente (`m_formingHigh`/`m_formingLow`, getter `GetFormingBrick()` retornando `MksFormingBrick`). Não há nenhum mecanismo que propague esse estado para sinks — apenas bricks FECHADOS disparam `IRenkoSink::OnBrickClose`.
+
+Três caminhos foram considerados:
+
+- **(α) Template `.tpl` com linha bid do CS visível.** Inútil porque o "bid do CS" é o close do último brick fechado — fica imóvel entre bricks. Rejeitada.
+- **(β) Indicador customizado lendo `SymbolInfoTick(símbolo_base)`.** Preserva ADR-020 intacta; desenha o preço real do mercado sobreposto ao chart do CS. Defendível, mas perde o "feel" do candle se formando.
+- **(γ) Push de bar parcial no CS via `CustomRatesUpdate` a cada tick.** Visualmente fica igual ao M1 normal. Substitui parcialmente regras 2 e 4 da ADR-020. **Caminho escolhido.**
+
+**Decisão:**
+O Custom Symbol passa a receber a **bar do brick em formação** a cada tick processado pelo builder. As regras 2 e 4 da ADR-020 são substituídas parcialmente; o resto da ADR-020 (regra 1, 3, 5, 6, 7, 8, 9) permanece intacto.
+
+1. **Regra 2 (substituída):** `CustomRatesUpdate` continua sendo o canal de atualização do CS — `CustomTicksAdd` segue rejeitado. Mas o CS agora recebe atualizações em dois momentos:
+   - **A cada brick fechado:** bar definitiva no slot `nextBarTime`, SEM wicks (ADR-020 regra 3 preservada), incrementa `nextBarTime += 60s`.
+   - **A cada tick processado:** bar PARCIAL do brick em formação no slot `nextBarTime` (o próximo livre, ainda não ocupado por brick fechado). COM wicks (excursão intra-brick visível). É a "última bar" do chart, que cresce/encolhe a cada tick.
+
+2. **Regra 4 (substituída parcialmente):** Timestamp fictício M1 monotônico permanece. Cada brick fechado ocupa um slot M1. O brick em formação ocupa o slot SEGUINTE (`nextBarTime` já avançado) e é atualizado a cada tick. Quando o brick em formação fecha, sua bar parcial vira a bar definitiva (regra 3 — sem wicks), e o próximo brick em formação começa a ocupar o próximo slot.
+
+3. **`IRenkoSink` ganha método `OnBrickForming(const MksFormingBrick &fb)`** como `virtual` com corpo default vazio (NÃO pure virtual). Sinks que não precisam (writer, capturing-sink dos testes existentes) seguem ignorando silenciosamente. Apenas `CMksCustomSymbolSink` implementa.
+
+4. **`CMksRenkoBuilder.IngestTick`** ao final de toda chamada bem-sucedida (inclusive em ticks que fecharam brick e dispararam `OnBrickClose`) chama `m_sink.OnBrickForming(GetFormingBrick())`. A ordem é: primeiro `OnBrickClose` (se brick fechou nesse tick, dispara dentro do `IngestTick` como hoje), depois `OnBrickForming` ao fim do `IngestTick`. Nunca há race — sequência síncrona dentro de uma única chamada.
+
+5. **`MksFormingBrick` ganha campo `currentMid` (double).** Carrega o último `mid` observado pelo builder. Permite ao sink desenhar `close` da bar parcial igual ao preço atual. Antes do primeiro tick, `currentMid == 0.0` e `hasData == false` (sink ignora).
+
+6. **`CMksCustomSymbolSink.OnBrickForming`** empurra `MqlRates` no slot `nextBarTime` com:
+   - `open` = `fb.open` (close do último brick fechado).
+   - `high` = `fb.high` (extremo observado durante a formação — COM wick).
+   - `low` = `fb.low` (extremo observado durante a formação — COM wick).
+   - `close` = `fb.currentMid` (preço corrente).
+   - `tick_volume` = 0 (sem agregação ainda — brick não fechou).
+   - Demais campos = 0.
+
+   `CustomRatesUpdate` no mesmo slot a cada tick. Quando o brick fecha, `OnBrickClose` sobrescreve esse slot com a bar definitiva sem wicks (regra 3), e `nextBarTime += 60s` no próprio sink (igual hoje).
+
+7. **Performance esperada:** `CustomRatesUpdate` por tick. Em XAUUSDm Exness ativo (~100 ticks/min em horário de Londres), ~6000 calls/hora. Sem benchmark prévio, mas a estrutura `MqlRates[1]` é leve e a chamada é local (não rede). Em testes empíricos posteriores, se virar gargalo, decisão futura sobre rate-limiting (ex.: atualizar a cada N ms ou a cada N ticks).
+
+**Alternativas consideradas:**
+
+- **(α) Template com linha bid do CS:** rejeitada (ver Contexto). Bid do CS fica congelado.
+- **(β) Indicador customizado lendo símbolo base:** rejeitada como solução exclusiva, mas **mantida como possibilidade aditiva** num slice futuro caso o usuário queira ver explicitamente os thresholds do próximo brick acima/abaixo, ou alguma outra informação rica que não couber numa bar OHLC.
+- **`OnBrickForming` como pure virtual:** rejeitada. Quebraria todos os sinks existentes (`CMksBrickWriterSink`, `CMksCapturingSink`, `CMksMultiSink`, mocks de teste) que teriam que implementar no-op explicitamente. Default vazio mantém compatibilidade.
+- **Passar `currentMid` como argumento separado** em `OnBrickForming(fb, currentMid)`: rejeitada. Estender `MksFormingBrick` é mais coerente — `currentMid` é uma propriedade do estado em formação. Argumento extra polui a assinatura.
+- **`OnBrickForming` em `IBroker`/`ITickSource` em vez de `IRenkoSink`:** sem sentido — o estado em formação é do **builder**, e os sinks são os consumidores naturais.
+- **Bar parcial SEM wicks (igual aos bricks fechados):** rejeitada. Wicks na bar em formação são informação real (preço excursionou e voltou); ao fechar, o brick vira caixinha sólida (regra 3). A "perda de wicks" no momento do fechamento é coerente com o renko clássico — brick fechado é discreto, formação é contínua.
+- **Empurrar a cada N ticks ou a cada N ms (throttling):** rejeitada como decisão inicial. Sem evidência de gargalo, throttle prematuro. Decisão futura se virar necessário.
+
+**Consequências:**
+
+- **`MksFormingBrick` ganha `currentMid`** (`Core/Types/FormingBrick.mqh`). Compatível com uso atual — quem só lê `open/high/low/direction/hasData` segue funcionando.
+
+- **`CMksRenkoBuilder` armazena `m_lastMid`** (`double`), atualizado a cada `IngestTick` válido. `GetFormingBrick().currentMid = m_lastMid`.
+
+- **`CMksRenkoBuilder.IngestTick`** ganha 1 linha ao final: `if(m_sink != NULL) m_sink.OnBrickForming(GetFormingBrick());`. Chamado SEMPRE — em ticks válidos que fecharam brick, em ticks válidos que não fecharam, e em ticks inválidos? Decisão: **apenas em ticks válidos** (após a guarda de invalidação retornar OK). Tick inválido não atualiza estado interno do builder, não faz sentido emitir forming sobre estado obsoleto.
+
+- **`IRenkoSink.OnBrickForming`** novo método virtual default vazio. Sinks existentes (`CMksBrickWriterSink`, `CMksCapturingSink`, `CMksFakeSymbol`, etc.) **não precisam mudar**.
+
+- **`CMksCustomSymbolSink.OnBrickForming`** novo método. Empurra bar parcial conforme regra 6.
+
+- **`Test_CMksRenkoBuilder.mq5` ganha cobertura** de `OnBrickForming`. `CMksCapturingSink` (mock de teste) ganha override de `OnBrickForming` que captura chamadas em array — permite afirmar quantas vezes foi chamado, com qual `MksFormingBrick`. Cobertura mínima: brick formando-se gera ticks com `OnBrickForming` capturado; `currentMid` reflete último tick.
+
+- **`.mksbk` permanece com bricks FECHADOS apenas.** Bar parcial é só visual no CS; nenhum brick parcial é gravado em arquivo. Mantém integridade do `.mksbk` (ADR-012, ADR-014).
+
+- **Validação empírica obrigatória:** Mike roda Producer no MT5 em mercado aberto e confirma que a última bar do chart cresce/encolhe a cada tick, e que ao fechar o brick, o slot vira caixinha sólida e a próxima bar começa a se formar no slot seguinte.
+
+- **CHANGELOG e CHECKPOINT atualizados** registrando ADR-021.
+
+**Fronteiras:**
+
+- **Não cria backpressure para tick storms.** Cada tick = um `CustomRatesUpdate`. Se a thread de tick ficar atrás do mercado, é problema de plataforma, não desta ADR.
+
+- **Não muda o builder em essência.** A semântica de "quando um brick fecha" segue idêntica (ADRs 010, 011). Apenas adiciona um evento de propagação de estado em formação.
+
+- **Não muda o `.mksbk`.** ADR-012/013/014 intactas. Arquivo continua tendo só bricks fechados.
+
+- **Não cobre indicador customizado** (caminho β). Fica disponível como extensão futura caso o usuário queira marcação rica de thresholds próximos ou outra info que não cabe numa bar OHLC.
+
+- **Não cobre testes de performance.** Benchmark de `CustomRatesUpdate` por tick em XAUUSDm é decisão operacional pós-implementação. Se virar gargalo, throttling fica como ADR futura.
+
+---
+
 ## 4. Decisões pendentes
 
 Pontos que precisam virar ADR assim que forem enfrentados:
