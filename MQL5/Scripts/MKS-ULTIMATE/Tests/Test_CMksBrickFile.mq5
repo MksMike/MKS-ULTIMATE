@@ -7,9 +7,11 @@
 //|                   bricks sintéticos com asserção campo-a-campo,
 //|                   re-write produzindo bytes idênticos, e rejeição
 //|                   de arquivos com magic inválido.
+//|                   Migrado para o framework Core/Testing (ADR-005).
 //| @depends_on     : Core/Data/CMksBrickFileWriter.mqh,
 //|                   Core/Data/CMksBrickFileReader.mqh,
 //|                   Core/Data/BrickFileFormat.mqh,
+//|                   Core/Testing/Asserts.mqh,
 //|                   Core/Types/Brick.mqh, Core/Types/RenkoGeometry.mqh,
 //|                   Core/Types/Error.mqh
 //| @install_path   : MQL5/Scripts/MKS-ULTIMATE/Tests/Test_CMksBrickFile.mq5
@@ -19,64 +21,14 @@
 #include <MKS-ULTIMATE/Core/Data/CMksBrickFileWriter.mqh>
 #include <MKS-ULTIMATE/Core/Data/CMksBrickFileReader.mqh>
 #include <MKS-ULTIMATE/Core/Data/BrickFileFormat.mqh>
+#include <MKS-ULTIMATE/Core/Testing/Asserts.mqh>
 #include <MKS-ULTIMATE/Core/Types/Brick.mqh>
 #include <MKS-ULTIMATE/Core/Types/RenkoGeometry.mqh>
 #include <MKS-ULTIMATE/Core/Types/Error.mqh>
 
-int    g_passed = 0;
-int    g_failed = 0;
-string g_currentTest = "";
-
-void StartTest(const string name) { g_currentTest = name; }
-
-void AssertEqualInt(int expected, int actual, const string what)
-{
-   if(expected == actual) { g_passed++; return; }
-   g_failed++;
-   PrintFormat("FAIL [%s] %s: expected=%d actual=%d", g_currentTest, what, expected, actual);
-}
-
-void AssertEqualLong(long expected, long actual, const string what)
-{
-   if(expected == actual) { g_passed++; return; }
-   g_failed++;
-   PrintFormat("FAIL [%s] %s: expected=%I64d actual=%I64d", g_currentTest, what, expected, actual);
-}
-
-void AssertEqualUlong(ulong expected, ulong actual, const string what)
-{
-   if(expected == actual) { g_passed++; return; }
-   g_failed++;
-   PrintFormat("FAIL [%s] %s: expected=%I64u actual=%I64u", g_currentTest, what, expected, actual);
-}
-
-void AssertEqualDouble(double expected, double actual, const string what)
-{
-   if(MathAbs(expected - actual) < 1e-12) { g_passed++; return; }
-   g_failed++;
-   PrintFormat("FAIL [%s] %s: expected=%.12f actual=%.12f", g_currentTest, what, expected, actual);
-}
-
-void AssertEqualString(const string expected, const string actual, const string what)
-{
-   if(StringCompare(expected, actual) == 0) { g_passed++; return; }
-   g_failed++;
-   PrintFormat("FAIL [%s] %s: expected='%s' actual='%s'", g_currentTest, what, expected, actual);
-}
-
-void AssertTrue(bool cond, const string what)
-{
-   if(cond) { g_passed++; return; }
-   g_failed++;
-   PrintFormat("FAIL [%s] %s: expected=true", g_currentTest, what);
-}
-
-void AssertFalse(bool cond, const string what)
-{
-   if(!cond) { g_passed++; return; }
-   g_failed++;
-   PrintFormat("FAIL [%s] %s: expected=false", g_currentTest, what);
-}
+// Tolerância apertada do teste original (1e-12). File roundtrip é
+// bit-identical em binário, mas mantemos a semântica do teste antigo.
+#define BRICKFILE_DOUBLE_TOL 1e-12
 
 //+------------------------------------------------------------------+
 //| Bricks sintéticos com campos variados (direção, M, valores)       |
@@ -124,7 +76,7 @@ void BuildSampleBricks(MksBrick &out[])
 }
 
 //+------------------------------------------------------------------+
-//| Helpers                                                           |
+//| Helpers de I/O para o golden test                                 |
 //+------------------------------------------------------------------+
 bool ReadFileBytes(const string &path, uchar &bytes[])
 {
@@ -157,8 +109,6 @@ void DeleteIfExists(const string &path)
 //+------------------------------------------------------------------+
 void Test_RoundtripFields()
 {
-   StartTest("roundtrip_fields");
-
    const string path = "MKS-ULTIMATE/test_brickfile_a.mksbk";
    DeleteIfExists(path);
 
@@ -176,47 +126,47 @@ void Test_RoundtripFields()
    // Escrita
    CMksBrickFileWriter w;
    MksError err;
-   AssertTrue(w.Open(path, err), "writer.Open");
-   AssertTrue(w.WriteHeader(broker, account, symbol, digits, geom, sizePts, err),
-              "writer.WriteHeader");
+   MKS_ASSERT_TRUE(w.Open(path, err), "writer.Open");
+   MKS_ASSERT_TRUE(w.WriteHeader(broker, account, symbol, digits, geom, sizePts, err),
+                   "writer.WriteHeader");
    for(int i = 0; i < SAMPLE_N; i++)
-      AssertTrue(w.WriteBrick(samples[i], err), StringFormat("writer.WriteBrick[%d]", i));
-   AssertTrue(w.Close(err, createdAt), "writer.Close");
-   AssertEqualLong(SAMPLE_N, w.BrickCount(), "writer.BrickCount");
+      MKS_ASSERT_TRUE(w.WriteBrick(samples[i], err), StringFormat("writer.WriteBrick[%d]", i));
+   MKS_ASSERT_TRUE(w.Close(err, createdAt), "writer.Close");
+   MKS_ASSERT_EQ_LONG(SAMPLE_N, w.BrickCount(), "writer.BrickCount");
 
    // Leitura
    CMksBrickFileReader r;
-   AssertTrue(r.Open(path, err), "reader.Open");
+   MKS_ASSERT_TRUE(r.Open(path, err), "reader.Open");
 
-   AssertEqualString(broker, r.Broker(), "reader.Broker");
-   AssertEqualLong(account, r.AccountLogin(), "reader.AccountLogin");
-   AssertEqualString(symbol, r.Symbol(), "reader.Symbol");
-   AssertEqualInt(digits, r.Digits(), "reader.Digits");
-   AssertEqualDouble(geom.po,           r.Geometry().po,           "reader.Geometry.po");
-   AssertEqualDouble(geom.pro,          r.Geometry().pro,          "reader.Geometry.pro");
-   AssertEqualDouble(geom.revSizeRatio, r.Geometry().revSizeRatio, "reader.Geometry.revRatio");
-   AssertEqualDouble(sizePts,   r.BrickSizePoints(),  "reader.BrickSizePoints");
-   AssertEqualLong(SAMPLE_N,    r.BrickCount(),       "reader.BrickCount");
-   AssertEqualLong(samples[0].closeTimeMsc, r.TimeMscFirst(), "reader.TimeMscFirst");
-   AssertEqualLong(samples[SAMPLE_N-1].closeTimeMsc, r.TimeMscLast(), "reader.TimeMscLast");
-   AssertEqualLong(createdAt,   r.CreatedAtMsc(),     "reader.CreatedAtMsc");
+   MKS_ASSERT_EQ_STRING(broker, r.Broker(),                       "reader.Broker");
+   MKS_ASSERT_EQ_LONG(account,  r.AccountLogin(),                 "reader.AccountLogin");
+   MKS_ASSERT_EQ_STRING(symbol, r.Symbol(),                       "reader.Symbol");
+   MKS_ASSERT_EQ_INT(digits,    r.Digits(),                       "reader.Digits");
+   MKS_ASSERT_NEAR_DOUBLE(geom.po,           r.Geometry().po,           BRICKFILE_DOUBLE_TOL, "reader.Geometry.po");
+   MKS_ASSERT_NEAR_DOUBLE(geom.pro,          r.Geometry().pro,          BRICKFILE_DOUBLE_TOL, "reader.Geometry.pro");
+   MKS_ASSERT_NEAR_DOUBLE(geom.revSizeRatio, r.Geometry().revSizeRatio, BRICKFILE_DOUBLE_TOL, "reader.Geometry.revRatio");
+   MKS_ASSERT_NEAR_DOUBLE(sizePts, r.BrickSizePoints(),  BRICKFILE_DOUBLE_TOL, "reader.BrickSizePoints");
+   MKS_ASSERT_EQ_LONG(SAMPLE_N,    r.BrickCount(),       "reader.BrickCount");
+   MKS_ASSERT_EQ_LONG(samples[0].closeTimeMsc,            r.TimeMscFirst(), "reader.TimeMscFirst");
+   MKS_ASSERT_EQ_LONG(samples[SAMPLE_N-1].closeTimeMsc,   r.TimeMscLast(),  "reader.TimeMscLast");
+   MKS_ASSERT_EQ_LONG(createdAt,   r.CreatedAtMsc(),     "reader.CreatedAtMsc");
 
    for(int i = 0; i < SAMPLE_N; i++)
    {
       MksBrick b;
-      AssertTrue(r.ReadNext(b, err), StringFormat("reader.ReadNext[%d]", i));
-      AssertEqualInt((int)samples[i].direction, (int)b.direction,    StringFormat("brick[%d].dir", i));
-      AssertEqualInt(samples[i].thresholdsCrossed, b.thresholdsCrossed, StringFormat("brick[%d].M", i));
-      AssertEqualDouble(samples[i].open,         b.open,         StringFormat("brick[%d].open", i));
-      AssertEqualDouble(samples[i].close,        b.close,        StringFormat("brick[%d].close", i));
-      AssertEqualDouble(samples[i].high,         b.high,         StringFormat("brick[%d].high", i));
-      AssertEqualDouble(samples[i].low,          b.low,          StringFormat("brick[%d].low", i));
-      AssertEqualDouble(samples[i].triggerPrice, b.triggerPrice, StringFormat("brick[%d].trig", i));
-      AssertEqualUlong(samples[i].triggerTickId, b.triggerTickId, StringFormat("brick[%d].tickId", i));
-      AssertEqualLong(samples[i].closeTimeMsc,   b.closeTimeMsc, StringFormat("brick[%d].time", i));
-      AssertEqualLong(samples[i].volume,         b.volume,       StringFormat("brick[%d].vol", i));
+      MKS_ASSERT_TRUE(r.ReadNext(b, err), StringFormat("reader.ReadNext[%d]", i));
+      MKS_ASSERT_EQ_INT((int)samples[i].direction, (int)b.direction,                       StringFormat("brick[%d].dir", i));
+      MKS_ASSERT_EQ_INT(samples[i].thresholdsCrossed, b.thresholdsCrossed,                 StringFormat("brick[%d].M", i));
+      MKS_ASSERT_NEAR_DOUBLE(samples[i].open,         b.open,         BRICKFILE_DOUBLE_TOL, StringFormat("brick[%d].open", i));
+      MKS_ASSERT_NEAR_DOUBLE(samples[i].close,        b.close,        BRICKFILE_DOUBLE_TOL, StringFormat("brick[%d].close", i));
+      MKS_ASSERT_NEAR_DOUBLE(samples[i].high,         b.high,         BRICKFILE_DOUBLE_TOL, StringFormat("brick[%d].high", i));
+      MKS_ASSERT_NEAR_DOUBLE(samples[i].low,          b.low,          BRICKFILE_DOUBLE_TOL, StringFormat("brick[%d].low", i));
+      MKS_ASSERT_NEAR_DOUBLE(samples[i].triggerPrice, b.triggerPrice, BRICKFILE_DOUBLE_TOL, StringFormat("brick[%d].trig", i));
+      MKS_ASSERT_EQ_ULONG(samples[i].triggerTickId,   b.triggerTickId,                     StringFormat("brick[%d].tickId", i));
+      MKS_ASSERT_EQ_LONG(samples[i].closeTimeMsc,     b.closeTimeMsc,                      StringFormat("brick[%d].time", i));
+      MKS_ASSERT_EQ_LONG(samples[i].volume,           b.volume,                            StringFormat("brick[%d].vol", i));
    }
-   AssertFalse(r.HasMore(), "reader.HasMore após esgotar");
+   MKS_ASSERT_FALSE(r.HasMore(), "reader.HasMore após esgotar");
    r.Close();
 }
 
@@ -225,8 +175,6 @@ void Test_RoundtripFields()
 //+------------------------------------------------------------------+
 void Test_GoldenFileRewrite()
 {
-   StartTest("golden_file_rewrite");
-
    const string pathA = "MKS-ULTIMATE/test_brickfile_golden_a.mksbk";
    const string pathB = "MKS-ULTIMATE/test_brickfile_golden_b.mksbk";
    DeleteIfExists(pathA);
@@ -246,42 +194,42 @@ void Test_GoldenFileRewrite()
    // 1) Escreve A
    MksError err;
    CMksBrickFileWriter wA;
-   AssertTrue(wA.Open(pathA, err), "wA.Open");
-   AssertTrue(wA.WriteHeader(broker, account, symbol, digits, geom, sizePts, err), "wA.WriteHeader");
+   MKS_ASSERT_TRUE(wA.Open(pathA, err), "wA.Open");
+   MKS_ASSERT_TRUE(wA.WriteHeader(broker, account, symbol, digits, geom, sizePts, err), "wA.WriteHeader");
    for(int i = 0; i < SAMPLE_N; i++)
       wA.WriteBrick(samples[i], err);
-   AssertTrue(wA.Close(err, createdAt), "wA.Close");
+   MKS_ASSERT_TRUE(wA.Close(err, createdAt), "wA.Close");
 
    // 2) Lê A campo-a-campo
    MksBrick readBricks[];
    ArrayResize(readBricks, SAMPLE_N);
    CMksBrickFileReader r;
-   AssertTrue(r.Open(pathA, err), "r.Open(A)");
+   MKS_ASSERT_TRUE(r.Open(pathA, err), "r.Open(A)");
    for(int i = 0; i < SAMPLE_N; i++)
       r.ReadNext(readBricks[i], err);
    r.Close();
 
    // 3) Reescreve B com os bricks lidos + mesma proveniência + mesmo createdAt
    CMksBrickFileWriter wB;
-   AssertTrue(wB.Open(pathB, err), "wB.Open");
-   AssertTrue(wB.WriteHeader(broker, account, symbol, digits, geom, sizePts, err), "wB.WriteHeader");
+   MKS_ASSERT_TRUE(wB.Open(pathB, err), "wB.Open");
+   MKS_ASSERT_TRUE(wB.WriteHeader(broker, account, symbol, digits, geom, sizePts, err), "wB.WriteHeader");
    for(int i = 0; i < SAMPLE_N; i++)
       wB.WriteBrick(readBricks[i], err);
-   AssertTrue(wB.Close(err, createdAt), "wB.Close");
+   MKS_ASSERT_TRUE(wB.Close(err, createdAt), "wB.Close");
 
    // 4) Compara A e B byte-a-byte
    uchar bytesA[], bytesB[];
-   AssertTrue(ReadFileBytes(pathA, bytesA), "ReadFileBytes(A)");
-   AssertTrue(ReadFileBytes(pathB, bytesB), "ReadFileBytes(B)");
+   MKS_ASSERT_TRUE(ReadFileBytes(pathA, bytesA), "ReadFileBytes(A)");
+   MKS_ASSERT_TRUE(ReadFileBytes(pathB, bytesB), "ReadFileBytes(B)");
 
    int sizeA = ArraySize(bytesA);
    int sizeB = ArraySize(bytesB);
-   AssertEqualInt(sizeB, sizeA, "tamanho A == B");
+   MKS_ASSERT_EQ_INT(sizeB, sizeA, "tamanho A == B");
 
    int expectedSize = MKS_BRICKFILE_HEADER_SIZE + SAMPLE_N * MKS_BRICKFILE_RECORD_SIZE;
-   AssertEqualInt(expectedSize, sizeA, "tamanho == header + N*record");
+   MKS_ASSERT_EQ_INT(expectedSize, sizeA, "tamanho == header + N*record");
 
-   AssertTrue(BytesEqual(bytesA, bytesB), "bytes A == B (golden file)");
+   MKS_ASSERT_TRUE(BytesEqual(bytesA, bytesB), "bytes A == B (golden file)");
 }
 
 //+------------------------------------------------------------------+
@@ -289,8 +237,6 @@ void Test_GoldenFileRewrite()
 //+------------------------------------------------------------------+
 void Test_RejectsInvalidMagic()
 {
-   StartTest("rejects_invalid_magic");
-
    const string pathOk  = "MKS-ULTIMATE/test_brickfile_ok.mksbk";
    const string pathBad = "MKS-ULTIMATE/test_brickfile_badmagic.mksbk";
    DeleteIfExists(pathOk);
@@ -310,18 +256,18 @@ void Test_RejectsInvalidMagic()
 
    // Copia para pathBad e corrompe o magic
    uchar bytes[];
-   AssertTrue(ReadFileBytes(pathOk, bytes), "ReadFileBytes(ok)");
+   MKS_ASSERT_TRUE(ReadFileBytes(pathOk, bytes), "ReadFileBytes(ok)");
    bytes[0] = 'X'; // corrompe primeiro byte do magic
    int hBad = FileOpen(pathBad, FILE_WRITE | FILE_BIN);
-   AssertTrue(hBad != INVALID_HANDLE, "FileOpen(bad)");
+   MKS_ASSERT_TRUE(hBad != INVALID_HANDLE, "FileOpen(bad)");
    FileWriteArray(hBad, bytes, 0, ArraySize(bytes));
    FileClose(hBad);
 
    // Reader deve rejeitar pathBad
    CMksBrickFileReader r;
    bool ok = r.Open(pathBad, err);
-   AssertFalse(ok, "reader.Open(bad) deve falhar");
-   AssertEqualInt((int)MKS_ERR_DATA_INVALID_MAGIC, (int)err.code, "err.code");
+   MKS_ASSERT_FALSE(ok, "reader.Open(bad) deve falhar");
+   MKS_ASSERT_EQ_INT((int)MKS_ERR_DATA_INVALID_MAGIC, (int)err.code, "err.code");
 }
 
 //+------------------------------------------------------------------+
@@ -329,8 +275,6 @@ void Test_RejectsInvalidMagic()
 //+------------------------------------------------------------------+
 void Test_ReadBeyondTotalFails()
 {
-   StartTest("read_beyond_total_fails");
-
    const string path = "MKS-ULTIMATE/test_brickfile_beyond.mksbk";
    DeleteIfExists(path);
 
@@ -346,7 +290,7 @@ void Test_ReadBeyondTotalFails()
    w.Close(err, 1700000600000);
 
    CMksBrickFileReader r;
-   AssertTrue(r.Open(path, err), "reader.Open");
+   MKS_ASSERT_TRUE(r.Open(path, err), "reader.Open");
    for(int i = 0; i < SAMPLE_N; i++)
    {
       MksBrick b;
@@ -356,8 +300,8 @@ void Test_ReadBeyondTotalFails()
    MksBrick b;
    MksError errBeyond;
    bool ok = r.ReadNext(b, errBeyond);
-   AssertFalse(ok, "ReadNext além de total deve falhar");
-   AssertEqualInt((int)MKS_ERR_DATA_TRUNCATED, (int)errBeyond.code, "err.code");
+   MKS_ASSERT_FALSE(ok, "ReadNext além de total deve falhar");
+   MKS_ASSERT_EQ_INT((int)MKS_ERR_DATA_TRUNCATED, (int)errBeyond.code, "err.code");
    r.Close();
 }
 
@@ -371,13 +315,11 @@ void OnStart()
    // FileOpen do MT5 não cria subpastas — garante a pasta de teste.
    FolderCreate("MKS-ULTIMATE");
 
-   Test_RoundtripFields();
-   Test_GoldenFileRewrite();
-   Test_RejectsInvalidMagic();
-   Test_ReadBeyondTotalFails();
+   MKS_RUN(Test_RoundtripFields);
+   MKS_RUN(Test_GoldenFileRewrite);
+   MKS_RUN(Test_RejectsInvalidMagic);
+   MKS_RUN(Test_ReadBeyondTotalFails);
 
-   Print("");
-   PrintFormat("RESUMO: passed=%d  failed=%d", g_passed, g_failed);
-   if(g_failed == 0) Print("=== TODOS OS TESTES PASSARAM ===");
-   else              Print("=== HÁ FALHAS — VEJA ACIMA ===");
+   g_mksTestRunner.Summary();
 }
+//+------------------------------------------------------------------+
