@@ -1078,6 +1078,64 @@ O MKS-ULTIMATE adota um framework próprio mínimo de testes em `MQL5/Include/MK
 
 ---
 
+### ADR-019: Ordem de construção `PositionSizer → RiskManager → TradeManager`
+
+**Data:** 2026-05-22
+**Status:** Proposta
+
+**Contexto:**
+O `ROADMAP.md` na sua forma original lista as fases pendentes do core na ordem **Fase 5 (Trade Management) → Fase 6 (Risk Management) → Fase 7 (StressLab)**. A Fase 5 agrega dois componentes em um pacote único: `CMksTradeManager` (BE, trailing, partial close, state machine) e `CMksPositionSizer` (4 modos de sizing). A "regra de ouro" no topo do `ROADMAP.md` é explícita: "nenhuma fase começa antes da anterior ter todos os critérios de saída cumpridos. Pular fases foi um erro do V5 e não se repete aqui".
+
+Esta ADR é provocada por duas observações que apareceram ao planejar o próximo slice:
+
+1. **Risco moral.** O `ROADMAP.md` §Fase 6 documenta literalmente: "Foi a ausência disso que permitiu o V5 quebrar conta em 4 horas." O `V5-POSTMORTEM.md` lista "Risk manager como middleware, não como lembrete" como lição permanente. Construir o `TradeManager` antes de existir um `RiskManager` cria uma janela em que o ciclo `OrderRequest → IBroker` está sem rede de segurança — mesmo que essa janela seja apenas em ambiente de teste, ela documenta uma prioridade invertida que conflita com o objetivo declarado do framework (proteger a conta primeiro).
+
+2. **Dependência técnica interna.** `RiskManager` precisa validar "tamanho máximo por trade" (ROADMAP §Fase 6.Camadas.Por_trade) — checagem que consome o `PositionSizer` resolvido. `TradeManager`, em contraste, consome `PositionSizer` apenas indiretamente: a estratégia chama `Sizer.Compute()`, monta `OrderRequest`, e o `TradeManager` gerencia o trade que nasceu daquele request. Logo, o `PositionSizer` é dependência do `RiskManager`, mas não o `TradeManager`.
+
+A pergunta arquitetural: seguir a ordem ordinal do ROADMAP (Fase 5 inteira antes de Fase 6) ou re-sequenciar a construção interna para `Sizer → Risk → TradeManager`?
+
+**Decisão:**
+A ordem real de construção será **`CMksPositionSizer` → `CMksRiskManager` → `CMksTradeManager`**, com a Fase 5 do `ROADMAP.md` reinterpretada como dois sub-slices independentes (5a Sizer, 5b TradeManager) intercalados pela Fase 6.
+
+1. **`CMksPositionSizer` primeiro.** Implementação isolada de uma classe próxima de função pura — entrada: `(IAccount*, ISymbol*, riskParams, slDistancePoints)`, saída: `lots`. Quatro modos (fixed/percent risk/ATR-adjusted/Kelly fracionado). Sem ciclo de vida, sem state machine. Testável com `CMksFakeAccount` + `CMksFakeSymbol` já existentes.
+
+2. **`CMksRiskManager` em seguida.** Middleware entre `OrderRequest` (vinda da estratégia) e `IBroker`. Consome o `PositionSizer` no caminho "validar tamanho máximo". Três camadas (trade/strategy/account) com `IAccount` injetado para limites baseados em equity/drawdown. Testável com `CMksFakeAccount` controlando o estado da conta.
+
+3. **`CMksTradeManager` por último.** Construído num ambiente onde toda `OrderRequest` que ele dispara passa primeiro pelo `RiskManager`. State machine + BE + trailing + partial close, lendo preço observado via `ITickSource` (não calculando do brick — lição V5 #1).
+
+4. **A "regra de ouro" do ROADMAP é refinada, não violada.** Re-sequenciar componentes dentro de duas fases adjacentes do core não é o mesmo erro que o V5 cometeu (saltar da Fase 1 direto pra Fase 9 — escrever estratégia antes do core). Aqui, todas as três peças são pré-requisito da Fase 9 (EA end-to-end); a sequência interna entre elas não muda quando elas estão prontas. O `ROADMAP.md` ganha nota dizendo que a Fase 5 está dividida em 5a e 5b, executadas em volta da Fase 6.
+
+**Alternativas consideradas:**
+
+- **(a) Ordem estrita do ROADMAP (Fase 5 inteira → Fase 6).** Rejeitada. `TradeManager` nasceria sem `RiskManager` montado. A janela é apenas em teste, mas a ordem documentada conflita com a prioridade do projeto. O argumento "regra de ouro" não se aplica aqui — a regra existe para impedir saltar fases (Fase 1 → Fase 9), não para forçar ordem ordinal entre componentes de duas fases adjacentes.
+
+- **(b) Inverter Fase 5 e Fase 6 inteiras (Risk inteira primeiro, depois Trade inteira).** Rejeitada. `RiskManager.checkPositionSize` precisa do `PositionSizer`. Construir Risk inteira sem Sizer obriga ou stub interno (gambiarra futura) ou validação parcial até Sizer existir.
+
+- **(c) Fundir Fase 5 e Fase 6 em um pacote único.** Rejeitada. Cada componente tem testes próprios e ciclo de vida próprio. Fundir as fases obscurece o critério de saída de cada peça. A sub-divisão 5a/5b com Fase 6 no meio é mais limpa que uma "Fase 5-6" agregada.
+
+- **(d) Construir `PositionSizer` como detalhe interno do `RiskManager` (sem classe própria).** Rejeitada. `PositionSizer` é consumido também pela estratégia diretamente — ela calcula `lots` antes de montar `OrderRequest` para passar pela rede de Risk. Esconder dentro do Risk obriga a estratégia a chamar Risk só pra obter sizing, acoplando demais. Manter como classe própria em `Core/Trade/CMksPositionSizer.mqh` preserva a separação Trade/Risk.
+
+**Consequências:**
+
+- **`ROADMAP.md` ganha nota na Fase 5** dizendo que ela está sub-dividida (5a/Sizer, 5b/TradeManager) e que 5a vem antes da Fase 6, 5b depois. Não altera entregáveis, só a sequência interna.
+
+- **Slice próximo: implementação do `CMksPositionSizer`**. Localização decidida: `Core/Trade/CMksPositionSizer.mqh` (não `Core/Risk/`) — pertence ao domínio Trade conceitualmente, mesmo sendo consumido por Risk. Tests em `Test_CMksPositionSizer.mq5` usando `CMksFakeAccount` e `CMksFakeSymbol`.
+
+- **Slice seguinte: `CMksRiskManager`**. Em `Core/Risk/CMksRiskManager.mqh`. Composition root passará a injetar `RiskManager` entre estratégia e `IBroker` — ainda não há estratégia para acoplar, mas o broker precisa expor pontos de injeção limpos. Decisão sobre wrapper (`CMksRiskGatedBroker`?) ou inline-check fica para a própria ADR da Fase 6.
+
+- **Slice final desta sequência: `CMksTradeManager`**. Após Risk estar testado, o TradeManager nasce sabendo que toda ordem que ele dispara passa pelo Risk. Não muda o código dele — muda o ambiente em que ele opera.
+
+- **Sem regressão no core existente.** Nenhuma das 3 peças exige mudança em código já testado (`CMksRenkoBuilder`, `CMksAtrBrickSizer`, `CMksSimulatedBroker`, `CMksMt5Broker`, `CMksLogger`, `Producer`). São adições.
+
+**Fronteiras:**
+
+- Não é a especificação dos 4 modos de sizing (fixed/percent/ATR/Kelly) — detalhe do slice 5a.
+- Não é a especificação das 3 camadas do Risk Manager — detalhe da ADR da Fase 6.
+- Não cobre a relação entre `TradeManager` e tick observado (lição V5 #1) — será explicitada quando o slice 5b abrir.
+- Não fecha a Fase 5 do ROADMAP em si — a fase só é Concluída quando Sizer **e** TradeManager existem testados.
+
+---
+
 ## 4. Decisões pendentes
 
 Pontos que precisam virar ADR assim que forem enfrentados:
