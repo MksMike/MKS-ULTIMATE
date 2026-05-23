@@ -42,6 +42,8 @@ private:
    // Configuração de retorno
    bool m_nextModifyReturns;
    ENUM_MKS_EXEC_STATUS m_nextCloseStatus;
+   ENUM_MKS_EXEC_STATUS m_nextSendStatus;
+   double m_nextSendFillPrice;
 
 public:
    CMksRecordingBroker()
@@ -49,6 +51,8 @@ public:
       m_sendCount = 0;
       m_nextModifyReturns = true;
       m_nextCloseStatus   = MKS_EXEC_FILLED;
+      m_nextSendStatus    = MKS_EXEC_FILLED;
+      m_nextSendFillPrice = 2000.0;
    }
 
    //--- IBroker overrides -------------------------------------------+
@@ -57,10 +61,10 @@ public:
    {
       m_sendCount++;
       MksExecutionResult r;
-      r.status         = MKS_EXEC_FILLED;
-      r.positionId     = (ulong)(1000 + m_sendCount);
-      r.filledLots     = request.lots;
-      r.fillPrice      = (request.side == MKS_ORDER_BUY) ? 1.0 : 0.0;
+      r.status         = m_nextSendStatus;
+      r.positionId     = (r.status == MKS_EXEC_FILLED) ? (ulong)(1000 + m_sendCount) : 0;
+      r.filledLots     = (r.status == MKS_EXEC_FILLED) ? request.lots : 0.0;
+      r.fillPrice      = m_nextSendFillPrice;
       r.requestedPrice = 0.0;
       return r;
    }
@@ -114,6 +118,8 @@ public:
 
    void SetNextModifyReturns(bool v) { m_nextModifyReturns = v; }
    void SetNextCloseStatus(ENUM_MKS_EXEC_STATUS s) { m_nextCloseStatus = s; }
+   void SetNextSendStatus(ENUM_MKS_EXEC_STATUS s)  { m_nextSendStatus = s; }
+   void SetNextSendFillPrice(double price)         { m_nextSendFillPrice = price; }
 
    void Reset()
    {

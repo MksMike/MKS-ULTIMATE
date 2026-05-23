@@ -46,7 +46,7 @@ MKS-ULTIMATE/
 │   │   │   ├── Risk/               # CMksRiskManager (Por Trade + Estratégia + Conta), CMksRiskGatedBroker
 │   │   │   ├── Log/                # CMksLogger (logging estruturado)
 │   │   │   └── Testing/            # Framework mínimo de asserções
-│   │   └── StressLab/              # Simulação de condições adversas
+│   │   └── StressLab/              # CMksRandom (RNG seedável), CMksStressParams (presets None/Light/Medium/High/Nightmare), CMksStressLabBroker (wrapper de IBroker injetando slippage/rejection/requote)
 │   ├── Experts/
 │   │   └── MKS-ULTIMATE/           # EAs que usam o framework
 │   ├── Scripts/                    # Scripts utilitários
