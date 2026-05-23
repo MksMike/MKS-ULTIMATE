@@ -9,13 +9,15 @@
 //|                     "Por estratégia" (slice 6.2) — max posições
 //|                                                    simultâneas,
 //|                                                    max lots totais.
-//|                     "Por conta"      (slice 6.3) — daily loss,
-//|                                                    drawdown, circuit
-//|                                                    breaker (pendente).
+//|                     "Por conta"      (slice 6.3) — daily loss %,
+//|                                                    drawdown %,
+//|                                                    equity mínimo
+//|                                                    (circuit breaker).
 //|                   ADR-019.
 //| @depends_on     : Core/Types/OrderRequest.mqh, Core/Types/Error.mqh,
 //|                   Core/Interfaces/IPositionSizer.mqh,
 //|                   Core/Interfaces/IPositionBook.mqh,
+//|                   Core/Account/CMksAccountSnapshot.mqh,
 //|                   Core/Interfaces/ILogger.mqh
 //| @install_path   : MQL5/Include/MKS-ULTIMATE/Core/Risk/CMksRiskManager.mqh
 //+------------------------------------------------------------------+
@@ -26,6 +28,7 @@
 #include <MKS-ULTIMATE/Core/Types/Error.mqh>
 #include <MKS-ULTIMATE/Core/Interfaces/IPositionSizer.mqh>
 #include <MKS-ULTIMATE/Core/Interfaces/IPositionBook.mqh>
+#include <MKS-ULTIMATE/Core/Account/CMksAccountSnapshot.mqh>
 #include <MKS-ULTIMATE/Core/Interfaces/ILogger.mqh>
 
 // Parâmetros da camada "Por trade".
@@ -71,13 +74,47 @@ struct CMksRiskStrategyParams
    }
 };
 
+// Parâmetros da camada "Por Conta" (slice 6.3).
+//
+// maxDailyLossPct: 0.0 = sem limite. Ex 5.0 = bloqueia novos Send se
+//                  o P&L do dia for ≤ -5%. Mede contra o balance no
+//                  início do dia UTC (rolla automaticamente — snapshot).
+// maxDrawdownPct:  0.0 = sem limite. Ex 10.0 = bloqueia se equity
+//                  estiver ≥ 10% abaixo do peak observado desde Init
+//                  do snapshot.
+// minEquityAbs:    0.0 = sem limite. Ex 5000.0 = circuit breaker
+//                  absoluto, bloqueia se equity < 5000 (moeda da conta).
+//                  Defesa de "tela vermelha" — fechar tudo manualmente
+//                  e parar de operar até apurar o que aconteceu.
+//
+// Diferença Por Conta × Por Estratégia: Por Estratégia limita a
+// abertura de NOVAS exposições (contagem/volume); Por Conta limita
+// considerando o ESTADO da conta (equity, P&L, peak). Os dois são
+// ortogonais — operar com poucas posições não impede explodir equity;
+// operar com muito equity sobrando não isenta o limite de exposure.
+struct CMksRiskAccountParams
+{
+   double maxDailyLossPct;
+   double maxDrawdownPct;
+   double minEquityAbs;
+
+   CMksRiskAccountParams()
+   {
+      maxDailyLossPct = 0.0;
+      maxDrawdownPct  = 0.0;
+      minEquityAbs    = 0.0;
+   }
+};
+
 class CMksRiskManager
 {
 private:
    CMksRiskTradeParams    m_params;
    CMksRiskStrategyParams m_stratParams;
+   CMksRiskAccountParams  m_acctParams;
    IPositionSizer        *m_sizer;
    IPositionBook         *m_book;
+   CMksAccountSnapshot   *m_snapshot;
    ILogger               *m_logger;
 
    void LogRejection(const string &reason,
@@ -97,22 +134,24 @@ private:
    }
 
 public:
-   // sizer, book e logger são opcionais.
-   // sizer NULL:  pula a checagem "lots vs sizer".
-   // book  NULL:  pula as checagens da camada "Por estratégia".
-   // logger NULL: pula o log de rejeição (caller fica responsável).
+   // sizer, book, snapshot e logger são opcionais.
+   // sizer NULL:    pula a checagem "lots vs sizer".
+   // book  NULL:    pula as checagens da camada "Por estratégia".
+   // snapshot NULL: pula as checagens da camada "Por conta".
+   // logger NULL:   pula o log de rejeição (caller fica responsável).
    CMksRiskManager(const CMksRiskTradeParams &p,
                    IPositionSizer *sizer  = NULL,
                    ILogger        *logger = NULL)
    {
-      m_params       = p;
-      m_sizer        = sizer;
-      m_book         = NULL;
-      m_logger       = logger;
-      // m_stratParams via default constructor (sem limites).
+      m_params   = p;
+      m_sizer    = sizer;
+      m_book     = NULL;
+      m_snapshot = NULL;
+      m_logger   = logger;
+      // m_stratParams, m_acctParams via default (sem limites).
    }
 
-   // Construtor completo com camada "Por estratégia" (slice 6.2).
+   // Construtor com camada "Por estratégia" (slice 6.2).
    CMksRiskManager(const CMksRiskTradeParams    &p,
                    const CMksRiskStrategyParams &sp,
                    IPositionBook  *book,
@@ -123,6 +162,27 @@ public:
       m_stratParams = sp;
       m_sizer       = sizer;
       m_book        = book;
+      m_snapshot    = NULL;
+      m_logger      = logger;
+   }
+
+   // Construtor completo com camada "Por conta" (slice 6.3).
+   // Aceita opcionalmente book/strategy params também — composição
+   // total das 3 camadas (trade + strategy + account).
+   CMksRiskManager(const CMksRiskTradeParams    &p,
+                   const CMksRiskStrategyParams &sp,
+                   const CMksRiskAccountParams  &ap,
+                   IPositionBook       *book,
+                   CMksAccountSnapshot *snapshot,
+                   IPositionSizer      *sizer  = NULL,
+                   ILogger             *logger = NULL)
+   {
+      m_params      = p;
+      m_stratParams = sp;
+      m_acctParams  = ap;
+      m_sizer       = sizer;
+      m_book        = book;
+      m_snapshot    = snapshot;
       m_logger      = logger;
    }
 
@@ -159,6 +219,39 @@ public:
       {
          MKS_SET_ERROR(err, MKS_ERR_RISK_INVALID_PARAM,
                        "camada estratégia ativa sem IPositionBook injetado",
+                       "");
+         return false;
+      }
+      // Camada conta: valida sinais dos params.
+      if(m_acctParams.maxDailyLossPct < 0.0)
+      {
+         MKS_SET_ERROR(err, MKS_ERR_RISK_INVALID_PARAM,
+                       "maxDailyLossPct < 0",
+                       StringFormat("maxDailyLossPct=%.4f", m_acctParams.maxDailyLossPct));
+         return false;
+      }
+      if(m_acctParams.maxDrawdownPct < 0.0)
+      {
+         MKS_SET_ERROR(err, MKS_ERR_RISK_INVALID_PARAM,
+                       "maxDrawdownPct < 0",
+                       StringFormat("maxDrawdownPct=%.4f", m_acctParams.maxDrawdownPct));
+         return false;
+      }
+      if(m_acctParams.minEquityAbs < 0.0)
+      {
+         MKS_SET_ERROR(err, MKS_ERR_RISK_INVALID_PARAM,
+                       "minEquityAbs < 0",
+                       StringFormat("minEquityAbs=%.4f", m_acctParams.minEquityAbs));
+         return false;
+      }
+      // Camada conta ativa sem snapshot = erro de wiring.
+      bool acctActive = (m_acctParams.maxDailyLossPct > 0.0
+                         || m_acctParams.maxDrawdownPct > 0.0
+                         || m_acctParams.minEquityAbs > 0.0);
+      if(acctActive && m_snapshot == NULL)
+      {
+         MKS_SET_ERROR(err, MKS_ERR_RISK_INVALID_PARAM,
+                       "camada conta ativa sem CMksAccountSnapshot injetado",
                        "");
          return false;
       }
@@ -263,6 +356,51 @@ public:
                                        m_book.TotalLots(), req.lots,
                                        m_stratParams.maxTotalLots));
             LogRejection("total_lots_exceeded", req, err);
+            return false;
+         }
+      }
+
+      // 7. Camada Por Conta: daily loss %
+      if(m_snapshot != NULL && m_acctParams.maxDailyLossPct > 0.0)
+      {
+         double pnlPct = m_snapshot.DayPnLPct(); // negativo em queda
+         if(pnlPct <= -m_acctParams.maxDailyLossPct)
+         {
+            MKS_SET_ERROR(err, MKS_ERR_RISK_REJECTED_DAILY_LOSS,
+                          "limite de perda diária atingido",
+                          StringFormat("dayPnLPct=%.4f maxLossPct=%.4f",
+                                       pnlPct, m_acctParams.maxDailyLossPct));
+            LogRejection("daily_loss_exceeded", req, err);
+            return false;
+         }
+      }
+
+      // 8. Camada Por Conta: drawdown desde peak
+      if(m_snapshot != NULL && m_acctParams.maxDrawdownPct > 0.0)
+      {
+         double ddPct = m_snapshot.DrawdownPct(); // sempre >= 0
+         if(ddPct >= m_acctParams.maxDrawdownPct)
+         {
+            MKS_SET_ERROR(err, MKS_ERR_RISK_REJECTED_DRAWDOWN,
+                          "drawdown desde peak atingiu limite",
+                          StringFormat("drawdownPct=%.4f maxDdPct=%.4f",
+                                       ddPct, m_acctParams.maxDrawdownPct));
+            LogRejection("drawdown_exceeded", req, err);
+            return false;
+         }
+      }
+
+      // 9. Camada Por Conta: equity mínimo (circuit breaker absoluto)
+      if(m_snapshot != NULL && m_acctParams.minEquityAbs > 0.0)
+      {
+         double eq = m_snapshot.Equity();
+         if(eq < m_acctParams.minEquityAbs)
+         {
+            MKS_SET_ERROR(err, MKS_ERR_RISK_REJECTED_MIN_EQUITY,
+                          "equity abaixo do limite mínimo (circuit breaker)",
+                          StringFormat("equity=%.4f minEquity=%.4f",
+                                       eq, m_acctParams.minEquityAbs));
+            LogRejection("min_equity_breached", req, err);
             return false;
          }
       }

@@ -44,6 +44,9 @@ enum ENUM_MKS_ERROR_CODE
    MKS_ERR_RISK_INVALID_PARAM = 404,          // config do Risk Manager inválida
    MKS_ERR_RISK_REJECTED_OPEN_POSITIONS = 405,// book.OpenCount+1 > maxOpenPositions (slice 6.2)
    MKS_ERR_RISK_REJECTED_TOTAL_LOTS = 406,    // book.TotalLots+req.lots > maxTotalLots (slice 6.2)
+   MKS_ERR_RISK_REJECTED_DAILY_LOSS = 407,    // snapshot.DayPnLPct <= -maxDailyLossPct (slice 6.3)
+   MKS_ERR_RISK_REJECTED_DRAWDOWN = 408,      // snapshot.DrawdownPct >= maxDrawdownPct (slice 6.3)
+   MKS_ERR_RISK_REJECTED_MIN_EQUITY = 409,    // snapshot.Equity < minEquityAbs (slice 6.3 circuit breaker)
 
    //--- StressLab 500–599 — ver ADR-009
 
