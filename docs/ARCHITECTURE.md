@@ -1511,6 +1511,134 @@ Critério para promover de Proposta para Aceita + executar: qualquer um dos even
 
 ---
 
+### ADR-024: Captura e replay de ticks crus — formato `.mkstick`, Service de gravação, EA de replay
+
+**Data:** 2026-05-23
+**Status:** Aceita
+**Relação:** Materializa o trabalho pendente da ADR-012 (§5 layout binário e §Consequências captura/consumo) e fecha a porta arquitetural prevista na ADR-015 (§Consequências engine de backtest fora do tester). Não cria arquitetura nova; quita duas dívidas explícitas.
+
+**Contexto:**
+ADR-012 fixou o contrato de integridade da fonte histórica de ticks — cru, broker-locked, proveniência, flags preservados, formato binário versionado próprio — e ADR-015 fixou que o backtest oficial roda fora do Strategy Tester nativo, via composition root do framework. Ambas referenciam um "arquivo de captura de ticks a ser definido" e um "engine de backtest próprio" como trabalho posterior, dívidas explicitamente assumidas. Esta ADR quita as duas em conjunto.
+
+O `.mksbk` (ADR-014) cobre persistência de bricks fechados. Mas dois bricks com OHLC matemático idêntico podem ter sido produzidos por sequências diferentes de ticks — `triggerTickId` é seq local ao run do Producer. Sem o stream de ticks que gerou os bricks, não é possível reproduzir bit-a-bit o que aconteceu em live: `CopyTicksRange` lido a posteriori pode divergir dos ticks que chegaram em tempo real (dedup retroativo, agregação, ticks perdidos). O eixo 2 do V5 ressurge por essa porta, mais sutil — não pela bifurcação de código (já vetada), mas pela divergência de dados.
+
+A solução simétrica é gravar `MksTick` no momento da chegada e replayar pelo mesmo `CMksRenkoBuilder`. Como o builder é determinístico por construção (mesmo stream → mesmos bricks, mesmos `triggerPrice`/`triggerTickId`/M), paridade do feed e da decisão da estratégia fica garantida bit-a-bit. Paridade da execução (preço de fill, latência, rejeição) permanece modelada — não é dado capturável na maioria dos brokers e é trabalho do `CMksSimulatedBroker` + StressLab.
+
+**Decisão:**
+Materializa-se o caminho `tick → Builder → brick` como infraestrutura de captura e replay simétrica ao `.mksbk`. Sete regras:
+
+1. **Formato binário `.mkstick` v1 — layout fixado.** Espelha o `.mksbk` em estrutura: HEADER de 256 bytes (magic `"MKSTK01"` + versão `1` + record_size `64` + headerSize `256` + broker/account/symbol/digits trancados + tickCount/timeMscFirst/timeMscLast/createdAtMsc/closedAtMsc patcheados no Close + tickSize/point/contractSize do símbolo no momento da abertura + reserved zero-fill) seguido de RECORDS de 64 bytes por tick (seq uint64, timeMsc int64, bid double, ask double, last double, volume int64, flags uint32, 12 bytes reservados para alinhamento e futuras extensões). Little-endian, sem padding entre campos do record. Tamanho total = 256 + 64 × tickCount. Constantes em `Core/Data/TickFileFormat.mqh`, espelhando `BrickFileFormat.mqh`.
+
+2. **Captura é Service, não EA.** O artefato `MQL5/Services/MKS-ULTIMATE/TickRecorder.mq5` roda em background (sem chart), alinhado à seção 2 do ARCHITECTURE.md (`MQL5/Services/ — Coletores de tick em background e workers independentes de gráfico`). Assina ticks via `OnTick` do Service ou agendamento `OnTimer` chamando `SymbolInfoTick`. Append-only ao arquivo, flush a cada N=100 ticks ou T=1s (o que vier primeiro). Header patcheado no `OnDeinit`. Tolerância a reopen no mesmo dia: detecta header existente, valida proveniência exata (broker/account/symbol/digits), continua append em posição correta. Reopen com proveniência incompatível aborta com erro 802.
+
+3. **Granularidade: 1 arquivo por dia UTC.** Nome `<symbol>_YYYYMMDD.mkstick` (ex.: `XAUUSDm_20260523.mkstick`). Roll-over à 00:00 UTC, equivalente ao roll-over do `.mksbk` em ADR-014. Operador rodando 5 dias = 5 arquivos sequenciais. Replayer aceita lista de arquivos ou diretório, replaya em ordem cronológica garantida pela ordem natural do filename.
+
+4. **Consumo via `CMksFileTickSource` — implementa `ITickSource` (ADR-004).** Open valida magic + version + record_size + headerSize. Compara proveniência do arquivo contra conta corrente: broker/account diferentes geram WARN no logger (não fatal, conforme ADR-012 §2 e ADR-013 §3); symbol diferente é fatal (erro 803). `Next(MksTick&)` lê record-a-record na ordem natural do arquivo (cronológica por construção da captura). Encerra com `false` no EOF. Multi-arquivo: o source mantém estado interno, transitiona transparentemente do EOF do arquivo N para o arquivo N+1, validando que o último seq do N é estritamente menor que o primeiro seq do N+1 (continuidade da seq cross-file).
+
+5. **Replay via `Replayer.mq5` — EA em chart qualquer, fora do Tester.** O EA monta o composition root completo no `OnInit`:
+   - `ITickSource` = `CMksFileTickSource(InpTickFilePath)` ou `(InpTickFolder)` para multi-arquivo
+   - `IClock` = `CMksReplayClock(tickSource)` — `Now()` retorna `currentTick.timeMsc / 1000`
+   - `IBroker` = `CMksSimulatedBroker` (configurado via `CMksCostModel` por inputs do EA)
+   - `Builder`, `Sizer` (Fixed ou ATR), `RiskManager`, `Logger`, `BrickFileWriter`, `CustomSymbolSink` — instâncias idênticas às da live
+   - Estratégia futura — mesma classe da live, sem `if(MQL_TESTER)` em nenhum ponto
+
+   `OnInit` abre source e writer, dispara `EventSetMillisecondTimer(InpTickIntervalMs)` (default `0` = throughput máximo; valor positivo = sleep entre ticks para debug visual). `OnTimer` faz loop apertado: `source.Next() → builder.IngestTick() → sink/strategy reagem → simulatedBroker fecha trades`. EOF do source dispara `EventKillTimer`, fecha writer, imprime sumário e desliga via `ExpertRemove`. Roda em chart de qualquer símbolo — o chart é só hospedeiro, nenhum dado vem dele.
+
+6. **Regras vinculantes para a estratégia ser replay-safe.** A `REGRAS.md` ganha cláusula §1.9: proibido na estratégia o uso direto de `TimeCurrent`, `TimeLocal`, `MathRand` sem seed injetada, `_Symbol`, `_Period`, `SymbolInfoTick`/`SymbolInfoDouble`/`SymbolInfoInteger` em decisão de runtime, `AccountInfo*` em decisão de runtime, `iCustom`/`iHigh`/`iLow`/leitura de bars do CS. Tudo via interfaces injetadas — `IClock`, `ISymbol`, `IAccount`, `IBroker`, `ITickSource`, e o feed Renko apenas via callbacks de `IRenkoSink`. Violação é bug de paridade, bloqueia merge. Auditoria via grep no Protocolo 1.
+
+7. **Validação canônica — a "prova" da ADR.** Pipeline obrigatório no Protocolo 1 quando módulos que tocam paridade são declarados prontos:
+   - **(a)** Rodar Producer em live por janela ≥ 1h — gera `live.mkstick` + `live.mksbk` + `live.log`.
+   - **(b)** Rodar Replayer sobre `live.mkstick` — gera `replay.mksbk` + `replay.log`.
+   - **(c)** `fc /b live.mksbk replay.mksbk` byte-idêntico. Diferiu = não-determinismo no builder ou regressão de dados.
+   - **(d)** `diff` filtrando linhas com chave `decision=*` do log byte-idêntico. Diferiu = estratégia tem dependência não-injetada.
+   - **(e)** Equity de execução pode diferir entre live e replay — delta de modelagem do `CMksSimulatedBroker`/StressLab, documentado e fora do escopo desta paridade.
+
+   Esses passos viram `tools/verify-parity.ps1`, materializando a "log-diff tool" pendente da Fase 8.
+
+**Alternativas consideradas:**
+
+- **Usar `.tks` nativo do MT5 + `CustomTicksAdd` para injetar ticks no Tester:** rejeitada por ADR-015 (Tester não é fonte de verdade) e por ADR-012 §Alternativas (`.tks` é formato fechado de terceiros, viola invariante 5 do §1).
+
+- **Replay dentro do Strategy Tester via Custom Symbol alimentado com `CustomTicksAdd`:** rejeitada. O Tester reagrupa/sintetiza os ticks pelo seu próprio modo (every-tick ou 1-min OHLC), reabrindo o eixo 2 do V5 com roupa nova — o feed que a estratégia vê dentro do Tester não bate com o `.mkstick` original. Já vetado pela combinação ADR-015 §1 + ADR-020 regra 1.
+
+- **Recorder como EA em chart em vez de Service:** rejeitada. EA depende de `OnTick` do símbolo do chart hospedeiro — se o chart é fechado por engano, a captura para silenciosamente. Service em background é desacoplado de chart, sobrevive a fechamento de gráficos e está alinhado à seção 2 do ARCHITECTURE.md (pasta `MQL5/Services/` foi reservada precisamente para isso). Custo: Services no MT5 não têm UI; operador inspeciona via journal e via tamanho do arquivo crescendo.
+
+- **Recorder gravando direto no `.mksbk` (sem `.mkstick` separado):** rejeitada. Quebra a separação ADR-012 §6 (captura e consumo são artefatos distintos) e impede o replay de redescobrir bricks a partir dos ticks — bricks ficariam acoplados ao run específico do recorder, sem reprodutibilidade do builder. Manter `.mkstick` como fonte primária e deixar `.mksbk` ser sempre derivado é o que permite a regra 7c (fc/b byte-idêntico).
+
+- **Formato CSV ou JSON em vez de binário:** rejeitada por ADR-012 §Alternativas — precisão float em texto sem round-trip determinístico, parsing lento, arquivo grande, drift de formatação entre versões do MT5.
+
+- **Granularidade por sessão de mercado (overlap real) em vez de dia UTC:** rejeitada. Dia UTC é boundary natural sem ambiguidade, consistente com `.mksbk` (ADR-014). Sessões variam por broker e introduzem ambiguidade no naming e na ordenação cronológica de arquivos.
+
+- **Replayer como Script em `MQL5/Scripts/` em vez de EA:** rejeitada. Script roda síncrono em `OnStart` único, sem `OnTimer`, sem possibilidade de modo `RealTime` com sleep entre ticks para debug visual, sem parada limpa por `ExpertRemove`. EA com Timer cobre throughput máximo e RealTime no mesmo código.
+
+- **`IClock` no replay derivar de wall-clock multiplicado por fator de aceleração:** rejeitada. Reintroduz dependência de tempo externo no caminho determinístico. `IClock.Now()` retornando `currentTick.timeMsc/1000` é função pura do feed — determinismo preservado, e o relógio "avança" naturalmente em sincronia com os ticks consumidos.
+
+- **Captura multi-símbolo no mesmo arquivo:** rejeitada por esta ADR (ver §Fronteiras). Operador rodando N símbolos = N Services em paralelo, N arquivos/dia. Multi-símbolo é ADR futura quando estratégias multi-asset surgirem.
+
+- **Capturar L2 book (`MarketBookGet`) ao lado de cada tick desde já:** rejeitada por escopo. O `flags bit0=hasBook` do header está reservado, mas a captura de book é trabalho posterior — `CMksCostModel` modela slippage sem book hoje. Quando broker expõe e estratégia exige modelagem mais honesta, ADR posterior amplia o record sem quebrar v1 (versão do header sobe para 2 ou bit0 acende e adiciona-se record paralelo `.mkstickbk`).
+
+**Consequências:**
+
+- **Arquivos novos no core de Data:**
+  - `Core/Data/TickFileFormat.mqh` — constantes do layout binário, espelhando `BrickFileFormat.mqh`
+  - `Core/Data/CMksTickFileWriter.mqh` — writer espelhando `CMksBrickFileWriter`
+  - `Core/Data/CMksTickFileReader.mqh` — reader espelhando `CMksBrickFileReader`
+  - `Core/Data/CMksFileTickSource.mqh` — implementa `ITickSource`, encapsula o reader
+
+- **Nova pasta `Core/Clock/`** com:
+  - `CMksMt5Clock.mqh` — implementa `IClock`, retorna `TimeCurrent()` (uso live; consolida lógica que hoje vive implícita no Producer)
+  - `CMksReplayClock.mqh` — implementa `IClock`, retorna `currentTick.timeMsc/1000` do `ITickSource` corrente
+
+- **Novo Service `MQL5/Services/MKS-ULTIMATE/TickRecorder.mq5`** — captura dedicada, single-symbol por instance.
+
+- **Novo EA `MQL5/Experts/MKS-ULTIMATE/Replayer.mq5`** — consumidor do `.mkstick`, monta composition root completo.
+
+- **Novos códigos de erro na faixa 800–899** (reservada por ADR-012 §Consequências):
+  - `MKS_ERR_TICKFILE_INVALID_HEADER` = 800 — magic ou versão inválidos
+  - `MKS_ERR_TICKFILE_PROVENANCE_MISMATCH` = 801 — proveniência divergente da conta corrente (WARN, não fatal)
+  - `MKS_ERR_TICKFILE_REOPEN_INCOMPATIBLE` = 802 — reopen com header diferente (fatal)
+  - `MKS_ERR_TICKFILE_SYMBOL_MISMATCH` = 803 — símbolo do arquivo ≠ símbolo de consumo (fatal)
+  - `MKS_ERR_TICKFILE_SEQ_DISCONTINUITY` = 804 — multi-arquivo com seq descontínua cross-file
+  - `MKS_ERR_TICKFILE_IO` = 810 — falha de I/O genérica do writer/reader
+
+   Observação: a faixa 800–899 já está ocupada pelos códigos de `Data` materializados na ADR-012 (`MKS_ERR_DATA_FILE_IO=800` … `MKS_ERR_DATA_FILE_EXISTS=806`). A renumeração concreta dos códigos do TickFile dentro da mesma faixa fica para o slice 24c, que reconciliará os dois conjuntos sem reabrir esta ADR (a faixa é a fronteira arquitetural; o número exato dentro da faixa é detalhe do serializador, conforme ADR-012 §Consequências).
+
+- **`REGRAS.md` ganha §1.9** — proibições da regra 6 acima. Lint check no Protocolo 1: `grep -rE "(TimeCurrent|TimeLocal|MathRand|_Symbol|_Period|SymbolInfo|AccountInfo)" MQL5/Experts/` na pasta de estratégias deve dar zero hits (exceto em comentários explícitos de "uso intencional documentado").
+
+- **`docs/PROTOCOLOS.md` Protocolo 1 ganha item:** "se o módulo toca paridade (RenkoBuilder, ITickSource, IClock, IBroker, estratégia), executar `tools/verify-parity.ps1` antes de declarar pronto. `fc /b` dos `.mksbk` e `diff` das linhas `decision=*` do log têm que dar zero divergência."
+
+- **`tools/verify-parity.ps1`** — script novo, materializa a regra 7 e fecha a dívida da Fase 8 (log-diff tool). Recebe dois pares (live.mksbk/log + replay.mksbk/log) e reporta diff com exit code não-zero em qualquer divergência.
+
+- **`docs/ROADMAP.md` ganha Fase 4.5 — "Tick Recorder + Replayer"**, posicionada entre Fase 4 (Broker abstractions, concluída) e Fase 5a (PositionSizer, concluída) historicamente — mas, como Fase 5a já foi executada antes, esta fase é declarada concluída ao final da implementação desta ADR. Critério de saída: regra 7 (validação canônica) passa em janela ≥ 1h com zero divergência em (c) e (d).
+
+- **Tamanho de arquivo gerenciável.** XAUUSDm com ~10 tps de média 24h × 64 bytes = ~55 MB/dia/símbolo. Janela de 30 dias ≈ 1.6 GB/símbolo. Compressível com zstd offline em ~3x (não é responsabilidade do framework — housekeeping do operador).
+
+- **Sequência de implementação estimada (6 commits, ~1.5k linhas + testes):**
+  1. `TickFileFormat.mqh` + `CMksTickFileWriter.mqh` + `CMksTickFileReader.mqh` + `Test_CMksTickFile` (golden-file round-trip: escreve 10k ticks sintéticos, lê de volta, byte-idêntico)
+  2. `CMksMt5Clock.mqh` + `CMksReplayClock.mqh` + `CMksFileTickSource.mqh` + `Test_CMksFileTickSource`
+  3. Novos códigos de erro 800–810 em `Error.mqh` (reconciliação com códigos `MKS_ERR_DATA_*` pré-existentes da ADR-012)
+  4. `TickRecorder.mq5` Service + execução empírica de 1h para gerar primeiro `.mkstick` real
+  5. `Replayer.mq5` EA + execução empírica sobre o `.mkstick` do passo 4 → gera `replay.mksbk`
+  6. `tools/verify-parity.ps1` + atualização do Protocolo 1 + atualização do REGRAS.md §1.9 + atualização do ROADMAP.md (Fase 4.5 declarada concluída)
+
+**Fronteiras:**
+
+- **Não cobre captura multi-símbolo no mesmo arquivo.** 1 arquivo = 1 símbolo. Operador rodando N símbolos = N Services em paralelo. Multi-símbolo unificado é ADR futura quando surgirem estratégias multi-asset; o overhead arquitetural disso (sincronização de seqs entre símbolos) não vale antes de existir consumidor real.
+
+- **Não cobre captura de book L2.** `flags bit0=hasBook` reservado no header para versão 2. Hoje slippage é estimativa do `CMksCostModel`; quando broker expõe book e estratégia exige modelagem mais honesta, ADR posterior amplia o record sem quebrar a v1.
+
+- **Não cobre paridade de execução** (preço de fill, latência real, rejeições). Esses ficam modelados por `CMksSimulatedBroker` + `CMksCostModel` + StressLab (Fase 7). Esta ADR fixa paridade do FEED + DECISÃO; execução é trabalho de modelagem, com erro residual aceito e documentado.
+
+- **Não cobre compressão do arquivo.** Operador comprime offline (zstd, gzip, 7z) se quiser; framework lê apenas o binário cru, sem dependência de biblioteca de compressão.
+
+- **Não cobre captura de wall-clock do recorder** (timestamp de recebimento local) separado do timestamp do broker. `MksTick.timeMsc` é suficiente para determinismo do builder. Auditoria de latência live exigiria clock próprio do recorder e fica fora desta ADR.
+
+- **Não cobre purga automática de arquivos antigos.** Operador gerencia retenção; framework não deleta `.mkstick` antigos. Quando virar problema, script utility análogo ao `MksCleanupCustomSymbols.mq5` (ADR-020 regra 8).
+
+- **Não cobre paridade entre brokers diferentes.** Por ADR-012 §2, paridade é condicional ao broker da captura coincidir com o broker da conta de execução. Replay de `.mkstick` da corretora A num backtest cuja conta é corretora B funciona tecnicamente (com WARN), mas a paridade arquitetural não se aplica — é experimento de calibração cross-broker, não release.
+
+---
+
 ## 4. Decisões pendentes
 
 Pontos que precisam virar ADR assim que forem enfrentados:

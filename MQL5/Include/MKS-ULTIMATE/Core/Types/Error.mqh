@@ -51,14 +51,22 @@ enum ENUM_MKS_ERROR_CODE
 
    //--- Testing 700–799 — ver ADR-009
 
-   //--- Data: faixa 800–899 — ver ADR-012 ---
+   //--- Data: faixa 800–899 — ver ADR-012, ADR-014, ADR-024 ---
    MKS_ERR_DATA_FILE_IO = 800,             // falha de I/O (open/read/write/seek/close)
-   MKS_ERR_DATA_INVALID_MAGIC = 801,       // arquivo não começa com MKSBRK01
+   MKS_ERR_DATA_INVALID_MAGIC = 801,       // arquivo não começa com magic esperado (.mksbk: MKSBRK01; .mkstick: MKSTK01)
    MKS_ERR_DATA_UNSUPPORTED_VERSION = 802, // formatVersion não suportada por este reader
    MKS_ERR_DATA_HEADER_INVALID = 803,      // header com tamanho/recordSize inconsistentes
-   MKS_ERR_DATA_TRUNCATED = 804,           // arquivo termina antes do brickCount esperado
+   MKS_ERR_DATA_TRUNCATED = 804,           // arquivo termina antes do brickCount/tickCount esperado
    MKS_ERR_DATA_STATE_INVALID = 805,       // operação em writer/reader em estado errado
    MKS_ERR_DATA_FILE_EXISTS = 806,         // arquivo já existe na abertura para escrita (ADR-014)
+   MKS_ERR_DATA_SYMBOL_MISMATCH = 807,     // símbolo do .mkstick ≠ esperado pelo consumo (ADR-024 §4, fatal)
+   // 808–810 reservados:
+   //   808 — MKS_ERR_DATA_PROVENANCE_MISMATCH (broker/account WARN; hoje só flag interno no FileTickSource)
+   //   809 — MKS_ERR_DATA_REOPEN_INCOMPATIBLE (Recorder reopen com header diferente — slice 24d)
+   //   810 — MKS_ERR_DATA_SEQ_DISCONTINUITY    (multi-arquivo com seq descontínua cross-file — slice 24d/e)
+   // Reservados-por-comentário em vez de declarados no enum agora porque
+   // ADR-012 §Consequências proíbe fixar número no vazio: o consumidor
+   // que exige o código entra junto com o número no slice que o materializa.
 };
 
 struct MksError
