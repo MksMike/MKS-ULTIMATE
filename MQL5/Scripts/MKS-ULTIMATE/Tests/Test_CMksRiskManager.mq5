@@ -19,6 +19,7 @@
 #include <MKS-ULTIMATE/Core/Trade/CMksFixedLotSizer.mqh>
 #include <MKS-ULTIMATE/Core/Testing/Asserts.mqh>
 #include <MKS-ULTIMATE/Core/Testing/Mocks/CMksFakeSymbol.mqh>
+#include <MKS-ULTIMATE/Core/Testing/Mocks/CMksFakePositionBook.mqh>
 #include <MKS-ULTIMATE/Core/Types/OrderRequest.mqh>
 #include <MKS-ULTIMATE/Core/Types/Error.mqh>
 
@@ -291,6 +292,219 @@ void Test_Risk_CheckOrder_MaxLotsRejectedBeforeSizer()
 }
 
 //==================================================================
+// Camada Por Estratégia (slice 6.2) — Validate
+//==================================================================
+
+void Test_Risk_Strat_Validate_OkWithBook()
+{
+   CMksFakePositionBook book;
+   CMksRiskTradeParams p;
+   CMksRiskStrategyParams sp;
+   sp.maxOpenPositions = 3;
+   sp.maxTotalLots     = 1.0;
+   CMksRiskManager risk(p, sp, GetPointer(book));
+   MksError err;
+   MKS_ASSERT_TRUE(risk.Validate(err), "Validate ok com book");
+}
+
+void Test_Risk_Strat_Validate_ActiveWithoutBookFails()
+{
+   CMksRiskTradeParams p;
+   CMksRiskStrategyParams sp;
+   sp.maxOpenPositions = 3;
+   CMksRiskManager risk(p, sp, NULL);
+   MksError err;
+   MKS_ASSERT_FALSE(risk.Validate(err), "Validate falha — strat ativo sem book");
+   MKS_ASSERT_EQ_INT((int)MKS_ERR_RISK_INVALID_PARAM, (int)err.code, "code=INVALID_PARAM");
+}
+
+void Test_Risk_Strat_Validate_NegativeMaxOpenFails()
+{
+   CMksFakePositionBook book;
+   CMksRiskTradeParams p;
+   CMksRiskStrategyParams sp;
+   sp.maxOpenPositions = -1;
+   CMksRiskManager risk(p, sp, GetPointer(book));
+   MksError err;
+   MKS_ASSERT_FALSE(risk.Validate(err), "Validate falha — maxOpen<0");
+   MKS_ASSERT_EQ_INT((int)MKS_ERR_RISK_INVALID_PARAM, (int)err.code, "code=INVALID_PARAM");
+}
+
+void Test_Risk_Strat_Validate_NegativeMaxLotsFails()
+{
+   CMksFakePositionBook book;
+   CMksRiskTradeParams p;
+   CMksRiskStrategyParams sp;
+   sp.maxTotalLots = -0.1;
+   CMksRiskManager risk(p, sp, GetPointer(book));
+   MksError err;
+   MKS_ASSERT_FALSE(risk.Validate(err), "Validate falha — maxTotalLots<0");
+   MKS_ASSERT_EQ_INT((int)MKS_ERR_RISK_INVALID_PARAM, (int)err.code, "code=INVALID_PARAM");
+}
+
+void Test_Risk_Strat_Validate_InactiveWithoutBookOk()
+{
+   // Sem limites ativos, book pode ser NULL (compatibilidade backward).
+   CMksRiskTradeParams p;
+   CMksRiskStrategyParams sp; // defaults: tudo zero = sem limite
+   CMksRiskManager risk(p, sp, NULL);
+   MksError err;
+   MKS_ASSERT_TRUE(risk.Validate(err), "Validate ok — strat inativo sem book");
+}
+
+//==================================================================
+// Camada Por Estratégia — maxOpenPositions
+//==================================================================
+
+void Test_Risk_Strat_OpenPositions_BelowLimit()
+{
+   CMksFakePositionBook book;
+   book.SetOpenCount(1); // 1 aberta + 1 nova = 2 ≤ 3
+   CMksRiskTradeParams p;
+   CMksRiskStrategyParams sp;
+   sp.maxOpenPositions = 3;
+   CMksRiskManager risk(p, sp, GetPointer(book));
+   MksError err;
+   MKS_ASSERT_TRUE(risk.CheckOrder(MakeReq(0.1, 100.0), err),
+                   "abrir abaixo do limite passa");
+}
+
+void Test_Risk_Strat_OpenPositions_AtBoundary()
+{
+   CMksFakePositionBook book;
+   book.SetOpenCount(2); // 2 + 1 = 3 = limite (passa, não estoura)
+   CMksRiskTradeParams p;
+   CMksRiskStrategyParams sp;
+   sp.maxOpenPositions = 3;
+   CMksRiskManager risk(p, sp, GetPointer(book));
+   MksError err;
+   MKS_ASSERT_TRUE(risk.CheckOrder(MakeReq(0.1, 100.0), err),
+                   "abrir no boundary (== limite) passa");
+}
+
+void Test_Risk_Strat_OpenPositions_Exceeded()
+{
+   CMksFakePositionBook book;
+   book.SetOpenCount(3); // 3 + 1 = 4 > 3 limite
+   CMksRiskTradeParams p;
+   CMksRiskStrategyParams sp;
+   sp.maxOpenPositions = 3;
+   CMksRiskManager risk(p, sp, GetPointer(book));
+   MksError err;
+   MKS_ASSERT_FALSE(risk.CheckOrder(MakeReq(0.1, 100.0), err),
+                    "abrir excedendo limite falha");
+   MKS_ASSERT_EQ_INT((int)MKS_ERR_RISK_REJECTED_OPEN_POSITIONS,
+                     (int)err.code, "code=OPEN_POSITIONS");
+}
+
+void Test_Risk_Strat_OpenPositions_ZeroMeansNoLimit()
+{
+   CMksFakePositionBook book;
+   book.SetOpenCount(999);
+   CMksRiskTradeParams p;
+   CMksRiskStrategyParams sp;
+   sp.maxOpenPositions = 0; // sem limite
+   CMksRiskManager risk(p, sp, GetPointer(book));
+   MksError err;
+   MKS_ASSERT_TRUE(risk.CheckOrder(MakeReq(0.1, 100.0), err),
+                   "maxOpenPositions=0 desabilita check");
+}
+
+//==================================================================
+// Camada Por Estratégia — maxTotalLots
+//==================================================================
+
+void Test_Risk_Strat_TotalLots_BelowLimit()
+{
+   CMksFakePositionBook book;
+   book.SetTotalLots(0.5); // 0.5 + 0.3 = 0.8 < 1.0
+   CMksRiskTradeParams p;
+   CMksRiskStrategyParams sp;
+   sp.maxTotalLots = 1.0;
+   CMksRiskManager risk(p, sp, GetPointer(book));
+   MksError err;
+   MKS_ASSERT_TRUE(risk.CheckOrder(MakeReq(0.3, 100.0), err),
+                   "soma abaixo do limite passa");
+}
+
+void Test_Risk_Strat_TotalLots_AtBoundary()
+{
+   CMksFakePositionBook book;
+   book.SetTotalLots(0.6); // 0.6 + 0.4 = 1.0 = limite (passa)
+   CMksRiskTradeParams p;
+   CMksRiskStrategyParams sp;
+   sp.maxTotalLots = 1.0;
+   CMksRiskManager risk(p, sp, GetPointer(book));
+   MksError err;
+   MKS_ASSERT_TRUE(risk.CheckOrder(MakeReq(0.4, 100.0), err),
+                   "soma no boundary passa");
+}
+
+void Test_Risk_Strat_TotalLots_Exceeded()
+{
+   CMksFakePositionBook book;
+   book.SetTotalLots(0.8); // 0.8 + 0.3 = 1.1 > 1.0
+   CMksRiskTradeParams p;
+   CMksRiskStrategyParams sp;
+   sp.maxTotalLots = 1.0;
+   CMksRiskManager risk(p, sp, GetPointer(book));
+   MksError err;
+   MKS_ASSERT_FALSE(risk.CheckOrder(MakeReq(0.3, 100.0), err),
+                    "soma excedendo limite falha");
+   MKS_ASSERT_EQ_INT((int)MKS_ERR_RISK_REJECTED_TOTAL_LOTS,
+                     (int)err.code, "code=TOTAL_LOTS");
+}
+
+void Test_Risk_Strat_TotalLots_ZeroMeansNoLimit()
+{
+   CMksFakePositionBook book;
+   book.SetTotalLots(999.0);
+   CMksRiskTradeParams p;
+   CMksRiskStrategyParams sp;
+   sp.maxTotalLots = 0.0; // sem limite
+   CMksRiskManager risk(p, sp, GetPointer(book));
+   MksError err;
+   MKS_ASSERT_TRUE(risk.CheckOrder(MakeReq(50.0, 100.0), err),
+                   "maxTotalLots=0 desabilita check");
+}
+
+//==================================================================
+// Camada Por Estratégia — ordem de avaliação
+//==================================================================
+
+void Test_Risk_Strat_OpenPositionsBeforeTotalLots()
+{
+   CMksFakePositionBook book;
+   book.SetOpenCount(3);  // estoura openPositions
+   book.SetTotalLots(2.0); // estoura totalLots também
+   CMksRiskTradeParams p;
+   CMksRiskStrategyParams sp;
+   sp.maxOpenPositions = 3;
+   sp.maxTotalLots     = 1.0;
+   CMksRiskManager risk(p, sp, GetPointer(book));
+   MksError err;
+   MKS_ASSERT_FALSE(risk.CheckOrder(MakeReq(0.1, 100.0), err), "rejeita");
+   MKS_ASSERT_EQ_INT((int)MKS_ERR_RISK_REJECTED_OPEN_POSITIONS,
+                     (int)err.code, "open antes de total_lots");
+}
+
+void Test_Risk_Strat_TradeBeforeStrategy()
+{
+   // SL missing (camada trade) deve ser reportado antes de strategy limits.
+   CMksFakePositionBook book;
+   book.SetOpenCount(99); // estouraria
+   CMksRiskTradeParams p;
+   p.requireSl = true;
+   CMksRiskStrategyParams sp;
+   sp.maxOpenPositions = 3;
+   CMksRiskManager risk(p, sp, GetPointer(book));
+   MksError err;
+   MKS_ASSERT_FALSE(risk.CheckOrder(MakeReq(0.1, 0.0), err), "rejeita");
+   MKS_ASSERT_EQ_INT((int)MKS_ERR_RISK_REJECTED_SL_MISSING,
+                     (int)err.code, "trade antes de strategy");
+}
+
+//==================================================================
 // CheckOrder — sem logger não causa crash
 //==================================================================
 
@@ -336,6 +550,23 @@ void OnStart()
    MKS_RUN(Test_Risk_CheckOrder_SlRejectedBeforeTp);
    MKS_RUN(Test_Risk_CheckOrder_TpRejectedBeforeMaxLots);
    MKS_RUN(Test_Risk_CheckOrder_MaxLotsRejectedBeforeSizer);
+
+   // Camada Por Estratégia (slice 6.2)
+   MKS_RUN(Test_Risk_Strat_Validate_OkWithBook);
+   MKS_RUN(Test_Risk_Strat_Validate_ActiveWithoutBookFails);
+   MKS_RUN(Test_Risk_Strat_Validate_NegativeMaxOpenFails);
+   MKS_RUN(Test_Risk_Strat_Validate_NegativeMaxLotsFails);
+   MKS_RUN(Test_Risk_Strat_Validate_InactiveWithoutBookOk);
+   MKS_RUN(Test_Risk_Strat_OpenPositions_BelowLimit);
+   MKS_RUN(Test_Risk_Strat_OpenPositions_AtBoundary);
+   MKS_RUN(Test_Risk_Strat_OpenPositions_Exceeded);
+   MKS_RUN(Test_Risk_Strat_OpenPositions_ZeroMeansNoLimit);
+   MKS_RUN(Test_Risk_Strat_TotalLots_BelowLimit);
+   MKS_RUN(Test_Risk_Strat_TotalLots_AtBoundary);
+   MKS_RUN(Test_Risk_Strat_TotalLots_Exceeded);
+   MKS_RUN(Test_Risk_Strat_TotalLots_ZeroMeansNoLimit);
+   MKS_RUN(Test_Risk_Strat_OpenPositionsBeforeTotalLots);
+   MKS_RUN(Test_Risk_Strat_TradeBeforeStrategy);
 
    MKS_RUN(Test_Risk_CheckOrder_NoLoggerNoFault);
 

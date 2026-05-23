@@ -42,6 +42,8 @@ enum ENUM_MKS_ERROR_CODE
    MKS_ERR_RISK_REJECTED_LOTS_EXCEEDED = 402, // req.lots > maxLotsPerTrade configurado
    MKS_ERR_RISK_REJECTED_LOTS_VS_SIZER = 403, // req.lots > sizer.ComputeLots(req.slPoints)
    MKS_ERR_RISK_INVALID_PARAM = 404,          // config do Risk Manager inválida
+   MKS_ERR_RISK_REJECTED_OPEN_POSITIONS = 405,// book.OpenCount+1 > maxOpenPositions (slice 6.2)
+   MKS_ERR_RISK_REJECTED_TOTAL_LOTS = 406,    // book.TotalLots+req.lots > maxTotalLots (slice 6.2)
 
    //--- StressLab 500–599 — ver ADR-009
 
