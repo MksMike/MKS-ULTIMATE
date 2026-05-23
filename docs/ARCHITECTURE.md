@@ -39,11 +39,11 @@ MKS-ULTIMATE/
 │   │   │   ├── Data/               # BrickFileFormat, TickFileFormat, CMksBrickFile/TickFile Writer/Reader, CMksFileTickSource
 │   │   │   ├── Clock/              # CMksMt5Clock (live), CMksReplayClock (replay)
 │   │   │   ├── Symbol/             # CMksMt5Symbol (impl de ISymbol)
-│   │   │   ├── Account/            # CMksMt5Account (impl de IAccount)
+│   │   │   ├── Account/            # CMksMt5Account (impl de IAccount), CMksAccountSnapshot
 │   │   │   ├── Position/           # CMksMt5PositionBook (impl de IPositionBook)
 │   │   │   ├── Broker/             # CMksMt5Broker, CMksSimulatedBroker, CMksCostModel
 │   │   │   ├── Trade/              # CMksTradeManager, CMksPositionSizer
-│   │   │   ├── Risk/               # CMksRiskManager (Por Trade + Por Estratégia), CMksRiskGatedBroker
+│   │   │   ├── Risk/               # CMksRiskManager (Por Trade + Estratégia + Conta), CMksRiskGatedBroker
 │   │   │   ├── Log/                # CMksLogger (logging estruturado)
 │   │   │   └── Testing/            # Framework mínimo de asserções
 │   │   └── StressLab/              # Simulação de condições adversas

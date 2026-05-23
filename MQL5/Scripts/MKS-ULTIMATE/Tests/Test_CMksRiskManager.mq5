@@ -17,9 +17,12 @@
 
 #include <MKS-ULTIMATE/Core/Risk/CMksRiskManager.mqh>
 #include <MKS-ULTIMATE/Core/Trade/CMksFixedLotSizer.mqh>
+#include <MKS-ULTIMATE/Core/Account/CMksAccountSnapshot.mqh>
 #include <MKS-ULTIMATE/Core/Testing/Asserts.mqh>
 #include <MKS-ULTIMATE/Core/Testing/Mocks/CMksFakeSymbol.mqh>
 #include <MKS-ULTIMATE/Core/Testing/Mocks/CMksFakePositionBook.mqh>
+#include <MKS-ULTIMATE/Core/Testing/Mocks/CMksFakeAccount.mqh>
+#include <MKS-ULTIMATE/Core/Testing/Mocks/CMksFakeClock.mqh>
 #include <MKS-ULTIMATE/Core/Types/OrderRequest.mqh>
 #include <MKS-ULTIMATE/Core/Types/Error.mqh>
 
@@ -505,6 +508,381 @@ void Test_Risk_Strat_TradeBeforeStrategy()
 }
 
 //==================================================================
+// Camada Por Conta (slice 6.3) — Validate
+//==================================================================
+
+// Helper: monta snapshot com balance/equity configurados.
+void SetupSnapshot(CMksFakeAccount &acc, CMksFakeClock &clk,
+                   double balance, double equity,
+                   CMksAccountSnapshot &outSnap)
+{
+   acc.SetBalance(balance);
+   acc.SetEquity(equity);
+   clk.SetNowMsc(1779494400000); // 2026-05-23 00:00 UTC
+   outSnap.Init();
+}
+
+void Test_Risk_Acct_Validate_OkWithSnapshot()
+{
+   CMksFakeAccount acc; CMksFakeClock clk;
+   CMksAccountSnapshot snap(GetPointer(acc), GetPointer(clk));
+   SetupSnapshot(acc, clk, 10000.0, 10000.0, snap);
+
+   CMksRiskTradeParams p;
+   CMksRiskStrategyParams sp;
+   CMksRiskAccountParams ap;
+   ap.maxDailyLossPct = 5.0;
+   CMksRiskManager risk(p, sp, ap, NULL, GetPointer(snap));
+   MksError err;
+   MKS_ASSERT_TRUE(risk.Validate(err), "Validate ok com snapshot");
+}
+
+void Test_Risk_Acct_Validate_ActiveWithoutSnapshotFails()
+{
+   CMksRiskTradeParams p;
+   CMksRiskStrategyParams sp;
+   CMksRiskAccountParams ap;
+   ap.maxDrawdownPct = 10.0;
+   CMksRiskManager risk(p, sp, ap, NULL, NULL);
+   MksError err;
+   MKS_ASSERT_FALSE(risk.Validate(err), "Validate falha — acct ativo sem snapshot");
+   MKS_ASSERT_EQ_INT((int)MKS_ERR_RISK_INVALID_PARAM, (int)err.code, "code=INVALID_PARAM");
+}
+
+void Test_Risk_Acct_Validate_NegativeDailyLossFails()
+{
+   CMksFakeAccount acc; CMksFakeClock clk;
+   CMksAccountSnapshot snap(GetPointer(acc), GetPointer(clk));
+   SetupSnapshot(acc, clk, 10000.0, 10000.0, snap);
+
+   CMksRiskTradeParams p;
+   CMksRiskStrategyParams sp;
+   CMksRiskAccountParams ap;
+   ap.maxDailyLossPct = -1.0;
+   CMksRiskManager risk(p, sp, ap, NULL, GetPointer(snap));
+   MksError err;
+   MKS_ASSERT_FALSE(risk.Validate(err), "Validate falha — dailyLoss<0");
+}
+
+void Test_Risk_Acct_Validate_NegativeDrawdownFails()
+{
+   CMksFakeAccount acc; CMksFakeClock clk;
+   CMksAccountSnapshot snap(GetPointer(acc), GetPointer(clk));
+   SetupSnapshot(acc, clk, 10000.0, 10000.0, snap);
+
+   CMksRiskTradeParams p;
+   CMksRiskStrategyParams sp;
+   CMksRiskAccountParams ap;
+   ap.maxDrawdownPct = -2.0;
+   CMksRiskManager risk(p, sp, ap, NULL, GetPointer(snap));
+   MksError err;
+   MKS_ASSERT_FALSE(risk.Validate(err), "Validate falha — drawdown<0");
+}
+
+void Test_Risk_Acct_Validate_NegativeMinEquityFails()
+{
+   CMksFakeAccount acc; CMksFakeClock clk;
+   CMksAccountSnapshot snap(GetPointer(acc), GetPointer(clk));
+   SetupSnapshot(acc, clk, 10000.0, 10000.0, snap);
+
+   CMksRiskTradeParams p;
+   CMksRiskStrategyParams sp;
+   CMksRiskAccountParams ap;
+   ap.minEquityAbs = -100.0;
+   CMksRiskManager risk(p, sp, ap, NULL, GetPointer(snap));
+   MksError err;
+   MKS_ASSERT_FALSE(risk.Validate(err), "Validate falha — minEquity<0");
+}
+
+void Test_Risk_Acct_Validate_InactiveWithoutSnapshotOk()
+{
+   CMksRiskTradeParams p;
+   CMksRiskStrategyParams sp;
+   CMksRiskAccountParams ap; // defaults: tudo zero
+   CMksRiskManager risk(p, sp, ap, NULL, NULL);
+   MksError err;
+   MKS_ASSERT_TRUE(risk.Validate(err), "Validate ok — acct inativo sem snapshot");
+}
+
+//==================================================================
+// Camada Por Conta — maxDailyLossPct
+//==================================================================
+
+void Test_Risk_Acct_DailyLoss_BelowLimit()
+{
+   CMksFakeAccount acc; CMksFakeClock clk;
+   CMksAccountSnapshot snap(GetPointer(acc), GetPointer(clk));
+   SetupSnapshot(acc, clk, 10000.0, 10000.0, snap);
+   // Perda de 3% (não atinge limite de 5%)
+   acc.SetEquity(9700.0); snap.Update();
+
+   CMksRiskTradeParams p;
+   CMksRiskStrategyParams sp;
+   CMksRiskAccountParams ap; ap.maxDailyLossPct = 5.0;
+   CMksRiskManager risk(p, sp, ap, NULL, GetPointer(snap));
+   MksError err;
+   MKS_ASSERT_TRUE(risk.CheckOrder(MakeReq(0.1, 100.0), err),
+                   "perda abaixo do limite passa");
+}
+
+void Test_Risk_Acct_DailyLoss_AtBoundary()
+{
+   CMksFakeAccount acc; CMksFakeClock clk;
+   CMksAccountSnapshot snap(GetPointer(acc), GetPointer(clk));
+   SetupSnapshot(acc, clk, 10000.0, 10000.0, snap);
+   // Perda exatamente 5%
+   acc.SetEquity(9500.0); snap.Update();
+
+   CMksRiskTradeParams p;
+   CMksRiskStrategyParams sp;
+   CMksRiskAccountParams ap; ap.maxDailyLossPct = 5.0;
+   CMksRiskManager risk(p, sp, ap, NULL, GetPointer(snap));
+   MksError err;
+   MKS_ASSERT_FALSE(risk.CheckOrder(MakeReq(0.1, 100.0), err),
+                    "perda no limite (== max) rejeita");
+   MKS_ASSERT_EQ_INT((int)MKS_ERR_RISK_REJECTED_DAILY_LOSS, (int)err.code, "code=DAILY_LOSS");
+}
+
+void Test_Risk_Acct_DailyLoss_Exceeded()
+{
+   CMksFakeAccount acc; CMksFakeClock clk;
+   CMksAccountSnapshot snap(GetPointer(acc), GetPointer(clk));
+   SetupSnapshot(acc, clk, 10000.0, 10000.0, snap);
+   // Perda de 7%
+   acc.SetEquity(9300.0); snap.Update();
+
+   CMksRiskTradeParams p;
+   CMksRiskStrategyParams sp;
+   CMksRiskAccountParams ap; ap.maxDailyLossPct = 5.0;
+   CMksRiskManager risk(p, sp, ap, NULL, GetPointer(snap));
+   MksError err;
+   MKS_ASSERT_FALSE(risk.CheckOrder(MakeReq(0.1, 100.0), err), "rejeita");
+   MKS_ASSERT_EQ_INT((int)MKS_ERR_RISK_REJECTED_DAILY_LOSS, (int)err.code, "code=DAILY_LOSS");
+}
+
+void Test_Risk_Acct_DailyLoss_ZeroMeansNoLimit()
+{
+   CMksFakeAccount acc; CMksFakeClock clk;
+   CMksAccountSnapshot snap(GetPointer(acc), GetPointer(clk));
+   SetupSnapshot(acc, clk, 10000.0, 10000.0, snap);
+   acc.SetEquity(5000.0); snap.Update(); // 50% perda
+
+   CMksRiskTradeParams p;
+   CMksRiskStrategyParams sp;
+   CMksRiskAccountParams ap; ap.maxDailyLossPct = 0.0;
+   CMksRiskManager risk(p, sp, ap, NULL, GetPointer(snap));
+   MksError err;
+   MKS_ASSERT_TRUE(risk.CheckOrder(MakeReq(0.1, 100.0), err),
+                   "dailyLoss=0 desabilita check");
+}
+
+//==================================================================
+// Camada Por Conta — maxDrawdownPct
+//==================================================================
+
+void Test_Risk_Acct_Drawdown_BelowLimit()
+{
+   CMksFakeAccount acc; CMksFakeClock clk;
+   CMksAccountSnapshot snap(GetPointer(acc), GetPointer(clk));
+   SetupSnapshot(acc, clk, 10000.0, 10000.0, snap);
+   acc.SetEquity(12000.0); snap.Update(); // peak
+   acc.SetEquity(11400.0); snap.Update(); // -5%
+
+   CMksRiskTradeParams p;
+   CMksRiskStrategyParams sp;
+   CMksRiskAccountParams ap; ap.maxDrawdownPct = 10.0;
+   CMksRiskManager risk(p, sp, ap, NULL, GetPointer(snap));
+   MksError err;
+   MKS_ASSERT_TRUE(risk.CheckOrder(MakeReq(0.1, 100.0), err),
+                   "drawdown abaixo do limite passa");
+}
+
+void Test_Risk_Acct_Drawdown_AtBoundary()
+{
+   CMksFakeAccount acc; CMksFakeClock clk;
+   CMksAccountSnapshot snap(GetPointer(acc), GetPointer(clk));
+   SetupSnapshot(acc, clk, 10000.0, 10000.0, snap);
+   acc.SetEquity(12000.0); snap.Update();
+   acc.SetEquity(10800.0); snap.Update(); // exatamente -10%
+
+   CMksRiskTradeParams p;
+   CMksRiskStrategyParams sp;
+   CMksRiskAccountParams ap; ap.maxDrawdownPct = 10.0;
+   CMksRiskManager risk(p, sp, ap, NULL, GetPointer(snap));
+   MksError err;
+   MKS_ASSERT_FALSE(risk.CheckOrder(MakeReq(0.1, 100.0), err),
+                    "drawdown no limite (== max) rejeita");
+   MKS_ASSERT_EQ_INT((int)MKS_ERR_RISK_REJECTED_DRAWDOWN, (int)err.code, "code=DRAWDOWN");
+}
+
+void Test_Risk_Acct_Drawdown_Exceeded()
+{
+   CMksFakeAccount acc; CMksFakeClock clk;
+   CMksAccountSnapshot snap(GetPointer(acc), GetPointer(clk));
+   SetupSnapshot(acc, clk, 10000.0, 10000.0, snap);
+   acc.SetEquity(12000.0); snap.Update();
+   acc.SetEquity(9600.0);  snap.Update(); // -20%
+
+   CMksRiskTradeParams p;
+   CMksRiskStrategyParams sp;
+   CMksRiskAccountParams ap; ap.maxDrawdownPct = 10.0;
+   CMksRiskManager risk(p, sp, ap, NULL, GetPointer(snap));
+   MksError err;
+   MKS_ASSERT_FALSE(risk.CheckOrder(MakeReq(0.1, 100.0), err), "rejeita");
+   MKS_ASSERT_EQ_INT((int)MKS_ERR_RISK_REJECTED_DRAWDOWN, (int)err.code, "code=DRAWDOWN");
+}
+
+void Test_Risk_Acct_Drawdown_ZeroMeansNoLimit()
+{
+   CMksFakeAccount acc; CMksFakeClock clk;
+   CMksAccountSnapshot snap(GetPointer(acc), GetPointer(clk));
+   SetupSnapshot(acc, clk, 10000.0, 10000.0, snap);
+   acc.SetEquity(12000.0); snap.Update();
+   acc.SetEquity(2000.0);  snap.Update(); // -83%
+
+   CMksRiskTradeParams p;
+   CMksRiskStrategyParams sp;
+   CMksRiskAccountParams ap; ap.maxDrawdownPct = 0.0;
+   CMksRiskManager risk(p, sp, ap, NULL, GetPointer(snap));
+   MksError err;
+   MKS_ASSERT_TRUE(risk.CheckOrder(MakeReq(0.1, 100.0), err),
+                   "drawdown=0 desabilita check");
+}
+
+//==================================================================
+// Camada Por Conta — minEquityAbs (circuit breaker)
+//==================================================================
+
+void Test_Risk_Acct_MinEquity_Above()
+{
+   CMksFakeAccount acc; CMksFakeClock clk;
+   CMksAccountSnapshot snap(GetPointer(acc), GetPointer(clk));
+   SetupSnapshot(acc, clk, 10000.0, 10000.0, snap);
+   acc.SetEquity(6000.0); snap.Update();
+
+   CMksRiskTradeParams p;
+   CMksRiskStrategyParams sp;
+   CMksRiskAccountParams ap; ap.minEquityAbs = 5000.0;
+   CMksRiskManager risk(p, sp, ap, NULL, GetPointer(snap));
+   MksError err;
+   MKS_ASSERT_TRUE(risk.CheckOrder(MakeReq(0.1, 100.0), err),
+                   "equity acima do mínimo passa");
+}
+
+void Test_Risk_Acct_MinEquity_AtBoundary()
+{
+   CMksFakeAccount acc; CMksFakeClock clk;
+   CMksAccountSnapshot snap(GetPointer(acc), GetPointer(clk));
+   SetupSnapshot(acc, clk, 10000.0, 10000.0, snap);
+   acc.SetEquity(5000.0); snap.Update();
+
+   CMksRiskTradeParams p;
+   CMksRiskStrategyParams sp;
+   CMksRiskAccountParams ap; ap.minEquityAbs = 5000.0;
+   CMksRiskManager risk(p, sp, ap, NULL, GetPointer(snap));
+   MksError err;
+   // Check é "< minEquity"; equity == minEquity passa.
+   MKS_ASSERT_TRUE(risk.CheckOrder(MakeReq(0.1, 100.0), err),
+                   "equity no boundary (== min) passa");
+}
+
+void Test_Risk_Acct_MinEquity_Below()
+{
+   CMksFakeAccount acc; CMksFakeClock clk;
+   CMksAccountSnapshot snap(GetPointer(acc), GetPointer(clk));
+   SetupSnapshot(acc, clk, 10000.0, 10000.0, snap);
+   acc.SetEquity(4500.0); snap.Update();
+
+   CMksRiskTradeParams p;
+   CMksRiskStrategyParams sp;
+   CMksRiskAccountParams ap; ap.minEquityAbs = 5000.0;
+   CMksRiskManager risk(p, sp, ap, NULL, GetPointer(snap));
+   MksError err;
+   MKS_ASSERT_FALSE(risk.CheckOrder(MakeReq(0.1, 100.0), err),
+                    "equity abaixo do mínimo rejeita");
+   MKS_ASSERT_EQ_INT((int)MKS_ERR_RISK_REJECTED_MIN_EQUITY, (int)err.code, "code=MIN_EQUITY");
+}
+
+void Test_Risk_Acct_MinEquity_ZeroMeansNoLimit()
+{
+   CMksFakeAccount acc; CMksFakeClock clk;
+   CMksAccountSnapshot snap(GetPointer(acc), GetPointer(clk));
+   SetupSnapshot(acc, clk, 10000.0, 10000.0, snap);
+   acc.SetEquity(10.0); snap.Update();
+
+   CMksRiskTradeParams p;
+   CMksRiskStrategyParams sp;
+   CMksRiskAccountParams ap; ap.minEquityAbs = 0.0;
+   CMksRiskManager risk(p, sp, ap, NULL, GetPointer(snap));
+   MksError err;
+   MKS_ASSERT_TRUE(risk.CheckOrder(MakeReq(0.1, 100.0), err),
+                   "minEquity=0 desabilita check");
+}
+
+//==================================================================
+// Camada Por Conta — ordem de avaliação
+//==================================================================
+
+void Test_Risk_Acct_StrategyBeforeAccount()
+{
+   CMksFakePositionBook book; book.SetOpenCount(3);
+   CMksFakeAccount acc; CMksFakeClock clk;
+   CMksAccountSnapshot snap(GetPointer(acc), GetPointer(clk));
+   SetupSnapshot(acc, clk, 10000.0, 10000.0, snap);
+   acc.SetEquity(8000.0); snap.Update(); // -20% (estouraria daily loss tb)
+
+   CMksRiskTradeParams p;
+   CMksRiskStrategyParams sp; sp.maxOpenPositions = 3;
+   CMksRiskAccountParams ap;  ap.maxDailyLossPct = 5.0;
+   CMksRiskManager risk(p, sp, ap, GetPointer(book), GetPointer(snap));
+   MksError err;
+   MKS_ASSERT_FALSE(risk.CheckOrder(MakeReq(0.1, 100.0), err), "rejeita");
+   MKS_ASSERT_EQ_INT((int)MKS_ERR_RISK_REJECTED_OPEN_POSITIONS,
+                     (int)err.code, "strategy antes de account");
+}
+
+void Test_Risk_Acct_DailyLossBeforeDrawdown()
+{
+   CMksFakeAccount acc; CMksFakeClock clk;
+   CMksAccountSnapshot snap(GetPointer(acc), GetPointer(clk));
+   SetupSnapshot(acc, clk, 10000.0, 10000.0, snap);
+   acc.SetEquity(12000.0); snap.Update(); // peak
+   acc.SetEquity(8000.0);  snap.Update(); // daily loss -20%, drawdown -33%
+
+   CMksRiskTradeParams p;
+   CMksRiskStrategyParams sp;
+   CMksRiskAccountParams ap;
+   ap.maxDailyLossPct = 5.0;
+   ap.maxDrawdownPct  = 10.0;
+   CMksRiskManager risk(p, sp, ap, NULL, GetPointer(snap));
+   MksError err;
+   MKS_ASSERT_FALSE(risk.CheckOrder(MakeReq(0.1, 100.0), err), "rejeita");
+   MKS_ASSERT_EQ_INT((int)MKS_ERR_RISK_REJECTED_DAILY_LOSS,
+                     (int)err.code, "daily_loss antes de drawdown");
+}
+
+void Test_Risk_Acct_DrawdownBeforeMinEquity()
+{
+   CMksFakeAccount acc; CMksFakeClock clk;
+   CMksAccountSnapshot snap(GetPointer(acc), GetPointer(clk));
+   SetupSnapshot(acc, clk, 10000.0, 10000.0, snap);
+   acc.SetEquity(12000.0); snap.Update();
+   acc.SetEquity(4000.0);  snap.Update(); // drawdown -66%, equity < 5000
+
+   CMksRiskTradeParams p;
+   CMksRiskStrategyParams sp;
+   CMksRiskAccountParams ap;
+   ap.maxDrawdownPct = 10.0;
+   ap.minEquityAbs   = 5000.0;
+   // dailyLoss desligado pra isolar drawdown vs minEquity
+   CMksRiskManager risk(p, sp, ap, NULL, GetPointer(snap));
+   MksError err;
+   MKS_ASSERT_FALSE(risk.CheckOrder(MakeReq(0.1, 100.0), err), "rejeita");
+   MKS_ASSERT_EQ_INT((int)MKS_ERR_RISK_REJECTED_DRAWDOWN,
+                     (int)err.code, "drawdown antes de minEquity");
+}
+
+//==================================================================
 // CheckOrder — sem logger não causa crash
 //==================================================================
 
@@ -567,6 +945,29 @@ void OnStart()
    MKS_RUN(Test_Risk_Strat_TotalLots_ZeroMeansNoLimit);
    MKS_RUN(Test_Risk_Strat_OpenPositionsBeforeTotalLots);
    MKS_RUN(Test_Risk_Strat_TradeBeforeStrategy);
+
+   // Camada Por Conta (slice 6.3)
+   MKS_RUN(Test_Risk_Acct_Validate_OkWithSnapshot);
+   MKS_RUN(Test_Risk_Acct_Validate_ActiveWithoutSnapshotFails);
+   MKS_RUN(Test_Risk_Acct_Validate_NegativeDailyLossFails);
+   MKS_RUN(Test_Risk_Acct_Validate_NegativeDrawdownFails);
+   MKS_RUN(Test_Risk_Acct_Validate_NegativeMinEquityFails);
+   MKS_RUN(Test_Risk_Acct_Validate_InactiveWithoutSnapshotOk);
+   MKS_RUN(Test_Risk_Acct_DailyLoss_BelowLimit);
+   MKS_RUN(Test_Risk_Acct_DailyLoss_AtBoundary);
+   MKS_RUN(Test_Risk_Acct_DailyLoss_Exceeded);
+   MKS_RUN(Test_Risk_Acct_DailyLoss_ZeroMeansNoLimit);
+   MKS_RUN(Test_Risk_Acct_Drawdown_BelowLimit);
+   MKS_RUN(Test_Risk_Acct_Drawdown_AtBoundary);
+   MKS_RUN(Test_Risk_Acct_Drawdown_Exceeded);
+   MKS_RUN(Test_Risk_Acct_Drawdown_ZeroMeansNoLimit);
+   MKS_RUN(Test_Risk_Acct_MinEquity_Above);
+   MKS_RUN(Test_Risk_Acct_MinEquity_AtBoundary);
+   MKS_RUN(Test_Risk_Acct_MinEquity_Below);
+   MKS_RUN(Test_Risk_Acct_MinEquity_ZeroMeansNoLimit);
+   MKS_RUN(Test_Risk_Acct_StrategyBeforeAccount);
+   MKS_RUN(Test_Risk_Acct_DailyLossBeforeDrawdown);
+   MKS_RUN(Test_Risk_Acct_DrawdownBeforeMinEquity);
 
    MKS_RUN(Test_Risk_CheckOrder_NoLoggerNoFault);
 
