@@ -42,11 +42,11 @@ MKS-ULTIMATE/
 │   │   │   ├── Account/            # CMksMt5Account (impl de IAccount), CMksAccountSnapshot
 │   │   │   ├── Position/           # CMksMt5PositionBook (impl de IPositionBook)
 │   │   │   ├── Broker/             # CMksMt5Broker, CMksSimulatedBroker, CMksCostModel
-│   │   │   ├── Trade/              # CMksPositionSizer (Fixed/PercentRisk), CMksTradeManager (BE+Trail+Partial)
+│   │   │   ├── Trade/              # CMksPositionSizer (Fixed/PercentRisk), CMksTradeManager (BE+Trail+Partial), CMksTradeJournal (diário de trades + agregados)
 │   │   │   ├── Risk/               # CMksRiskManager (Por Trade + Estratégia + Conta), CMksRiskGatedBroker
 │   │   │   ├── Log/                # CMksLogger (logging estruturado)
 │   │   │   └── Testing/            # Framework mínimo de asserções
-│   │   └── StressLab/              # CMksRandom (RNG seedável), CMksStressParams (presets None/Light/Medium/High/Nightmare), CMksStressLabBroker (wrapper de IBroker injetando slippage/rejection/requote)
+│   │   └── StressLab/              # CMksRandom (RNG seedável), CMksStressParams (presets None/Light/Medium/High/Nightmare), CMksStressLabBroker (wrapper IBroker injetando slippage/rejection/requote), CMksStressLabReport (snapshot agregado + PrintComparison)
 │   ├── Experts/
 │   │   └── MKS-ULTIMATE/           # EAs que usam o framework
 │   ├── Scripts/                    # Scripts utilitários
