@@ -33,15 +33,17 @@ MKS-ULTIMATE/
 │   ├── Include/MKS-ULTIMATE/
 │   │   ├── Core/
 │   │   │   ├── Version.mqh         # Versão única do framework
-│   │   │   ├── Interfaces/         # IBroker, ITickSource, IClock, ILogger, IRenkoSink, IBrickSizer
+│   │   │   ├── Interfaces/         # IBroker, ITickSource, IClock, ILogger, IRenkoSink, IBrickSizer, IPositionBook
 │   │   │   ├── Types/              # Tick, Brick, OrderRequest, ExecutionResult, Error, RenkoGeometry
 │   │   │   ├── RenkoBuilder/       # CMksRenkoBuilder, sizers (Fixed, Atr)
-│   │   │   ├── Data/               # BrickFileFormat, CMksBrickFileWriter/Reader
+│   │   │   ├── Data/               # BrickFileFormat, TickFileFormat, CMksBrickFile/TickFile Writer/Reader, CMksFileTickSource
+│   │   │   ├── Clock/              # CMksMt5Clock (live), CMksReplayClock (replay)
 │   │   │   ├── Symbol/             # CMksMt5Symbol (impl de ISymbol)
 │   │   │   ├── Account/            # CMksMt5Account (impl de IAccount)
+│   │   │   ├── Position/           # CMksMt5PositionBook (impl de IPositionBook)
 │   │   │   ├── Broker/             # CMksMt5Broker, CMksSimulatedBroker, CMksCostModel
 │   │   │   ├── Trade/              # CMksTradeManager, CMksPositionSizer
-│   │   │   ├── Risk/               # CMksRiskManager, camadas de limite
+│   │   │   ├── Risk/               # CMksRiskManager (Por Trade + Por Estratégia), CMksRiskGatedBroker
 │   │   │   ├── Log/                # CMksLogger (logging estruturado)
 │   │   │   └── Testing/            # Framework mínimo de asserções
 │   │   └── StressLab/              # Simulação de condições adversas
