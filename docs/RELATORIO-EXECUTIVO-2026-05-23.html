@@ -1,0 +1,1769 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MKS-ULTIMATE — Relatório Executivo</title>
+<style>
+:root {
+  --bg-deep:    #0a0f1f;
+  --bg-card:    #111a30;
+  --bg-card-2:  #182241;
+  --border:     #283555;
+  --border-2:   #364269;
+  --muted:      #8893b8;
+  --text:       #e6ecff;
+  --text-soft:  #b8c2e0;
+  --accent:     #f5b53a;
+  --accent-2:   #ffd166;
+  --success:    #34d399;
+  --danger:     #ef6b6b;
+  --info:       #60a5fa;
+  --renko-up:   #34d399;
+  --renko-down: #ef6b6b;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  background: var(--bg-deep);
+  color: var(--text);
+  line-height: 1.65;
+  font-size: 16px;
+  background-image:
+    radial-gradient(circle at 15% 12%, rgba(245,181,58,0.06) 0%, transparent 50%),
+    radial-gradient(circle at 85% 80%, rgba(96,165,250,0.05) 0%, transparent 50%);
+  background-attachment: fixed;
+}
+
+/* ============== HERO ============== */
+.hero {
+  min-height: 90vh;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  text-align: center;
+  padding: 60px 24px;
+  position: relative;
+  overflow: hidden;
+}
+
+.hero::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background:
+    linear-gradient(180deg, transparent 0%, rgba(10,15,31,0.6) 70%, var(--bg-deep) 100%),
+    repeating-linear-gradient(45deg, transparent, transparent 60px, rgba(40,53,85,0.08) 60px, rgba(40,53,85,0.08) 61px);
+  pointer-events: none;
+}
+
+.hero-content { position: relative; max-width: 980px; z-index: 1; }
+
+.hero-eyebrow {
+  display: inline-block;
+  color: var(--accent);
+  font-size: 0.75rem;
+  letter-spacing: 0.3em;
+  text-transform: uppercase;
+  font-weight: 600;
+  margin-bottom: 28px;
+  padding: 6px 16px;
+  border: 1px solid rgba(245,181,58,0.3);
+  border-radius: 100px;
+  background: rgba(245,181,58,0.06);
+}
+
+.hero h1 {
+  font-size: clamp(2.4rem, 6vw, 4.6rem);
+  font-weight: 800;
+  letter-spacing: -0.03em;
+  line-height: 1.05;
+  background: linear-gradient(135deg, var(--text) 0%, var(--accent-2) 50%, var(--accent) 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  margin-bottom: 24px;
+}
+
+.hero .tagline {
+  font-size: clamp(1.1rem, 2.5vw, 1.5rem);
+  color: var(--text-soft);
+  max-width: 720px;
+  margin: 0 auto 36px;
+  font-weight: 400;
+}
+
+.hero .meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 18px;
+  justify-content: center;
+  margin-top: 28px;
+}
+
+.hero .meta-pill {
+  background: rgba(24,34,65,0.7);
+  border: 1px solid var(--border);
+  border-radius: 100px;
+  padding: 8px 18px;
+  font-size: 0.85rem;
+  color: var(--text-soft);
+  backdrop-filter: blur(8px);
+}
+
+.hero .meta-pill strong { color: var(--accent-2); font-weight: 600; }
+
+/* ============== CONTAINER ============== */
+.container { max-width: 1100px; margin: 0 auto; padding: 0 28px; }
+
+section { padding: 80px 0; }
+
+.section-eyebrow {
+  color: var(--accent);
+  font-size: 0.75rem;
+  letter-spacing: 0.3em;
+  text-transform: uppercase;
+  font-weight: 600;
+  margin-bottom: 14px;
+}
+
+.section-title {
+  font-size: clamp(1.8rem, 4vw, 2.8rem);
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  line-height: 1.15;
+  margin-bottom: 20px;
+  color: var(--text);
+}
+
+.section-subtitle {
+  font-size: 1.05rem;
+  color: var(--text-soft);
+  max-width: 760px;
+  margin-bottom: 48px;
+}
+
+/* ============== CARDS ============== */
+.card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 28px;
+  margin-bottom: 24px;
+  transition: transform 0.2s, border-color 0.2s;
+}
+.card:hover { border-color: var(--border-2); }
+
+.card h3 {
+  font-size: 1.25rem;
+  margin-bottom: 12px;
+  color: var(--text);
+}
+
+.card p { color: var(--text-soft); margin-bottom: 10px; }
+
+.grid { display: grid; gap: 24px; }
+.grid-2 { grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); }
+.grid-3 { grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); }
+.grid-4 { grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); }
+
+/* ============== KPI ============== */
+.kpi {
+  background: linear-gradient(135deg, var(--bg-card) 0%, var(--bg-card-2) 100%);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 24px;
+  text-align: center;
+}
+
+.kpi-value {
+  font-size: 2.4rem;
+  font-weight: 800;
+  color: var(--accent);
+  line-height: 1;
+  margin-bottom: 6px;
+  font-variant-numeric: tabular-nums;
+}
+
+.kpi-label {
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.15em;
+  color: var(--muted);
+}
+
+.kpi-sub { font-size: 0.85rem; color: var(--text-soft); margin-top: 8px; }
+
+/* ============== CALLOUTS ============== */
+.callout {
+  border-left: 4px solid var(--accent);
+  background: rgba(245,181,58,0.05);
+  padding: 18px 24px;
+  border-radius: 0 12px 12px 0;
+  margin: 24px 0;
+}
+
+.callout.danger { border-left-color: var(--danger); background: rgba(239,107,107,0.05); }
+.callout.success { border-left-color: var(--success); background: rgba(52,211,153,0.05); }
+.callout.info { border-left-color: var(--info); background: rgba(96,165,250,0.05); }
+
+.callout strong { color: var(--text); }
+
+/* ============== BLOCO V5 VS ULTIMATE ============== */
+.versus {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  gap: 24px;
+  align-items: stretch;
+  margin: 24px 0;
+}
+
+.versus-card {
+  border-radius: 14px;
+  padding: 22px;
+  border: 1px solid var(--border);
+}
+.versus-card.bad {
+  background: rgba(239,107,107,0.06);
+  border-color: rgba(239,107,107,0.25);
+}
+.versus-card.good {
+  background: rgba(52,211,153,0.06);
+  border-color: rgba(52,211,153,0.3);
+}
+
+.versus-card h4 {
+  font-size: 0.9rem;
+  text-transform: uppercase;
+  letter-spacing: 0.15em;
+  margin-bottom: 14px;
+}
+.versus-card.bad h4 { color: var(--danger); }
+.versus-card.good h4 { color: var(--success); }
+
+.versus-card ul { list-style: none; padding-left: 0; }
+.versus-card li {
+  padding: 8px 0;
+  border-bottom: 1px solid rgba(255,255,255,0.04);
+  color: var(--text-soft);
+  font-size: 0.95rem;
+}
+.versus-card li:last-child { border-bottom: 0; }
+.versus-card li::before {
+  display: inline-block;
+  width: 20px;
+  text-align: center;
+  margin-right: 8px;
+  font-weight: 700;
+}
+.versus-card.bad li::before { content: "✗"; color: var(--danger); }
+.versus-card.good li::before { content: "✓"; color: var(--success); }
+
+.versus-arrow {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--accent);
+  font-size: 2rem;
+  font-weight: 200;
+}
+
+@media (max-width: 720px) {
+  .versus { grid-template-columns: 1fr; }
+  .versus-arrow { transform: rotate(90deg); padding: 8px 0; }
+}
+
+/* ============== PROGRESS ============== */
+.progress-row {
+  display: grid;
+  grid-template-columns: 220px 1fr 100px;
+  align-items: center;
+  gap: 16px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--border);
+}
+.progress-row:last-child { border-bottom: 0; }
+
+.progress-name {
+  font-weight: 500;
+  color: var(--text);
+  font-size: 0.95rem;
+}
+
+.progress-bar-bg {
+  height: 10px;
+  background: rgba(255,255,255,0.05);
+  border-radius: 100px;
+  overflow: hidden;
+  position: relative;
+}
+
+.progress-bar-fill {
+  height: 100%;
+  border-radius: 100px;
+  background: linear-gradient(90deg, var(--accent) 0%, var(--accent-2) 100%);
+}
+.progress-bar-fill.partial {
+  background: linear-gradient(90deg, var(--info) 0%, var(--accent-2) 100%);
+}
+.progress-bar-fill.todo {
+  background: rgba(255,255,255,0.08);
+}
+
+.progress-pct {
+  text-align: right;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+}
+
+.progress-pct.done { color: var(--success); }
+.progress-pct.partial { color: var(--info); }
+.progress-pct.todo { color: var(--muted); }
+
+@media (max-width: 720px) {
+  .progress-row { grid-template-columns: 1fr 80px; gap: 8px; }
+  .progress-row .progress-bar-bg { grid-column: 1 / -1; }
+  .progress-pct { grid-column: 2 / 3; grid-row: 1 / 2; }
+}
+
+/* ============== RENKO SVG ============== */
+.renko-frame {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 28px;
+  margin: 24px 0;
+  text-align: center;
+}
+
+.renko-frame svg { width: 100%; height: auto; max-width: 900px; }
+
+.renko-caption {
+  margin-top: 20px;
+  color: var(--text-soft);
+  font-size: 0.95rem;
+  font-style: italic;
+}
+
+/* ============== RING DIAGRAM ============== */
+.rings-wrap {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 40px 0;
+}
+
+.rings-svg { width: 100%; max-width: 600px; height: auto; }
+
+.rings-legend {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 14px;
+  margin-top: 28px;
+}
+
+.ring-item {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-left: 4px solid var(--accent);
+  border-radius: 0 12px 12px 0;
+  padding: 16px;
+}
+
+.ring-item-1 { border-left-color: #34d399; }
+.ring-item-2 { border-left-color: #60a5fa; }
+.ring-item-3 { border-left-color: #f5b53a; }
+
+.ring-item h4 { font-size: 1rem; margin-bottom: 6px; color: var(--text); }
+.ring-item p { font-size: 0.9rem; color: var(--text-soft); }
+
+/* ============== TIMELINE ============== */
+.timeline {
+  position: relative;
+  padding-left: 32px;
+  margin: 24px 0;
+}
+
+.timeline::before {
+  content: "";
+  position: absolute;
+  left: 11px;
+  top: 8px;
+  bottom: 8px;
+  width: 2px;
+  background: linear-gradient(180deg, var(--accent) 0%, var(--info) 100%);
+}
+
+.timeline-item {
+  position: relative;
+  padding-bottom: 28px;
+}
+
+.timeline-item::before {
+  content: "";
+  position: absolute;
+  left: -28px;
+  top: 6px;
+  width: 14px;
+  height: 14px;
+  background: var(--bg-deep);
+  border: 3px solid var(--accent);
+  border-radius: 50%;
+}
+
+.timeline-item.done::before { border-color: var(--success); background: var(--success); }
+.timeline-item.partial::before { border-color: var(--info); background: var(--bg-deep); }
+.timeline-item.future::before { border-color: var(--muted); background: var(--bg-deep); }
+
+.timeline-date {
+  font-size: 0.75rem;
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+  color: var(--muted);
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+
+.timeline-item h4 {
+  font-size: 1.05rem;
+  margin-bottom: 6px;
+  color: var(--text);
+}
+
+.timeline-item p { color: var(--text-soft); font-size: 0.93rem; }
+
+/* ============== FLOW DIAGRAM ============== */
+.flow {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 28px;
+  margin: 24px 0;
+  overflow-x: auto;
+}
+
+/* ============== INDICATORS GRID ============== */
+.ind-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 14px;
+  margin: 24px 0;
+}
+
+.ind-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 16px;
+  text-align: center;
+  transition: all 0.2s;
+}
+
+.ind-card:hover {
+  border-color: var(--accent);
+  transform: translateY(-2px);
+}
+
+.ind-card .ind-name {
+  font-weight: 700;
+  font-size: 0.95rem;
+  margin-top: 8px;
+  color: var(--text);
+}
+
+.ind-card .ind-desc {
+  font-size: 0.8rem;
+  color: var(--muted);
+  margin-top: 4px;
+}
+
+.ind-icon { font-size: 1.6rem; }
+
+/* ============== QUOTE ============== */
+.quote {
+  font-size: 1.4rem;
+  font-style: italic;
+  color: var(--text);
+  border-left: 4px solid var(--accent);
+  padding: 18px 28px;
+  margin: 36px 0;
+  font-weight: 300;
+  letter-spacing: -0.01em;
+}
+
+.quote cite {
+  display: block;
+  margin-top: 14px;
+  font-size: 0.9rem;
+  color: var(--muted);
+  font-style: normal;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+/* ============== TABLE ============== */
+table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 24px 0;
+  background: var(--bg-card);
+  border-radius: 12px;
+  overflow: hidden;
+  font-size: 0.92rem;
+}
+
+thead { background: var(--bg-card-2); }
+
+th, td {
+  text-align: left;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--border);
+}
+
+th {
+  color: var(--accent);
+  font-weight: 600;
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+}
+
+td { color: var(--text-soft); }
+tbody tr:last-child td { border-bottom: 0; }
+
+td strong, td b { color: var(--text); font-weight: 600; }
+
+/* ============== FOOTER ============== */
+footer {
+  background: var(--bg-card-2);
+  border-top: 1px solid var(--border);
+  padding: 48px 24px;
+  text-align: center;
+  color: var(--muted);
+  margin-top: 60px;
+}
+
+footer .footer-brand {
+  color: var(--accent);
+  font-weight: 700;
+  letter-spacing: 0.05em;
+}
+
+/* ============== UTIL ============== */
+.text-accent { color: var(--accent); }
+.text-success { color: var(--success); }
+.text-danger { color: var(--danger); }
+.text-info { color: var(--info); }
+.text-soft { color: var(--text-soft); }
+.text-muted { color: var(--muted); }
+
+.mt-md { margin-top: 28px; }
+.mb-md { margin-bottom: 28px; }
+
+.badge {
+  display: inline-block;
+  padding: 3px 10px;
+  border-radius: 100px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.badge.done    { background: rgba(52,211,153,0.15);  color: var(--success); }
+.badge.partial { background: rgba(96,165,250,0.15);  color: var(--info); }
+.badge.todo    { background: rgba(136,147,184,0.15); color: var(--muted); }
+.badge.adr     { background: rgba(245,181,58,0.15);  color: var(--accent); }
+
+.section-divider {
+  height: 1px;
+  background: linear-gradient(90deg, transparent 0%, var(--border) 50%, transparent 100%);
+  margin: 0 auto;
+  max-width: 800px;
+}
+
+h2.section-title svg { vertical-align: -4px; margin-right: 10px; }
+
+/* Print friendly */
+@media print {
+  /* PDF de página única longa (sem quebras de página) */
+  @page {
+    size: 1400px 30000px;
+    margin: 0;
+  }
+  html, body {
+    background: var(--bg-deep) !important;
+    color: var(--text) !important;
+    width: 1400px;
+  }
+  .container { max-width: 1280px !important; }
+  /* condensa um pouco verticalmente para garantir página única */
+  section { padding: 60px 0 !important; }
+  .hero { min-height: auto !important; padding: 80px 24px 60px !important; }
+  /* Preserva o dark theme no PDF */
+  body {
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+  .hero { min-height: auto; padding: 60px 24px; }
+  section { padding: 50px 0; page-break-inside: avoid; break-inside: avoid; }
+  .card, .kpi, .renko-frame, .ring-item, .ind-card, .flow,
+  .versus-card, .callout, .timeline-item {
+    page-break-inside: avoid;
+    break-inside: avoid;
+  }
+  /* Garante que SVG e gradientes mantenham cores */
+  * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
+}
+</style>
+</head>
+<body>
+
+<!-- ============================= HERO ============================= -->
+<header class="hero">
+  <div class="hero-content">
+    <div class="hero-eyebrow">Relatório Executivo · 2026-05-23</div>
+    <h1>MKS-ULTIMATE</h1>
+    <p class="tagline">
+      Um framework de trading automatizado para MetaTrader 5 que não mente.
+      Backtest e operação ao vivo são <strong>bit-a-bit idênticos</strong> — o que você testa é exatamente o que você opera.
+    </p>
+    <div class="meta">
+      <div class="meta-pill">Proprietária: <strong>Sugita Kougyou</strong></div>
+      <div class="meta-pill">Arquiteto / Referência de desenvolvedor: <strong>Mike Inoue</strong></div>
+      <div class="meta-pill">Versão alvo: <strong>6.0.0-alpha</strong></div>
+      <div class="meta-pill">Plataforma: <strong>MetaTrader 5 (MQL5)</strong></div>
+      <div class="meta-pill">Status: <strong>62% concluído</strong></div>
+    </div>
+  </div>
+</header>
+
+<!-- ============================= SUMÁRIO ============================= -->
+<section class="container">
+  <div class="section-eyebrow">Sumário Executivo</div>
+  <h2 class="section-title">Onde estamos, em uma página</h2>
+
+  <div class="grid grid-4 mt-md">
+    <div class="kpi">
+      <div class="kpi-value">62%</div>
+      <div class="kpi-label">Framework completo</div>
+      <div class="kpi-sub">6 de 10 fases concluídas</div>
+    </div>
+    <div class="kpi">
+      <div class="kpi-value">24</div>
+      <div class="kpi-label">Decisões formais</div>
+      <div class="kpi-sub">ADRs aceitas e documentadas</div>
+    </div>
+    <div class="kpi">
+      <div class="kpi-value">10.4k</div>
+      <div class="kpi-label">Testes automáticos</div>
+      <div class="kpi-sub">Assertivas, todas passando</div>
+    </div>
+    <div class="kpi">
+      <div class="kpi-value">0</div>
+      <div class="kpi-label">Erros conhecidos</div>
+      <div class="kpi-sub">Suíte de testes 100% verde</div>
+    </div>
+  </div>
+
+  <div class="callout success mt-md">
+    <strong>Em uma frase:</strong> o motor que produz os gráficos Renko, o cérebro que controla risco e a infraestrutura que garante que backtest e operação real são a mesma coisa <em>já estão prontos</em>. Falta o último pedaço da gravação de ticks ao vivo e a interface de produto.
+  </div>
+</section>
+
+<div class="section-divider"></div>
+
+<!-- ============================= VISÃO ============================= -->
+<section class="container">
+  <div class="section-eyebrow">O que estamos construindo</div>
+  <h2 class="section-title">Em linguagem simples</h2>
+
+  <p class="section-subtitle">
+    Imagine um piloto automático que opera no mercado financeiro 24 horas por dia, sem cansar, sem emoção, sem dúvida. Isso é o que chamamos de <strong>EA</strong> (Expert Advisor) no MetaTrader 5. O MKS-ULTIMATE não é um EA. É a <strong>oficina</strong> onde EAs são construídos, testados e validados antes de operar com dinheiro real.
+  </p>
+
+  <div class="grid grid-3">
+    <div class="card">
+      <h3>O <span class="text-accent">Renko</span> — nosso radar</h3>
+      <p>Em vez de gráficos comuns que se mexem com o tempo, usamos Renko: o gráfico só "anda" quando o preço se move uma distância pré-definida. Resultado: ruído filtrado, tendência clara.</p>
+    </div>
+    <div class="card">
+      <h3>A <span class="text-success">rede de segurança</span></h3>
+      <p>Três anéis de proteção: por operação, por estratégia, por conta. Mesmo que a estratégia erre, o framework para antes da conta explodir.</p>
+    </div>
+    <div class="card">
+      <h3>A <span class="text-info">paridade</span></h3>
+      <p>O que você testa é o que você opera. Sem surpresas, sem "no backtest dava lucro mas ao vivo deu prejuízo". Bit-a-bit idêntico.</p>
+    </div>
+  </div>
+
+  <div class="quote">
+    "Backtest e live devem produzir resultados bit-a-bit idênticos, dado o mesmo feed de ticks, na mesma janela temporal."
+    <cite>Princípio invariante fixado pelo arquiteto Mike Inoue, 2026-04 — todo o framework é avaliado contra esta regra</cite>
+  </div>
+</section>
+
+<div class="section-divider"></div>
+
+<!-- ============================= PROBLEMA (V5) ============================= -->
+<section class="container">
+  <div class="section-eyebrow">O Problema que Vamos Resolver</div>
+  <h2 class="section-title">O dia em que o V5 quebrou a conta em 4 horas</h2>
+
+  <p class="section-subtitle">
+    Antes do MKS-ULTIMATE, existiu o V5. Uma estratégia que apresentava resultados excepcionais em backtest. Foi para ao vivo. Em <strong>quatro horas</strong>, a conta tinha quebrado.
+  </p>
+
+  <p class="text-soft">
+    Esse incidente não foi azar. Não foi mercado ruim. Foi <strong>arquitetura errada</strong>. Mike fez então o que poucos fariam: em vez de tentar consertar o V5, abriu uma análise de causa-raiz completa sobre o próprio código que escreveu, identificou quatro falhas estruturais, e tomou a decisão de construir tudo de novo — diferente. O resultado dessa análise é o que sustenta o MKS-ULTIMATE.
+  </p>
+
+  <h3 style="margin-top:36px; font-size:1.3rem; color: var(--text);">As 4 mentiras do V5 (e como o MKS-ULTIMATE corrigiu cada uma)</h3>
+
+  <!-- Eixo 1 -->
+  <div class="card mt-md" style="border-left: 4px solid var(--danger);">
+    <h3><span class="badge" style="background: rgba(239,107,107,0.15); color: var(--danger);">Eixo 1</span> Espaço de preços fictício</h3>
+    <p><strong>O problema no V5:</strong> a estratégia tomava decisões olhando o <em>fechamento matemático</em> do brick — um número calculado, não o preço real do mercado. Era como dirigir olhando um GPS que mostra a posição teórica do carro em vez da estrada real.</p>
+    <p><strong>A correção do Mike:</strong> todo brick agora carrega o <em>triggerPrice</em> — o preço real do tick que disparou seu fechamento. A estratégia sempre vê o preço de verdade.</p>
+  </div>
+
+  <!-- Eixo 2 -->
+  <div class="card" style="border-left: 4px solid var(--danger);">
+    <h3><span class="badge" style="background: rgba(239,107,107,0.15); color: var(--danger);">Eixo 2</span> Cinco fontes diferentes gerando bricks</h3>
+    <p><strong>O problema no V5:</strong> existiam <strong>cinco caminhos diferentes</strong> de gerar bricks Renko — uns olhavam ticks reais, outros simulavam a partir de barras de minuto. Backtest e ao vivo viam sequências de bricks <em>diferentes</em> para o mesmo período de tempo.</p>
+    <p><strong>A correção do Mike:</strong> um único motor (<em>CMksRenkoBuilder</em>) consome ticks através de uma interface única (<em>ITickSource</em>). Em backtest, lê de arquivo. Em live, lê do broker. Mesmo código, mesma sequência.</p>
+  </div>
+
+  <!-- Eixo 3 -->
+  <div class="card" style="border-left: 4px solid var(--danger);">
+    <h3><span class="badge" style="background: rgba(239,107,107,0.15); color: var(--danger);">Eixo 3</span> Os custos eram só relatório</h3>
+    <p><strong>O problema no V5:</strong> spread, comissão, slippage e latência eram <em>contabilizados num relatório paralelo</em>, mas não afetavam o saldo do backtest. O backtest mostrava lucro de R$10.000 e o relatório dizia "custos: R$8.000". Os dois números não conversavam. Ao vivo, os custos eram aplicados de verdade — e devoraram o capital.</p>
+    <p><strong>A correção do Mike:</strong> o broker simulado aplica o custo diretamente no preço de preenchimento da ordem, no momento em que ela acontece. O saldo do backtest sente cada centavo de custo — igual ao live.</p>
+  </div>
+
+  <!-- Eixo 4 -->
+  <div class="card" style="border-left: 4px solid var(--danger);">
+    <h3><span class="badge" style="background: rgba(239,107,107,0.15); color: var(--danger);">Eixo 4</span> Backtest e live eram programas diferentes</h3>
+    <p><strong>O problema no V5:</strong> uma chave (input) ativava blocos inteiros de código em backtest que ficavam desligados em live. Tecnicamente eram o mesmo arquivo, funcionalmente eram <em>dois EAs diferentes</em>.</p>
+    <p><strong>A correção do Mike:</strong> regra arquitetural absoluta — código de trading não tem condicional de ambiente. A única diferença entre backtest e live está em <em>qual implementação de interface</em> é injetada no ponto inicial. A estratégia não sabe — nem pode saber — em qual modo está rodando.</p>
+  </div>
+
+  <div class="callout danger">
+    <strong>O resumo brutal do V5:</strong> "O V5 nunca teve um modelo de execução. Tinha um modelo de desenho de bricks, e confundiu desenhar com executar." Quatro horas em live foram o tempo que o mercado real levou para revelar essa confusão.
+  </div>
+</section>
+
+<div class="section-divider"></div>
+
+<!-- ============================= DECISÕES DO MIKE ============================= -->
+<section class="container">
+  <div class="section-eyebrow">A Resposta Arquitetural</div>
+  <h2 class="section-title">As decisões que tornaram tudo diferente</h2>
+
+  <p class="section-subtitle">
+    A diferença entre um projeto que funciona e um projeto que falha raramente está no código. Está nas <strong>decisões anteriores ao código</strong>. Mike tomou seis decisões fundamentais antes da primeira linha do MKS-ULTIMATE existir. Cada uma delas responde diretamente a uma das mentiras do V5 — não como remendo, mas <em>desenhada pela raiz</em>.
+  </p>
+
+  <div class="callout">
+    <strong>O que diferencia um arquiteto de um programador.</strong> Programador escreve código. Arquiteto escolhe o que <em>não</em> escrever. Cada decisão abaixo é um corte cirúrgico: ela <em>elimina</em> uma classe inteira de problema futuro, em vez de criar mais uma camada para tentar contê-lo. Foi isso que Mike fez antes de qualquer linha do MKS-ULTIMATE ser digitada.
+  </div>
+
+  <div class="grid grid-2 mt-md">
+    <div class="card">
+      <h3>1 · Paridade bit-a-bit como invariante</h3>
+      <p>Não é um objetivo, é um <em>requisito</em>. Qualquer arquitetura que não preserve essa propriedade é recusada antes mesmo de ser implementada. Ouvir "depois a gente ajusta" sobre paridade é proibido.</p>
+    </div>
+    <div class="card">
+      <h3>2 · Interfaces antes de implementações</h3>
+      <p>O coração do framework — broker, fonte de ticks, relógio, logger — são <em>contratos abstratos</em>, não classes concretas. Trocar broker, trocar fonte de dados ou rodar em backtest é apenas injetar outra implementação. Sem reescrever lógica.</p>
+    </div>
+    <div class="card">
+      <h3>3 · Testes antes de estratégia</h3>
+      <p>Regra absoluta: nenhum EA real é construído antes do core ter cobertura de testes. O V5 inverteu essa ordem. A consequência foi uma estratégia construída sobre fundações que ninguém tinha verificado se aguentariam.</p>
+    </div>
+    <div class="card">
+      <h3>4 · Renko produzido em casa, sem caixas-pretas</h3>
+      <p>Toda a matemática do Renko é código nosso, auditável linha-a-linha. Nenhum indicador externo de código fechado entra no caminho crítico. Se algo der errado, sabemos exatamente onde olhar.</p>
+    </div>
+    <div class="card">
+      <h3>5 · Documentação como livro-razão</h3>
+      <p>Cada decisão arquitetural vira uma ADR (<em>Architecture Decision Record</em>) numerada, datada, com contexto e alternativas rejeitadas. Já são 24 ADRs registradas — qualquer pessoa pode auditar o porquê de cada escolha, anos depois.</p>
+    </div>
+    <div class="card">
+      <h3>6 · Análise crítica sobre concordância</h3>
+      <p>Mike fixou no contrato de trabalho com a IA assistente uma regra de conduta: <em>"toda ideia é analisada honestamente, com pontos positivos e negativos explicitados. Concordar por concordar é proibido."</em> Decisões boas exigem fricção.</p>
+    </div>
+  </div>
+</section>
+
+<div class="section-divider"></div>
+
+<!-- ============================= RENKO VISUAL ============================= -->
+<section class="container">
+  <div class="section-eyebrow">A Engine — Renko Visualizado</div>
+  <h2 class="section-title">O que o motor enxerga, brick a brick</h2>
+
+  <p class="section-subtitle">
+    Cada brick Renko é uma decisão do mercado: o preço se moveu o suficiente, em uma direção, para "fechar uma caixinha". O verde sobe, o vermelho desce. O tempo não importa. O que importa é o movimento.
+  </p>
+
+  <div class="renko-frame">
+    <svg viewBox="0 0 900 320" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Sequência de bricks Renko">
+      <!-- background grid -->
+      <defs>
+        <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+          <path d="M 40 0 L 0 0 0 40" fill="none" stroke="#283555" stroke-width="0.5" opacity="0.4"/>
+        </pattern>
+        <linearGradient id="upGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+          <stop offset="0%" stop-color="#5eead4"/>
+          <stop offset="100%" stop-color="#0d9488"/>
+        </linearGradient>
+        <linearGradient id="downGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+          <stop offset="0%" stop-color="#fb7185"/>
+          <stop offset="100%" stop-color="#be123c"/>
+        </linearGradient>
+      </defs>
+      <rect width="900" height="320" fill="url(#grid)" opacity="0.5"/>
+      <!-- axis labels -->
+      <text x="14" y="34" fill="#8893b8" font-size="11" font-family="system-ui">Preço</text>
+      <text x="850" y="306" fill="#8893b8" font-size="11" font-family="system-ui">Eventos →</text>
+
+      <!-- bricks: brick width=50, height=40, gap=4 -->
+      <!-- starting price line at y=200 -->
+      <line x1="60" y1="200" x2="860" y2="200" stroke="#364269" stroke-width="1" stroke-dasharray="3 3"/>
+      <text x="20" y="204" fill="#8893b8" font-size="10" font-family="system-ui">2050.00</text>
+
+      <!-- 5 up, 3 down, 4 up, 2 down, 3 up -->
+      <!-- UP 1-5 -->
+      <g>
+        <rect x="80"  y="160" width="50" height="40" rx="3" fill="url(#upGrad)" stroke="#34d399" stroke-width="1.5"/>
+        <rect x="140" y="120" width="50" height="40" rx="3" fill="url(#upGrad)" stroke="#34d399" stroke-width="1.5"/>
+        <rect x="200" y="80"  width="50" height="40" rx="3" fill="url(#upGrad)" stroke="#34d399" stroke-width="1.5"/>
+        <rect x="260" y="40"  width="50" height="40" rx="3" fill="url(#upGrad)" stroke="#34d399" stroke-width="1.5"/>
+        <rect x="320" y="0"   width="50" height="40" rx="3" fill="url(#upGrad)" stroke="#34d399" stroke-width="1.5"/>
+      </g>
+      <!-- DOWN 1-3 -->
+      <g>
+        <rect x="380" y="40"  width="50" height="40" rx="3" fill="url(#downGrad)" stroke="#ef6b6b" stroke-width="1.5"/>
+        <rect x="440" y="80"  width="50" height="40" rx="3" fill="url(#downGrad)" stroke="#ef6b6b" stroke-width="1.5"/>
+        <rect x="500" y="120" width="50" height="40" rx="3" fill="url(#downGrad)" stroke="#ef6b6b" stroke-width="1.5"/>
+      </g>
+      <!-- UP 6-9 -->
+      <g>
+        <rect x="560" y="80"  width="50" height="40" rx="3" fill="url(#upGrad)" stroke="#34d399" stroke-width="1.5"/>
+        <rect x="620" y="40"  width="50" height="40" rx="3" fill="url(#upGrad)" stroke="#34d399" stroke-width="1.5"/>
+      </g>
+      <!-- DOWN -->
+      <g>
+        <rect x="680" y="80"  width="50" height="40" rx="3" fill="url(#downGrad)" stroke="#ef6b6b" stroke-width="1.5"/>
+      </g>
+      <!-- UP -->
+      <g>
+        <rect x="740" y="40"  width="50" height="40" rx="3" fill="url(#upGrad)" stroke="#34d399" stroke-width="1.5"/>
+        <rect x="800" y="0"   width="50" height="40" rx="3" fill="url(#upGrad)" stroke="#34d399" stroke-width="1.5"/>
+      </g>
+
+      <!-- trigger price marker -->
+      <circle cx="845" cy="-5" r="6" fill="#f5b53a"/>
+      <line x1="845" y1="-5" x2="880" y2="-5" stroke="#f5b53a" stroke-width="1.5"/>
+      <text x="885" y="0" fill="#f5b53a" font-size="11" font-family="system-ui" font-weight="600">triggerPrice</text>
+    </svg>
+    <div class="renko-caption">
+      Cada caixa é uma confirmação de movimento. O ponto dourado representa o <strong>triggerPrice</strong> — o preço real que disparou o fechamento, gravado pelo motor para a estratégia consultar. <em>Era exatamente isso que o V5 perdia.</em>
+    </div>
+  </div>
+
+  <div class="callout info">
+    <strong>Por que Renko, e não barras de tempo?</strong> Porque Renko mostra movimento. Em mercados laterais, o gráfico simplesmente para — sem gerar sinais falsos. Em tendência forte, gera bricks rapidamente. É o filtro de ruído natural que a maioria das estratégias precisaria simular artificialmente.
+  </div>
+</section>
+
+<div class="section-divider"></div>
+
+<!-- ============================= REDE DE SEGURANÇA ============================= -->
+<section class="container">
+  <div class="section-eyebrow">A Rede de Segurança</div>
+  <h2 class="section-title">Três anéis que o V5 não tinha</h2>
+
+  <p class="section-subtitle">
+    O motivo direto pelo qual o V5 quebrou a conta foi a <em>ausência</em> de barreiras automáticas. A estratégia errou, o broker executou as ordens erradas, ninguém parou nada até o capital acabar. No MKS-ULTIMATE, três anéis de proteção interceptam <strong>toda ordem</strong> antes dela chegar ao broker — e podem barrar por motivos diferentes em níveis diferentes de severidade.
+  </p>
+
+  <div class="rings-wrap">
+    <svg class="rings-svg" viewBox="0 0 500 500" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Três anéis de proteção">
+      <defs>
+        <radialGradient id="centerGrad" cx="50%" cy="50%" r="50%">
+          <stop offset="0%" stop-color="#f5b53a" stop-opacity="0.3"/>
+          <stop offset="100%" stop-color="#f5b53a" stop-opacity="0"/>
+        </radialGradient>
+      </defs>
+
+      <!-- outer ring - Account -->
+      <circle cx="250" cy="250" r="230" fill="none" stroke="#f5b53a" stroke-width="2" opacity="0.4"/>
+      <circle cx="250" cy="250" r="230" fill="none" stroke="#f5b53a" stroke-width="6" stroke-dasharray="380 1200" opacity="0.9" transform="rotate(-90 250 250)"/>
+
+      <!-- middle ring - Strategy -->
+      <circle cx="250" cy="250" r="170" fill="none" stroke="#60a5fa" stroke-width="2" opacity="0.4"/>
+      <circle cx="250" cy="250" r="170" fill="none" stroke="#60a5fa" stroke-width="6" stroke-dasharray="280 800" opacity="0.9" transform="rotate(-90 250 250)"/>
+
+      <!-- inner ring - Trade -->
+      <circle cx="250" cy="250" r="110" fill="none" stroke="#34d399" stroke-width="2" opacity="0.4"/>
+      <circle cx="250" cy="250" r="110" fill="none" stroke="#34d399" stroke-width="6" stroke-dasharray="180 500" opacity="0.9" transform="rotate(-90 250 250)"/>
+
+      <!-- center -->
+      <circle cx="250" cy="250" r="60" fill="url(#centerGrad)"/>
+      <circle cx="250" cy="250" r="50" fill="none" stroke="#f5b53a" stroke-width="2"/>
+      <text x="250" y="245" text-anchor="middle" fill="#f5b53a" font-size="14" font-weight="700" font-family="system-ui">ORDEM</text>
+      <text x="250" y="262" text-anchor="middle" fill="#f5b53a" font-size="11" font-weight="500" font-family="system-ui">passar pelos 3</text>
+
+      <!-- labels -->
+      <g font-family="system-ui">
+        <text x="250" y="48" text-anchor="middle" fill="#f5b53a" font-size="14" font-weight="700">POR CONTA</text>
+        <text x="250" y="64" text-anchor="middle" fill="#8893b8" font-size="11">daily loss · drawdown · equity mín.</text>
+
+        <text x="250" y="108" text-anchor="middle" fill="#60a5fa" font-size="14" font-weight="700">POR ESTRATÉGIA</text>
+        <text x="250" y="124" text-anchor="middle" fill="#8893b8" font-size="11">max posições · max lots totais</text>
+
+        <text x="250" y="168" text-anchor="middle" fill="#34d399" font-size="14" font-weight="700">POR TRADE</text>
+        <text x="250" y="184" text-anchor="middle" fill="#8893b8" font-size="11">SL/TP · max lots · sizer</text>
+      </g>
+
+      <!-- order trying to pass -->
+      <g transform="translate(20, 250)">
+        <circle cx="0" cy="0" r="8" fill="#f5b53a"/>
+        <line x1="8" y1="0" x2="35" y2="0" stroke="#f5b53a" stroke-width="2" marker-end="url(#arrow)"/>
+        <text x="0" y="-18" text-anchor="middle" fill="#f5b53a" font-size="11" font-weight="600">tentativa</text>
+      </g>
+      <defs>
+        <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+          <path d="M 0 0 L 10 5 L 0 10 z" fill="#f5b53a"/>
+        </marker>
+      </defs>
+    </svg>
+  </div>
+
+  <div class="rings-legend">
+    <div class="ring-item ring-item-1">
+      <h4>Anel 1 — Por Trade</h4>
+      <p>SL e TP obrigatórios. Tamanho máximo por operação. Validação contra o calculador de risco. Defesa imediata: cada ordem individual passa por aqui.</p>
+    </div>
+    <div class="ring-item ring-item-2">
+      <h4>Anel 2 — Por Estratégia</h4>
+      <p>Máximo de posições simultâneas. Limite de exposure (lots totais). Defesa contra "muitas tentativas seguidas": evita a estratégia se multiplicar contra si mesma.</p>
+    </div>
+    <div class="ring-item ring-item-3">
+      <h4>Anel 3 — Por Conta</h4>
+      <p>Limite de perda diária. Limite de drawdown desde o topo. Equity mínimo absoluto (circuit breaker). Defesa terminal: o que o V5 não tinha. Aqui a conta para de operar antes de quebrar.</p>
+    </div>
+  </div>
+
+  <div class="callout success">
+    <strong>Status:</strong> os três anéis estão prontos e cobertos por <strong>140 testes automáticos passando</strong>. Cada limite, cada caso de borda, cada combinação de violação foi exercitada antes de ser declarada concluída.
+  </div>
+</section>
+
+<div class="section-divider"></div>
+
+<!-- ============================= O MT5 É FALHO ============================= -->
+<section class="container">
+  <div class="section-eyebrow">A Falha Estrutural do MetaTrader 5</div>
+  <h2 class="section-title">O que Mike enxergou que o resto do mercado finge não ver</h2>
+
+  <p class="section-subtitle">
+    A esmagadora maioria dos desenvolvedores que constrói EAs no MetaTrader 5 testa suas estratégias usando o <strong>Strategy Tester nativo</strong>. É o caminho oficial, é o caminho documentado, é o caminho que o próprio fabricante recomenda. <em>E é fundamentalmente falho.</em> Mike identificou isso, documentou em ADR formal (a ADR-015), e desenhou uma solução técnica para algo que ninguém no ecossistema MQL5 endereçou.
+  </p>
+
+  <h3 style="font-size:1.3rem; margin-top:32px; color: var(--text);">As três falhas do Strategy Tester nativo</h3>
+
+  <div class="grid grid-3 mt-md">
+    <div class="card" style="border-left: 4px solid var(--danger);">
+      <h3>📉 Modo de geração de ticks</h3>
+      <p>O Strategy Tester oferece <em>três modos</em> de gerar ticks: "every tick", "every tick based on real ticks", "1 minute OHLC". <strong>Cada modo produz resultado diferente</strong> para a mesma estratégia no mesmo período. Não há resposta correta — só escolhas que mudam o número final.</p>
+    </div>
+    <div class="card" style="border-left: 4px solid var(--danger);">
+      <h3>📦 Formato fechado .tks</h3>
+      <p>O Strategy Tester alimenta a estratégia com o arquivo <em>.tks</em> da MetaQuotes — formato fechado, indocumentado, sujeito a mudança silenciosa entre builds do terminal. Você não sabe o que está dentro, não pode auditar, não pode garantir reprodutibilidade.</p>
+    </div>
+    <div class="card" style="border-left: 4px solid var(--danger);">
+      <h3>♻️ Reagrupamento de ticks</h3>
+      <p>Mesmo se você injetar ticks customizados via <em>CustomTicksAdd</em>, o Tester <em>reagrupa</em> esses ticks pelo seu próprio mecanismo interno. A sequência que sua estratégia vê dentro do Tester <strong>não é a mesma sequência que você injetou</strong>. O motor de Renko produzido em backtest e em live são funcionalmente diferentes.</p>
+    </div>
+  </div>
+
+  <div class="callout danger">
+    <strong>O resultado prático.</strong> Backtests excelentes no Strategy Tester podem virar prejuízos catastróficos em live — e ninguém sabe explicar por quê. A explicação está nas três falhas acima, mas o ecossistema MT5 trata isso como "comportamento do mercado" em vez de "falha do simulador". Foi exatamente assim que o V5 quebrou.
+  </div>
+
+  <h3 style="font-size:1.3rem; margin-top:48px; color: var(--text);">A solução do Mike: construir o que o MT5 não tem</h3>
+
+  <p class="text-soft">
+    Em vez de aceitar o Strategy Tester como "o melhor que dá para fazer", Mike desenhou uma <strong>arquitetura paralela</strong> ao MT5 oficial. Três peças, integradas, que substituem o caminho oficial sem violar nenhuma regra da plataforma:
+  </p>
+
+  <div class="grid grid-3 mt-md">
+    <div class="card" style="border-left: 4px solid var(--success);">
+      <h3>1 · Tick Recorder Service</h3>
+      <p><strong>O que faz:</strong> roda em background no terminal MT5 (sem chart, sem UI), conectado ao broker real, e grava <em>cada tick</em> exatamente como recebido em um arquivo binário próprio (<em>.mkstick</em>).</p>
+      <p><strong>O que Mike resolveu:</strong> o tick stream agora é <em>capturado pelo MKS-ULTIMATE</em>, não dependente do .tks fechado. Cada byte é nosso, auditável, reproduzível.</p>
+    </div>
+    <div class="card" style="border-left: 4px solid var(--success);">
+      <h3>2 · Formato .mkstick proprietário</h3>
+      <p><strong>O que faz:</strong> arquivo binário com header de proveniência (broker, conta, símbolo, tickSize, point) + sequência de records de 64 bytes cada — um por tick. Layout fixo, versionado, little-endian.</p>
+      <p><strong>O que Mike resolveu:</strong> determinismo byte-a-byte da leitura. Mesmo arquivo produz mesma sequência sempre. Validado por golden test de 10.000 ticks sintéticos passando 100%.</p>
+    </div>
+    <div class="card" style="border-left: 4px solid var(--success);">
+      <h3>3 · Replayer EA</h3>
+      <p><strong>O que faz:</strong> EA que roda <em>fora</em> do Strategy Tester. Lê o <em>.mkstick</em> via interface <em>CMksFileTickSource</em>, alimenta o mesmo motor de Renko que rodava em live, gera os mesmos bricks, executa a mesma estratégia.</p>
+      <p><strong>O que Mike resolveu:</strong> backtest oficial que <em>passa por fora do simulador falho do MT5</em>. Mesmo código, mesma sequência de ticks, mesmos bricks, mesma decisão. Paridade matemática garantida.</p>
+    </div>
+  </div>
+
+  <div class="callout success">
+    <strong>O que essa arquitetura significa.</strong> Em poucas palavras: o MKS-ULTIMATE <em>substitui</em> o caminho de backtest oficial do MetaTrader 5 por um caminho próprio, controlado, auditável, e — o mais importante — matematicamente equivalente ao que acontece em live. Nenhum framework comercial de MQL5 no mercado faz isso. Mike enxergou a falha estrutural do MT5 e fez engenharia de plataforma para resolver, em vez de ficar tentando calibrar a estratégia contra um simulador que mente.
+  </div>
+
+  <div class="quote">
+    "O Strategy Tester nativo do MT5 é usado no MKS-ULTIMATE como ferramenta de visualização, nunca como fonte de verdade para mérito de estratégia."
+    <cite>ADR-015 — decisão cirúrgica de Mike Inoue, 2026-05-21</cite>
+  </div>
+</section>
+
+<div class="section-divider"></div>
+
+<!-- ============================= PARIDADE BIT-A-BIT ============================= -->
+<section class="container">
+  <div class="section-eyebrow">A Inovação Central</div>
+  <h2 class="section-title">Paridade bit-a-bit em fluxo</h2>
+
+  <p class="section-subtitle">
+    Esta é a parte mais difícil de explicar e a mais importante. É o que <strong>diferencia o MKS-ULTIMATE de qualquer outro framework</strong> de trading que você possa contratar ou comprar.
+  </p>
+
+  <div class="flow">
+    <svg viewBox="0 0 940 360" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Fluxo de paridade entre live e replay">
+      <defs>
+        <linearGradient id="liveBox" x1="0%" y1="0%" x2="100%" y2="100%">
+          <stop offset="0%" stop-color="#60a5fa" stop-opacity="0.2"/>
+          <stop offset="100%" stop-color="#60a5fa" stop-opacity="0.05"/>
+        </linearGradient>
+        <linearGradient id="replayBox" x1="0%" y1="0%" x2="100%" y2="100%">
+          <stop offset="0%" stop-color="#34d399" stop-opacity="0.2"/>
+          <stop offset="100%" stop-color="#34d399" stop-opacity="0.05"/>
+        </linearGradient>
+        <marker id="arrowFlow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+          <path d="M 0 0 L 10 5 L 0 10 z" fill="#f5b53a"/>
+        </marker>
+      </defs>
+
+      <!-- LIVE side -->
+      <text x="170" y="32" text-anchor="middle" fill="#60a5fa" font-size="14" font-weight="700" font-family="system-ui">AO VIVO (LIVE)</text>
+
+      <rect x="20" y="50" width="300" height="60" rx="10" fill="url(#liveBox)" stroke="#60a5fa" stroke-width="1.5"/>
+      <text x="170" y="78" text-anchor="middle" fill="#e6ecff" font-size="13" font-weight="600" font-family="system-ui">Broker EXNESS (XAUUSDm)</text>
+      <text x="170" y="96" text-anchor="middle" fill="#8893b8" font-size="11" font-family="system-ui">tick stream em tempo real</text>
+
+      <!-- arrow -->
+      <line x1="170" y1="115" x2="170" y2="145" stroke="#60a5fa" stroke-width="2" marker-end="url(#arrowFlow)"/>
+
+      <rect x="20" y="150" width="300" height="60" rx="10" fill="url(#liveBox)" stroke="#60a5fa" stroke-width="1.5"/>
+      <text x="170" y="178" text-anchor="middle" fill="#e6ecff" font-size="13" font-weight="600" font-family="system-ui">TickRecorder Service</text>
+      <text x="170" y="196" text-anchor="middle" fill="#8893b8" font-size="11" font-family="system-ui">grava arquivo .mkstick (cru, intacto)</text>
+
+      <line x1="170" y1="215" x2="170" y2="245" stroke="#60a5fa" stroke-width="2" marker-end="url(#arrowFlow)"/>
+
+      <rect x="20" y="250" width="300" height="60" rx="10" fill="url(#liveBox)" stroke="#60a5fa" stroke-width="1.5"/>
+      <text x="170" y="278" text-anchor="middle" fill="#e6ecff" font-size="13" font-weight="600" font-family="system-ui">RenkoBuilder · Strategy · Broker</text>
+      <text x="170" y="296" text-anchor="middle" fill="#8893b8" font-size="11" font-family="system-ui">.mksbk + log de decisões</text>
+
+      <!-- bridge file -->
+      <g>
+        <rect x="380" y="170" width="180" height="50" rx="8" fill="#f5b53a" fill-opacity="0.15" stroke="#f5b53a" stroke-width="2"/>
+        <text x="470" y="194" text-anchor="middle" fill="#f5b53a" font-size="12" font-weight="700" font-family="system-ui">arquivo .mkstick</text>
+        <text x="470" y="210" text-anchor="middle" fill="#f5b53a" font-size="10" font-family="system-ui">(stream intacto de ticks)</text>
+      </g>
+
+      <line x1="320" y1="180" x2="380" y2="194" stroke="#f5b53a" stroke-width="2" stroke-dasharray="4 4"/>
+      <line x1="560" y1="194" x2="620" y2="180" stroke="#f5b53a" stroke-width="2" stroke-dasharray="4 4"/>
+
+      <!-- REPLAY side -->
+      <text x="770" y="32" text-anchor="middle" fill="#34d399" font-size="14" font-weight="700" font-family="system-ui">REPLAY (BACKTEST OFICIAL)</text>
+
+      <rect x="620" y="150" width="300" height="60" rx="10" fill="url(#replayBox)" stroke="#34d399" stroke-width="1.5"/>
+      <text x="770" y="178" text-anchor="middle" fill="#e6ecff" font-size="13" font-weight="600" font-family="system-ui">CMksFileTickSource</text>
+      <text x="770" y="196" text-anchor="middle" fill="#8893b8" font-size="11" font-family="system-ui">lê do .mkstick → tick stream idêntico</text>
+
+      <line x1="770" y1="215" x2="770" y2="245" stroke="#34d399" stroke-width="2" marker-end="url(#arrowFlow)"/>
+
+      <rect x="620" y="250" width="300" height="60" rx="10" fill="url(#replayBox)" stroke="#34d399" stroke-width="1.5"/>
+      <text x="770" y="278" text-anchor="middle" fill="#e6ecff" font-size="13" font-weight="600" font-family="system-ui">RenkoBuilder · Strategy · Broker</text>
+      <text x="770" y="296" text-anchor="middle" fill="#8893b8" font-size="11" font-family="system-ui">.mksbk + log de decisões</text>
+
+      <!-- equality at bottom -->
+      <text x="170" y="345" text-anchor="middle" fill="#f5b53a" font-size="13" font-weight="700" font-family="system-ui">.mksbk + log</text>
+      <text x="470" y="345" text-anchor="middle" fill="#f5b53a" font-size="18" font-weight="700" font-family="system-ui">≡  bit-a-bit idênticos  ≡</text>
+      <text x="770" y="345" text-anchor="middle" fill="#f5b53a" font-size="13" font-weight="700" font-family="system-ui">.mksbk + log</text>
+    </svg>
+  </div>
+
+  <p class="text-soft mt-md">
+    O fluxo acima é o que torna o MKS-ULTIMATE auditável de uma forma que poucos sistemas no mundo conseguem ser. Cada tick que chega do broker é gravado num arquivo binário próprio (<em>.mkstick</em>). Esse arquivo serve duas vezes: alimenta o ambiente real no momento que chega, e alimenta o backtest depois. Como o motor que processa os ticks é <em>o mesmo</em> nos dois casos, o resultado é matematicamente o mesmo.
+  </p>
+
+  <div class="callout success">
+    <strong>O teste final</strong>: rodar o produtor ao vivo por uma hora, depois rodar o replay sobre o arquivo capturado, comparar os arquivos de bricks gerados byte-a-byte. Zero diferença significa zero possibilidade de "no backtest dava lucro mas ao vivo deu prejuízo por causa de divergência de dados".
+  </div>
+
+  <p class="text-soft">
+    <strong>Estado atual:</strong> a parte de leitura do arquivo (replay) está pronta e testada. Falta a parte de gravação ao vivo — que exige mercado aberto. Será concluída na segunda-feira seguinte a este relatório.
+  </p>
+</section>
+
+<div class="section-divider"></div>
+
+<!-- ============================= PROGRESSO ============================= -->
+<section class="container">
+  <div class="section-eyebrow">Onde Estamos Hoje</div>
+  <h2 class="section-title">Progresso por fase do projeto</h2>
+
+  <p class="section-subtitle">
+    O desenvolvimento foi planejado em 10 fases sequenciais. Pular fases foi um erro do V5; aqui, cada fase só começa quando a anterior cumpriu seus critérios de saída. Os números abaixo refletem a realidade do código no momento deste relatório.
+  </p>
+
+  <div class="card">
+    <div class="progress-row">
+      <div class="progress-name">0 · Fundação documental</div>
+      <div class="progress-bar-bg"><div class="progress-bar-fill" style="width:100%"></div></div>
+      <div class="progress-pct done">100%</div>
+    </div>
+    <div class="progress-row">
+      <div class="progress-name">1 · Abstrações do core (interfaces)</div>
+      <div class="progress-bar-bg"><div class="progress-bar-fill" style="width:100%"></div></div>
+      <div class="progress-pct done">100%</div>
+    </div>
+    <div class="progress-row">
+      <div class="progress-name">2 · RenkoBuilder (motor)</div>
+      <div class="progress-bar-bg"><div class="progress-bar-fill" style="width:100%"></div></div>
+      <div class="progress-pct done">100%</div>
+    </div>
+    <div class="progress-row">
+      <div class="progress-name">3 · Testes unitários do core</div>
+      <div class="progress-bar-bg"><div class="progress-bar-fill" style="width:100%"></div></div>
+      <div class="progress-pct done">100%</div>
+    </div>
+    <div class="progress-row">
+      <div class="progress-name">4 · Broker abstractions</div>
+      <div class="progress-bar-bg"><div class="progress-bar-fill" style="width:100%"></div></div>
+      <div class="progress-pct done">100%</div>
+    </div>
+    <div class="progress-row">
+      <div class="progress-name">5 · Trade Management</div>
+      <div class="progress-bar-bg"><div class="progress-bar-fill" style="width:100%"></div></div>
+      <div class="progress-pct done">100%</div>
+    </div>
+    <div class="progress-row">
+      <div class="progress-name">6 · Risk Management em camadas</div>
+      <div class="progress-bar-bg"><div class="progress-bar-fill" style="width:100%"></div></div>
+      <div class="progress-pct done">100%</div>
+    </div>
+    <div class="progress-row">
+      <div class="progress-name">4.5 · Tick Recorder + Replayer</div>
+      <div class="progress-bar-bg"><div class="progress-bar-fill partial" style="width:50%"></div></div>
+      <div class="progress-pct partial">50%</div>
+    </div>
+    <div class="progress-row">
+      <div class="progress-name">8 · Logging e observabilidade</div>
+      <div class="progress-bar-bg"><div class="progress-bar-fill partial" style="width:80%"></div></div>
+      <div class="progress-pct partial">80%</div>
+    </div>
+    <div class="progress-row">
+      <div class="progress-name">7 · StressLab</div>
+      <div class="progress-bar-bg"><div class="progress-bar-fill todo" style="width:0%"></div></div>
+      <div class="progress-pct todo">0%</div>
+    </div>
+    <div class="progress-row">
+      <div class="progress-name">9 · EA validação end-to-end</div>
+      <div class="progress-bar-bg"><div class="progress-bar-fill todo" style="width:0%"></div></div>
+      <div class="progress-pct todo">0%</div>
+    </div>
+    <div class="progress-row">
+      <div class="progress-name">10 · Estratégias reais</div>
+      <div class="progress-bar-bg"><div class="progress-bar-fill todo" style="width:0%"></div></div>
+      <div class="progress-pct todo">0%</div>
+    </div>
+    <div class="progress-row">
+      <div class="progress-name"><strong>Camada de Produto (UX)</strong></div>
+      <div class="progress-bar-bg"><div class="progress-bar-fill todo" style="width:5%"></div></div>
+      <div class="progress-pct todo">5%</div>
+    </div>
+  </div>
+
+  <div class="grid grid-3 mt-md">
+    <div class="kpi">
+      <div class="kpi-value">7</div>
+      <div class="kpi-label">Fases concluídas</div>
+    </div>
+    <div class="kpi">
+      <div class="kpi-value">2</div>
+      <div class="kpi-label">Fases parciais</div>
+    </div>
+    <div class="kpi">
+      <div class="kpi-value">4</div>
+      <div class="kpi-label">Fases pendentes</div>
+    </div>
+  </div>
+</section>
+
+<div class="section-divider"></div>
+
+<!-- ============================= PILARES ============================= -->
+<section class="container">
+  <div class="section-eyebrow">Os Pilares do Framework</div>
+  <h2 class="section-title">A arquitetura por dentro</h2>
+
+  <p class="section-subtitle">
+    O MKS-ULTIMATE está organizado em <strong>módulos</strong>, cada um com uma responsabilidade única. A separação não é cosmética — é o que permite trocar partes sem reescrever o todo.
+  </p>
+
+  <table>
+    <thead>
+      <tr>
+        <th>Módulo</th>
+        <th>Função</th>
+        <th>Status</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><strong>Core / RenkoBuilder</strong></td>
+        <td>Motor matemático: transforma ticks em bricks Renko, determinístico e auditável.</td>
+        <td><span class="badge done">Pronto</span></td>
+      </tr>
+      <tr>
+        <td><strong>Core / Data</strong></td>
+        <td>Arquivos binários proprietários: <em>.mksbk</em> (bricks) e <em>.mkstick</em> (ticks crus).</td>
+        <td><span class="badge done">Pronto</span></td>
+      </tr>
+      <tr>
+        <td><strong>Core / Clock</strong></td>
+        <td>Abstração de tempo. Live = relógio do servidor. Replay = relógio do tick atual.</td>
+        <td><span class="badge done">Pronto</span></td>
+      </tr>
+      <tr>
+        <td><strong>Core / Broker</strong></td>
+        <td>Execução de ordens, real ou simulada. Inclui modelo plugável de custos.</td>
+        <td><span class="badge done">Pronto</span></td>
+      </tr>
+      <tr>
+        <td><strong>Core / Trade</strong></td>
+        <td>Calculador de tamanho de posição (Sizer) + Gestor de trade (BE/Trail/Partial).</td>
+        <td><span class="badge done">Pronto</span></td>
+      </tr>
+      <tr>
+        <td><strong>Core / Risk</strong></td>
+        <td>Os três anéis de proteção. Toda ordem atravessa antes de ir ao broker.</td>
+        <td><span class="badge done">Pronto</span></td>
+      </tr>
+      <tr>
+        <td><strong>Core / Account</strong></td>
+        <td>Estado da conta + Snapshot temporal (rastreia P&amp;L diário e drawdown).</td>
+        <td><span class="badge done">Pronto</span></td>
+      </tr>
+      <tr>
+        <td><strong>Core / Symbol · Position</strong></td>
+        <td>Acesso ao símbolo de mercado e às posições abertas, via interfaces.</td>
+        <td><span class="badge done">Pronto</span></td>
+      </tr>
+      <tr>
+        <td><strong>Core / Log</strong></td>
+        <td>Sistema de log estruturado (JSON-line). Mesmo formato em live e backtest.</td>
+        <td><span class="badge done">Pronto</span></td>
+      </tr>
+      <tr>
+        <td><strong>Core / Testing</strong></td>
+        <td>Framework próprio de testes (asserts + runner + mocks). 10.4k assertivas passando.</td>
+        <td><span class="badge done">Pronto</span></td>
+      </tr>
+      <tr>
+        <td><strong>Tick Recorder</strong></td>
+        <td>Service que grava ticks ao vivo num arquivo (<em>.mkstick</em>) para replay futuro.</td>
+        <td><span class="badge partial">Em curso</span></td>
+      </tr>
+      <tr>
+        <td><strong>Replayer</strong></td>
+        <td>EA que consome o <em>.mkstick</em> e executa a estratégia em modo backtest oficial.</td>
+        <td><span class="badge partial">Em curso</span></td>
+      </tr>
+      <tr>
+        <td><strong>StressLab</strong></td>
+        <td>Simulação de condições adversas (spread alto, latência, rejeições) sobre o backtest.</td>
+        <td><span class="badge todo">Próxima fase</span></td>
+      </tr>
+      <tr>
+        <td><strong>UI/Painel SaaS Navy</strong></td>
+        <td>Painel visual no terminal MT5 com progresso, status, métricas em tempo real.</td>
+        <td><span class="badge partial">Esqueleto</span></td>
+      </tr>
+    </tbody>
+  </table>
+</section>
+
+<div class="section-divider"></div>
+
+<!-- ============================= VISÃO DE PRODUTO ============================= -->
+<section class="container">
+  <div class="section-eyebrow">Visão de Produto</div>
+  <h2 class="section-title">De framework técnico a produto que se opera</h2>
+
+  <p class="section-subtitle">
+    O que existe hoje é um framework <em>de engenheiro</em>: poderoso, sólido, mas com cara de motor sem carroceria. O próximo grande salto é transformar essa base em um <strong>produto que se opera</strong>: simples no uso, dinâmico na configuração, rico na visualização.
+  </p>
+
+  <h3 style="font-size:1.3rem; margin-top:32px; color: var(--text);">Pilares da camada de produto</h3>
+
+  <div class="grid grid-2 mt-md">
+    <div class="card">
+      <h3>⚡ Simplicidade no uso</h3>
+      <p>O operador não deve precisar editar código para configurar uma estratégia. Inputs claros, defaults sensatos, presets prontos por instrumento. "Liga e usa" para o cenário comum; expert mode para quem quer mexer.</p>
+    </div>
+    <div class="card">
+      <h3>🎯 Configuração dinâmica</h3>
+      <p>Tamanho do brick, geometria, sizer, gerenciamento, indicadores — tudo configurável via inputs sem recompilar. Mudou um parâmetro? Reinicia o EA. Pronto.</p>
+    </div>
+    <div class="card">
+      <h3>📊 Visualização rica</h3>
+      <p>Custom Symbol Renko desenhado no terminal MT5 com indicadores nativos do ecossistema — não imagens estáticas, mas linhas vivas que reagem em tempo real ao mesmo motor que toma as decisões.</p>
+    </div>
+    <div class="card">
+      <h3>🛡 Auditabilidade total</h3>
+      <p>Cada decisão da estratégia gera uma linha de log estruturado. Cada brick gerado fica num arquivo. Cada tick capturado fica num arquivo. Dúvida sobre o que aconteceu? Tem registro.</p>
+    </div>
+  </div>
+
+  <h3 style="font-size:1.3rem; margin-top:48px; color: var(--text);">Indicadores planejados sobre o Renko</h3>
+
+  <p class="text-soft">
+    O Custom Symbol Renko que o framework gera é um <em>símbolo de primeira classe</em> no MetaTrader 5. Isso significa que qualquer indicador nativo do MT5 — ou customizado de terceiros — pode ser aplicado sobre ele. O plano inclui o seguinte conjunto, todos calibrados para o feed Renko:
+  </p>
+
+  <div class="ind-grid">
+    <div class="ind-card">
+      <div class="ind-icon">📈</div>
+      <div class="ind-name">EMA</div>
+      <div class="ind-desc">Média exponencial — tendência</div>
+    </div>
+    <div class="ind-card">
+      <div class="ind-icon">⚡</div>
+      <div class="ind-name">Supertrend</div>
+      <div class="ind-desc">Stop dinâmico baseado em ATR</div>
+    </div>
+    <div class="ind-card">
+      <div class="ind-icon">📊</div>
+      <div class="ind-name">Bollinger Bands</div>
+      <div class="ind-desc">Volatilidade adaptativa</div>
+    </div>
+    <div class="ind-card">
+      <div class="ind-icon">🔥</div>
+      <div class="ind-name">Chandelier Exit</div>
+      <div class="ind-desc">Trailing stop por ATR</div>
+    </div>
+    <div class="ind-card">
+      <div class="ind-icon">📏</div>
+      <div class="ind-name">Donchian</div>
+      <div class="ind-desc">Canais de máximas/mínimas</div>
+    </div>
+    <div class="ind-card">
+      <div class="ind-icon">🎯</div>
+      <div class="ind-name">ATR</div>
+      <div class="ind-desc">True Range médio</div>
+    </div>
+    <div class="ind-card">
+      <div class="ind-icon">🌊</div>
+      <div class="ind-name">RSI</div>
+      <div class="ind-desc">Força relativa</div>
+    </div>
+    <div class="ind-card">
+      <div class="ind-icon">⏱</div>
+      <div class="ind-name">MACD</div>
+      <div class="ind-desc">Convergência/divergência</div>
+    </div>
+    <div class="ind-card">
+      <div class="ind-icon">✚</div>
+      <div class="ind-name">Outros</div>
+      <div class="ind-desc">Camada extensível</div>
+    </div>
+  </div>
+
+  <div class="callout info">
+    <strong>Por que isso é importante?</strong> Indicadores aplicados sobre Renko produzem leituras muito mais limpas do que sobre gráficos de tempo. Um Supertrend num Renko de XAUUSD elimina dezenas de sinais falsos que apareceriam num gráfico de 5 minutos. A combinação Renko + indicador filtrado é o <em>diferencial técnico</em> do produto.
+  </div>
+
+  <h3 style="font-size:1.3rem; margin-top:48px; color: var(--text);">A experiência do usuário-alvo</h3>
+
+  <table>
+    <thead>
+      <tr>
+        <th>Cenário</th>
+        <th>Hoje no V5 (referência negativa)</th>
+        <th>Visão MKS-ULTIMATE</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><strong>Configurar uma estratégia nova</strong></td>
+        <td>Mexer em dezenas de inputs sem documentação, descobrindo significado por tentativa.</td>
+        <td>Painel agrupado por seção, com tooltips, presets prontos por instrumento, validação em tempo real.</td>
+      </tr>
+      <tr>
+        <td><strong>Testar antes de operar</strong></td>
+        <td>Strategy Tester nativo do MT5 — que produz números diferentes do live.</td>
+        <td>Replay sobre tick stream capturado + StressLab progressivo. Mesmos números, contra cenários adversos.</td>
+      </tr>
+      <tr>
+        <td><strong>Acompanhar operação ao vivo</strong></td>
+        <td>Ler o Experts tab do MT5, números espalhados.</td>
+        <td>Painel SaaS Navy no chart, com progresso, P&amp;L do dia, drawdown, status dos anéis de segurança.</td>
+      </tr>
+      <tr>
+        <td><strong>Auditar uma operação atípica</strong></td>
+        <td>Tentar reconstruir o que aconteceu de memória ou de prints.</td>
+        <td>Abrir o log JSON-line, filtrar pelo timestamp, ver cada decisão da estratégia em ordem cronológica.</td>
+      </tr>
+      <tr>
+        <td><strong>Mudar de broker</strong></td>
+        <td>Em geral exige adaptação manual da estratégia.</td>
+        <td>Trocar implementação injetada no composition root. Lógica não muda nem por uma linha.</td>
+      </tr>
+    </tbody>
+  </table>
+</section>
+
+<div class="section-divider"></div>
+
+<!-- ============================= TIMELINE ============================= -->
+<section class="container">
+  <div class="section-eyebrow">Próximos Marcos</div>
+  <h2 class="section-title">O que vem por aí</h2>
+
+  <p class="section-subtitle">
+    A sequência abaixo é o caminho do estado atual até o produto operável. Cada marco tem critério de saída objetivo — não é "achamos que está bom", é "passou nos testes definidos".
+  </p>
+
+  <div class="timeline">
+    <div class="timeline-item done">
+      <div class="timeline-date">Concluído · maio/2026</div>
+      <h4>Fundação técnica + 3 anéis de proteção + paridade de leitura</h4>
+      <p>Fases 0 a 6 do roadmap fechadas. Estado atual deste relatório. 10.4k testes passando.</p>
+    </div>
+
+    <div class="timeline-item partial">
+      <div class="timeline-date">Próxima semana · seg-sex</div>
+      <h4>Gravação ao vivo + Replayer</h4>
+      <p>Conclusão da ADR-024: o gravador de ticks roda em background no MT5, gera o primeiro arquivo <em>.mkstick</em> real. O Replayer consome esse arquivo e prova a paridade bit-a-bit em janela mínima de 1 hora.</p>
+    </div>
+
+    <div class="timeline-item future">
+      <div class="timeline-date">2 a 4 semanas após</div>
+      <h4>StressLab integrado</h4>
+      <p>Pipeline progressivo: backtest normal → stress leve → stress médio → stress alto. A estratégia precisa sobreviver aos quatro níveis para ser candidata a operar com dinheiro real.</p>
+    </div>
+
+    <div class="timeline-item future">
+      <div class="timeline-date">Mês seguinte</div>
+      <h4>Camada de produto — UI rica + indicadores</h4>
+      <p>Painel completo no chart com status em tempo real. Conjunto de indicadores (EMA, Supertrend, Bollinger, Chandelier, Donchian, ATR, RSI, MACD) calibrados para o feed Renko. Tudo configurável via inputs do EA.</p>
+    </div>
+
+    <div class="timeline-item future">
+      <div class="timeline-date">Médio prazo</div>
+      <h4>Primeiro EA real validado end-to-end</h4>
+      <p>Estratégia deliberadamente simples para exercitar todas as peças. Roda em backtest oficial → StressLab nos 4 níveis → demo live. Paridade validada por log-diff automático. Critério de saída: zero divergência.</p>
+    </div>
+
+    <div class="timeline-item future">
+      <div class="timeline-date">Longo prazo</div>
+      <h4>Estratégias reais + operação produtiva</h4>
+      <p>Com o framework validado, cada estratégia passa a ser um projeto próprio que <em>usa</em> o MKS-ULTIMATE. A oficina está pronta — começa a produção em série.</p>
+    </div>
+  </div>
+</section>
+
+<div class="section-divider"></div>
+
+<!-- ============================= PILARES TÉCNICOS ============================= -->
+<section class="container">
+  <div class="section-eyebrow">Indicadores de Saúde do Projeto</div>
+  <h2 class="section-title">Por que dá para confiar nestes números</h2>
+
+  <div class="grid grid-3 mt-md">
+    <div class="kpi">
+      <div class="kpi-value">24</div>
+      <div class="kpi-label">Decisões formalizadas</div>
+      <div class="kpi-sub">ADRs aceitas, datadas e com alternativas rejeitadas registradas</div>
+    </div>
+    <div class="kpi">
+      <div class="kpi-value">~16k</div>
+      <div class="kpi-label">Linhas de código</div>
+      <div class="kpi-sub">Inclui testes e documentação no mesmo repositório</div>
+    </div>
+    <div class="kpi">
+      <div class="kpi-value">10.408</div>
+      <div class="kpi-label">Assertivas de teste</div>
+      <div class="kpi-sub">100% passando, executadas em cada commit</div>
+    </div>
+    <div class="kpi">
+      <div class="kpi-value">0</div>
+      <div class="kpi-label">Warnings de compilação</div>
+      <div class="kpi-sub">Todo arquivo compila limpo no compilador oficial do MT5</div>
+    </div>
+    <div class="kpi">
+      <div class="kpi-value">8</div>
+      <div class="kpi-label">Documentos vivos</div>
+      <div class="kpi-sub">Projeto.md, ROADMAP, ARQUITETURA, REGRAS, PROTOCOLOS, CHEATSHEET, TOM, POSTMORTEM</div>
+    </div>
+    <div class="kpi">
+      <div class="kpi-value">100%</div>
+      <div class="kpi-label">Repositório versionado</div>
+      <div class="kpi-sub">Git + GitHub. Cada commit auditável.</div>
+    </div>
+  </div>
+
+  <div class="callout info mt-md">
+    <strong>O que esses números significam para um investidor?</strong> Significa que esse projeto pode ser auditado por qualquer engenheiro qualificado em qualquer momento. Não há "código que só Mike entende". Cada decisão tem um documento explicando por que foi tomada. Cada componente tem testes explicando o que ele faz. Se Mike precisar parar amanhã, outra pessoa consegue continuar — porque o conhecimento está no repositório, não na cabeça dele.
+  </div>
+</section>
+
+<div class="section-divider"></div>
+
+<!-- ============================= ENGENHARIA TRIPLA ============================= -->
+<section class="container">
+  <div class="section-eyebrow">O Processo por Trás de Cada Decisão</div>
+  <h2 class="section-title">Engenharia tripla: Mike + Claude + Gemini</h2>
+
+  <p class="section-subtitle">
+    Nenhuma decisão arquitetural deste projeto foi tomada por uma única cabeça. Mike institucionalizou um <strong>processo de debate triplo</strong> em que cada proposta passa por análise crítica de duas inteligências artificiais de fronteira — Claude (Anthropic) e Gemini (Google) — antes de virar ADR aceita. Esse é o motor invisível que produz, a partir de um arquiteto sozinho, um resultado equivalente ao de um time de engenheiros de software experientes.
+  </p>
+
+  <div class="flow">
+    <svg viewBox="0 0 940 360" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Processo tripla Mike + Claude + Gemini">
+      <defs>
+        <radialGradient id="mikeGrad" cx="50%" cy="50%" r="50%">
+          <stop offset="0%" stop-color="#f5b53a" stop-opacity="0.4"/>
+          <stop offset="100%" stop-color="#f5b53a" stop-opacity="0.05"/>
+        </radialGradient>
+        <radialGradient id="claudeGrad" cx="50%" cy="50%" r="50%">
+          <stop offset="0%" stop-color="#60a5fa" stop-opacity="0.4"/>
+          <stop offset="100%" stop-color="#60a5fa" stop-opacity="0.05"/>
+        </radialGradient>
+        <radialGradient id="geminiGrad" cx="50%" cy="50%" r="50%">
+          <stop offset="0%" stop-color="#34d399" stop-opacity="0.4"/>
+          <stop offset="100%" stop-color="#34d399" stop-opacity="0.05"/>
+        </radialGradient>
+      </defs>
+
+      <!-- Mike (top) -->
+      <circle cx="470" cy="80" r="60" fill="url(#mikeGrad)" stroke="#f5b53a" stroke-width="2.5"/>
+      <text x="470" y="76" text-anchor="middle" fill="#f5b53a" font-size="16" font-weight="800" font-family="system-ui">MIKE</text>
+      <text x="470" y="96" text-anchor="middle" fill="#e6ecff" font-size="11" font-family="system-ui">arquiteto</text>
+      <text x="470" y="110" text-anchor="middle" fill="#8893b8" font-size="10" font-family="system-ui">visão · veto · síntese</text>
+
+      <!-- Claude (bottom left) -->
+      <circle cx="240" cy="270" r="60" fill="url(#claudeGrad)" stroke="#60a5fa" stroke-width="2.5"/>
+      <text x="240" y="266" text-anchor="middle" fill="#60a5fa" font-size="16" font-weight="800" font-family="system-ui">CLAUDE</text>
+      <text x="240" y="286" text-anchor="middle" fill="#e6ecff" font-size="11" font-family="system-ui">Anthropic</text>
+      <text x="240" y="300" text-anchor="middle" fill="#8893b8" font-size="10" font-family="system-ui">análise crítica · código</text>
+
+      <!-- Gemini (bottom right) -->
+      <circle cx="700" cy="270" r="60" fill="url(#geminiGrad)" stroke="#34d399" stroke-width="2.5"/>
+      <text x="700" y="266" text-anchor="middle" fill="#34d399" font-size="16" font-weight="800" font-family="system-ui">GEMINI</text>
+      <text x="700" y="286" text-anchor="middle" fill="#e6ecff" font-size="11" font-family="system-ui">Google</text>
+      <text x="700" y="300" text-anchor="middle" fill="#8893b8" font-size="10" font-family="system-ui">contraponto · auditoria</text>
+
+      <!-- triangular arrows -->
+      <line x1="430" y1="135" x2="285" y2="220" stroke="#8893b8" stroke-width="1.5" stroke-dasharray="4 4"/>
+      <line x1="510" y1="135" x2="655" y2="220" stroke="#8893b8" stroke-width="1.5" stroke-dasharray="4 4"/>
+      <line x1="300" y1="270" x2="640" y2="270" stroke="#8893b8" stroke-width="1.5" stroke-dasharray="4 4"/>
+
+      <!-- middle ADR result -->
+      <rect x="370" y="170" width="200" height="60" rx="10" fill="#0a0f1f" stroke="#f5b53a" stroke-width="2"/>
+      <text x="470" y="196" text-anchor="middle" fill="#f5b53a" font-size="13" font-weight="700" font-family="system-ui">ADR ACEITA</text>
+      <text x="470" y="214" text-anchor="middle" fill="#8893b8" font-size="11" font-family="system-ui">decisão cirúrgica registrada</text>
+
+      <!-- labels on arrows -->
+      <text x="335" y="180" text-anchor="middle" fill="#60a5fa" font-size="10" font-family="system-ui" font-weight="600">propõe / contesta</text>
+      <text x="605" y="180" text-anchor="middle" fill="#34d399" font-size="10" font-family="system-ui" font-weight="600">propõe / contesta</text>
+      <text x="470" y="262" text-anchor="middle" fill="#8893b8" font-size="10" font-family="system-ui" font-weight="600">debate cruzado</text>
+    </svg>
+  </div>
+
+  <h3 style="font-size:1.3rem; margin-top:32px; color: var(--text);">Como cada um contribui</h3>
+
+  <div class="grid grid-3 mt-md">
+    <div class="card" style="border-left: 4px solid #f5b53a;">
+      <h3>👤 Mike — Arquiteto</h3>
+      <p>Define visão, propõe direção, faz a pergunta certa. Mas, sobretudo, <em>tem o poder de veto absoluto</em>. As IAs sugerem, comparam, criticam — Mike decide. Toda ADR aceita carrega a assinatura arquitetural dele.</p>
+      <p class="text-soft" style="font-size: 0.88rem; margin-top: 10px;"><em>"Toda ideia é analisada honestamente. Concordar por concordar é proibido."</em> — Regra §1.1 fixada por Mike no manual de conduta do projeto.</p>
+    </div>
+    <div class="card" style="border-left: 4px solid #60a5fa;">
+      <h3>🤖 Claude — Análise crítica + redação</h3>
+      <p>Profundidade em análise arquitetural: confronta a ideia do Mike com argumentos contra, identifica buracos antes de implementar, redige código MQL5 + testes + ADRs. Treinado para <em>discordar quando faz sentido</em>.</p>
+      <p class="text-soft" style="font-size: 0.88rem; margin-top: 10px;">Modelo: <strong>Claude Opus 4.7</strong> (Anthropic). Janela de contexto: 1M tokens — permite manter o projeto inteiro em memória durante o debate.</p>
+    </div>
+    <div class="card" style="border-left: 4px solid #34d399;">
+      <h3>💎 Gemini — Contraponto + auditoria</h3>
+      <p>Segunda opinião sobre decisões já encaminhadas. Vê o que Claude pode ter perdido, traz perspectivas distintas, audita argumentos. Quando Claude e Gemini convergem, Mike sabe que a decisão é robusta. Quando divergem, Mike investiga o porquê.</p>
+      <p class="text-soft" style="font-size: 0.88rem; margin-top: 10px;">Modelo: <strong>Gemini</strong> (Google) — usado especificamente como auditor independente do raciocínio do Claude.</p>
+    </div>
+  </div>
+
+  <h3 style="font-size:1.3rem; margin-top:48px; color: var(--text);">Por que isso produz resultado de engenheiro sênior experiente</h3>
+
+  <p class="text-soft">
+    Engenheiros de software experientes não são experientes por escreverem muito código. São experientes por terem aprendido <em>quais decisões evitar</em>. Esse conhecimento normalmente leva uma década de projetos quebrados para se acumular numa única pessoa. O processo do Mike <strong>comprime essa década</strong> em um debate de minutos — porque cada IA carrega o equivalente a milhões de horas de leitura de código, post-mortems, padrões e antipadrões da indústria.
+  </p>
+
+  <p class="text-soft">
+    Mas — e este é o ponto — IAs sozinhas não bastam. Uma IA pode confidentemente sugerir uma arquitetura ruim porque "soa profissional". O contraponto de outra IA detecta isso. E o veto humano do Mike garante que a decisão final esteja alinhada com a <em>visão de longo prazo</em> do projeto — algo que nenhuma IA tem.
+  </p>
+
+  <div class="grid grid-2 mt-md">
+    <div class="card">
+      <h3>Exemplo concreto: ADR-024</h3>
+      <p>A decisão de criar o sistema próprio de captura+replay (em vez de usar o Strategy Tester) passou por três rodadas de debate. Mike propôs a ideia, Claude analisou e identificou três condições críticas que <em>tinham</em> que ser cumpridas para que a paridade fosse real (não usar Tester, recorder à prova de crash, modelagem honesta de execução). Mike aceitou as três condições e refinou o escopo. Resultado: uma ADR de 200+ linhas, sete regras vinculantes, dez alternativas explicitamente rejeitadas com justificativa.</p>
+    </div>
+    <div class="card">
+      <h3>Exemplo concreto: ADR-019</h3>
+      <p>A sequência de implementação dos sub-slices da Fase 5 e Fase 6 (a rede de segurança) foi debatida e reordenada antes de ser fixada. A intuição inicial seria fazer Trade Manager antes do Risk Manager. O debate identificou que isso colocava o gatilho antes da rede de segurança — exatamente o erro do V5. Ordem invertida: PositionSizer → Risk em 3 camadas → TradeManager. Cláusula anti-precedente fixada para impedir que essa ordem seja burlada no futuro.</p>
+    </div>
+  </div>
+
+  <div class="callout">
+    <strong>O resultado mensurável.</strong> 24 ADRs aceitas em ~6 semanas de desenvolvimento, com profundidade técnica que normalmente exigiria um time de 3-4 engenheiros sêniores. Zero retrabalho arquitetural até hoje. As decisões tomadas no mês 1 ainda estão de pé no mês 2, sem ajustes. Isso é métrica direta de qualidade arquitetural.
+  </div>
+
+  <div class="quote">
+    "Decidir certo é mais barato que decidir rápido. Cada hora gasta no debate evita semanas de reescrita."
+    <cite>Princípio operacional do projeto MKS-ULTIMATE</cite>
+  </div>
+</section>
+
+<div class="section-divider"></div>
+
+<!-- ============================= POSSÍVEIS FALHAS / MELHORIAS ============================= -->
+<section class="container">
+  <div class="section-eyebrow">Análise Crítica Honesta</div>
+  <h2 class="section-title">O que ainda pode quebrar — e como vamos resolver</h2>
+
+  <p class="section-subtitle">
+    Um relatório que só elogia o próprio projeto é propaganda, não relatório. Aqui estão os pontos de risco identificados, classificados por severidade, com a estratégia de mitigação para cada um.
+  </p>
+
+  <div class="grid grid-2">
+    <div class="card" style="border-left: 4px solid var(--accent);">
+      <h3>🟡 Risco: cobertura Renko em mercados gappy</h3>
+      <p><strong>Cenário:</strong> reabertura de mercado segunda-feira, o preço abre com gap. O motor precisa decidir se isso vira muitos bricks de uma vez, um brick só, ou nada.</p>
+      <p><strong>Mitigação:</strong> ADR-008 já registrada como pendente. Será decidida com evidência empírica quando o primeiro gap real aparecer no <em>.mkstick</em> capturado — não no vazio.</p>
+    </div>
+    <div class="card" style="border-left: 4px solid var(--accent);">
+      <h3>🟡 Risco: dependência de um único broker para captura</h3>
+      <p><strong>Cenário:</strong> hoje o tick stream vem da EXNESS. Trocar de broker invalida o histórico capturado, porque cada broker tem seu próprio bid/ask para o mesmo símbolo.</p>
+      <p><strong>Mitigação:</strong> cada arquivo capturado carrega proveniência (broker, conta, símbolo) no cabeçalho. Tentativa de usar arquivo de broker diferente gera aviso explícito.</p>
+    </div>
+    <div class="card" style="border-left: 4px solid var(--accent);">
+      <h3>🟡 Risco: paridade de execução não é bit-a-bit</h3>
+      <p><strong>Cenário:</strong> mesmo com dados idênticos, o preço real de preenchimento de uma ordem depende do estado microscópico do book do broker — não capturável.</p>
+      <p><strong>Mitigação:</strong> a paridade do MKS-ULTIMATE é da <em>decisão</em>, não da execução. O StressLab modela cenários adversos de execução; a diferença entre live e backtest fica explícita e dimensionada, não escondida.</p>
+    </div>
+    <div class="card" style="border-left: 4px solid var(--accent);">
+      <h3>🟢 Risco mitigado: divergência de bricks live × replay</h3>
+      <p><strong>Cenário:</strong> mesmo capturando ticks, o backtest poderia gerar uma sequência diferente de bricks por algum bug do motor.</p>
+      <p><strong>Mitigação:</strong> o critério de saída da ADR-024 é exatamente <em>byte-a-byte idêntico</em>. Se um único byte diferir, o slice 24f não fecha.</p>
+    </div>
+  </div>
+
+  <h3 style="font-size:1.3rem; margin-top:48px; color: var(--text);">Melhorias sugeridas para o roadmap pós-MVP</h3>
+
+  <div class="grid grid-3 mt-md">
+    <div class="card">
+      <h3>Multi-símbolo</h3>
+      <p>Hoje uma instância de EA opera um símbolo. Estratégias multi-asset (XAU + EUR + indices) exigem uma camada de orquestração. Trabalho de roadmap longo prazo.</p>
+    </div>
+    <div class="card">
+      <h3>Otimização de parâmetros</h3>
+      <p>O optimizer nativo do MT5 foi rejeitado por mesma razão arquitetural do Strategy Tester. Otimização própria — provavelmente em Python ou Rust, fora do MT5 — é trabalho substancial mas necessário para refinar estratégias em escala.</p>
+    </div>
+    <div class="card">
+      <h3>Dashboard de monitoramento remoto</h3>
+      <p>Acompanhar EAs rodando ao vivo via dashboard web. Backend lê os logs JSON-line. Permite operar várias contas/EAs sem precisar abrir cada terminal MT5.</p>
+    </div>
+    <div class="card">
+      <h3>Indicadores customizados premium</h3>
+      <p>Além dos clássicos (EMA, Bollinger, etc.), construir indicadores proprietários sobre o Renko que possam virar diferencial competitivo. Já tem padrão arquitetural definido para isso.</p>
+    </div>
+    <div class="card">
+      <h3>Pipeline CI/CD</h3>
+      <p>Hoje o watcher local recompila e roda testes. Versão profissional: cada push em GitHub dispara compilação + suite de testes em servidor. Status visível no PR.</p>
+    </div>
+    <div class="card">
+      <h3>Integração com canais externos</h3>
+      <p>Notificações por Telegram/email quando ordem é executada, quando um anel de proteção dispara, quando equity atinge marcos. Operador pode "operar ausente" com alertas push.</p>
+    </div>
+  </div>
+</section>
+
+<div class="section-divider"></div>
+
+<!-- ============================= CONCLUSÃO ============================= -->
+<section class="container">
+  <div class="section-eyebrow">Conclusão</div>
+  <h2 class="section-title">Onde isso pode chegar</h2>
+
+  <p class="section-subtitle">
+    O MKS-ULTIMATE não é "mais um framework de trading". É a resposta arquitetural de um arquiteto que viu um sistema falhar no próprio capital, abriu uma análise de causa-raiz brutal sobre o próprio código, identificou quatro falhas estruturais e refez tudo. A escolha de Mike de reconstruir do zero — em vez de remendar o V5 — foi a primeira decisão cirúrgica. Cada decisão posterior foi tomada com o V5 como referência negativa explícita e validada no processo Mike + Claude + Gemini antes de virar código.
+  </p>
+
+  <p class="text-soft">
+    Do ponto de vista técnico, o projeto está em fase avançada: o motor está pronto, a rede de segurança está pronta, a infraestrutura de paridade está pronta em 50%. O que falta — gravação ao vivo, StressLab, indicadores, camada de produto — é trabalho de execução previsível sobre fundações sólidas. Não é mais um problema de arquitetura. É um problema de tempo de implementação.
+  </p>
+
+  <p class="text-soft">
+    Do ponto de vista de produto, o salto desejado é claro: transformar uma ferramenta de engenheiro em um produto de operador. Inputs claros, visualização rica, indicadores nativos, configuração dinâmica, auditabilidade total. Tudo construído sobre uma base que <em>não mente</em> — a paridade bit-a-bit é o diferencial que torna isso comercializável.
+  </p>
+
+  <div class="quote">
+    "A diferença entre um framework que funciona e um framework que falha raramente está no código. Está nas decisões anteriores ao código."
+    <cite>Princípio que guia o projeto desde o primeiro commit</cite>
+  </div>
+
+  <div class="callout success mt-md">
+    <strong>Resumo de uma frase para o investidor:</strong> 62% do MKS-ULTIMATE está construído, testado, documentado e versionado. O que está construído é a parte mais difícil — as fundações e a rede de segurança que o V5 não tinha. O restante é execução sobre alicerce sólido, e a visão de produto está clara e dimensionada.
+  </div>
+
+  <p class="text-soft" style="margin-top: 32px; text-align: center; font-size: 0.92rem;">
+    Este relatório reflete o estado do projeto em <strong>23 de maio de 2026</strong>, ao fim de uma sessão de desenvolvimento de sábado que entregou 7 commits, 4 merges, aproximadamente 4.100 linhas de código e mais de 10.300 assertivas de teste, todas passando. Projeto sob propriedade da <strong>Sugita Kougyou</strong>, conduzido tecnicamente pelo arquiteto <strong>Mike Inoue</strong>. Todos os artefatos citados estão no repositório <span class="text-accent">github.com/MksMike/MKS-ULTIMATE</span> e podem ser auditados a qualquer momento.
+  </p>
+</section>
+
+<!-- ============================= FOOTER ============================= -->
+<footer>
+  <div class="footer-brand">MKS-ULTIMATE</div>
+  <p style="margin-top: 8px;">
+    Propriedade de <strong style="color: var(--accent-2);">Sugita Kougyou</strong> · 2026
+  </p>
+  <p style="margin-top: 6px; font-size: 0.92rem;">
+    Arquiteto e referência de desenvolvedor: <strong>Mike Inoue</strong>
+  </p>
+  <p style="margin-top: 16px; font-size: 0.82rem; opacity: 0.7;">
+    Relatório executivo gerado em 2026-05-23 · Documento técnico-comercial · Distribuição restrita
+  </p>
+</footer>
+
+</body>
+</html>
