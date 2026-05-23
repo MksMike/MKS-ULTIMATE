@@ -35,6 +35,7 @@ enum ENUM_MKS_ERROR_CODE
    MKS_ERR_TRADE_SIZER_INVALID_PARAM = 300, // configuração do sizer inválida (riskPct<=0, fixedLots<=0)
    MKS_ERR_TRADE_SIZER_OUT_OF_RANGE = 301,  // lots calculado fora de [VolumeMin, VolumeMax]
    MKS_ERR_TRADE_SIZER_INVALID_INPUT = 302, // input em ComputeLots inválido (slDistance<=0, balance<=0, etc.)
+   MKS_ERR_TRADE_MANAGER_INVALID_PARAM = 303, // config do CMksTradeManager inválida (slice 5b)
 
    //--- Risk: faixa 400–499 — ver ADR-009, ADR-019 ---
    MKS_ERR_RISK_REJECTED_SL_MISSING = 400,    // SL obrigatório e não informado em request

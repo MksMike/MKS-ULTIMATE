@@ -42,7 +42,7 @@ MKS-ULTIMATE/
 │   │   │   ├── Account/            # CMksMt5Account (impl de IAccount), CMksAccountSnapshot
 │   │   │   ├── Position/           # CMksMt5PositionBook (impl de IPositionBook)
 │   │   │   ├── Broker/             # CMksMt5Broker, CMksSimulatedBroker, CMksCostModel
-│   │   │   ├── Trade/              # CMksTradeManager, CMksPositionSizer
+│   │   │   ├── Trade/              # CMksPositionSizer (Fixed/PercentRisk), CMksTradeManager (BE+Trail+Partial)
 │   │   │   ├── Risk/               # CMksRiskManager (Por Trade + Estratégia + Conta), CMksRiskGatedBroker
 │   │   │   ├── Log/                # CMksLogger (logging estruturado)
 │   │   │   └── Testing/            # Framework mínimo de asserções
