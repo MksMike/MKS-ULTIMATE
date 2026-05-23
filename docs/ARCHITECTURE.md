@@ -1641,13 +1641,77 @@ Materializa-se o caminho `tick → Builder → brick` como infraestrutura de cap
 
 ---
 
+### ADR-008: Tratamento de reabertura de mercado (gap de fim-de-semana) no RenkoBuilder
+
+**Data:** 2026-05-23
+**Status:** Aceita
+**Relação:** Quita a única dívida formal pendente na §4 desta ARCHITECTURE.md. Apoia-se em evidência empírica de produção (`CHECKPOINT-2026-05-20-slice2.md` §6 — run de 7 dias incluindo um gap de 49h em XAUUSDm/Exness). Não cria mecanismo novo: formaliza, como decisão deliberada, o comportamento que a combinação ADR-010 (mid-driven) + ADR-011 (multi-threshold) já produz.
+
+**Contexto:**
+Mercados de FX e metais fecham na sexta à noite e reabrem na segunda — tipicamente 48-49 horas sem ticks. Quando o primeiro tick de segunda chega, o preço pode estar significativamente longe do último tick de sexta. O `CMksRenkoBuilder` recebe esse tick como qualquer outro: o mecanismo de cruzamento multi-threshold (ADR-011) processa o salto.
+
+A pergunta arquitetural é: esse processamento implícito é a decisão certa? Quatro alternativas existem, e o `ROADMAP.md §Fase 2 R2.3` registrou explicitamente a pendência. Esta ADR escolhe entre elas, com fundamentação.
+
+A evidência empírica disponível, registrada em `CHECKPOINT-2026-05-20-slice2.md §6`:
+- XAUUSDm/Exness, janela 2026-05-13 → 2026-05-20 (7 dias corridos).
+- 1.676.426 ticks → 9.672 bricks com `S=3.0`, preset median, `K=20`.
+- **1 gap de 49h** (fim de semana 15→17 mai).
+- **Zero erros** 102 (threshold limit), 103 (invalid tick), 104 (corrupt stream).
+- O gap foi absorvido como um brick multi-threshold modesto (M=2 ou similar), com movimento de preço observado entre 5 e 10 USD durante o weekend.
+- O produto `K · (1−PO) · S = 20 · 0.5 · 3.0 = 30 USD` ficou confortavelmente acima do movimento real.
+
+O gap de fim-de-semana, neste instrumento e broker, **já está sendo tratado corretamente** pela arquitetura aceita (ADR-010 + ADR-011). Esta ADR formaliza essa observação como decisão deliberada e fecha a fronteira para futuras mudanças sem ADR de substituição.
+
+**Decisão:**
+O `CMksRenkoBuilder` trata o primeiro tick pós-gap como **qualquer outro tick do stream**, sem mecanismo especial para detectar ou rotular gaps temporais. O mecanismo de cruzamento multi-threshold (ADR-011) é o caminho único de absorção; o limiar `K` atua como guarda contra gaps patológicos. Quatro cláusulas vinculantes:
+
+1. **Sem detecção temporal de gap.** O builder não consulta relógio, não compara `timeMsc` entre ticks consecutivos, não tem threshold de "X minutos entre ticks → reset". Detecção baseada em tempo viola o princípio de determinismo da §1: o "agora" do builder é função pura do stream de ticks, nunca de wall-clock. O caminho de live e o caminho de replay sobre `.mkstick` consomem o mesmo tick na mesma ordem; tratar o tick pós-gap diferentemente exigiria estado externo (relógio) que não está no tick — quebra paridade bit-a-bit.
+
+2. **Sem brick de fechamento parcial no fim da semana.** Se houver um brick em formação no último tick de sexta-feira (wickHigh/wickLow não-vazios), seu estado é preservado intacto até o primeiro tick de segunda. Não emitimos "brick de gap" ou "brick parcial" para fechar a sessão — porque tais bricks seriam phantom (sem tick de gatilho próprio), violação direta da ADR-011 §regra 1.
+
+3. **Sem flag de gap no `MksBrick`.** O contrato do brick (ADR-010, ADR-014) não ganha campo `wasAfterGap` ou equivalente. Estratégia que queira distinguir bricks pós-gap consulta `closeTimeMsc` do brick atual contra o do anterior — gap = delta grande em segundos. É derivado, não primário. Adicionar campo seria mudar o contrato do tipo central do core (cascateando para `.mksbk`, writer, reader, sinks, snapshot etc.) por um caso que estratégias raramente precisam tratar explicitamente.
+
+4. **`K` (limiar multi-threshold, ADR-011) é a guarda contra gap patológico.** Quando o gap excede `K · (1−PO) · S` pontos, o builder emite erro 102 (`MKS_ERR_RENKO_THRESHOLD_LIMIT_EXCEEDED`) e interrompe o stream — comportamento já especificado pela ADR-011 §regra 4. Operador escolhe `K` por instrumento e broker; default `K=20` está validado empiricamente para XAU/Exness e tem margem ampla (~3x o pior gap observado). Para instrumentos voláteis (criptos, instrumentos exóticos), o operador pode subir `K` ou ajustar `S`/preset.
+
+**Alternativas consideradas:**
+
+- **Detectar gap por delta de tempo e descartar.** Definir `gapThresholdSec` (ex.: 1800s = 30 min); ticks após gap maior reset wickHigh/wickLow e iniciam novo brick "limpo". **Rejeitada** por três razões empilhadas: (a) viola o princípio de determinismo da §1 — o motor consulta tempo absoluto; (b) cria comportamento dependente de broker (rollover diário de Exness ~62 min seria detectado como gap, mas é evento técnico, não pausa de mercado); (c) descartar bricks em formação introduz perda de informação que não se reconstrói — wickHigh/wickLow contém movimento real entre o último brick fechado e o gap, descartá-lo é gerar bricks pós-gap com base parcial.
+
+- **Detectar gap e emitir brick especial / flag em `MksBrick`.** Adicionar campo `wasAfterGap` (bool) ou `secondsSinceLastTick` (long) no `MksBrick`, populado pelo builder quando detecta delta acima de threshold. **Rejeitada** por dois motivos: (a) o consumidor primário deste sinal (estratégia) não existe ainda; criar contrato antes do consumidor é arquitetura no vazio, vetada pela §4 desta ARCHITECTURE.md; (b) o sinal é derivado — qualquer consumidor que precise dele computa via `closeTimeMsc` consecutivos. Adicionar redundância no tipo central por conveniência futura não compensa o custo de manter o campo coerente em writer/reader/sinks (cinco arquivos a atualizar).
+
+- **Detectar gap e emitir brick de fechamento sintético no último tick de sexta.** Estratégia "fecha sessão antes do gap". **Rejeitada**: o brick sintético não tem tick de gatilho — é phantom por construção. Viola ADR-011 §regra 1 ("cada brick emitido grava o tick disparador"). O efeito desejado (estratégia evitar carry-over de risco no weekend) é responsabilidade da estratégia + Risk Manager (Fase 6), não do builder.
+
+- **Manter o status quo informal sem ADR.** Continuar tratando gap "tacitamente" via ADR-011 sem registrar a decisão. **Rejeitada** porque deixa a porta aberta para alguém, em algum ciclo futuro, propor um dos mecanismos rejeitados acima sem ter o histórico do porquê. ADR-008 fecha essa porta com argumentação registrada.
+
+**Consequências:**
+
+- **Nenhum código alterado.** O comportamento atual do `CMksRenkoBuilder` já implementa esta decisão. Esta ADR é puramente formalizadora — converte status quo empiricamente validado em decisão arquitetural deliberada.
+
+- **Calibração de `K` por instrumento entra no manual operacional.** Operador escolhe `K` levando em conta o pior gap esperado para o instrumento × broker. Para XAU/Exness com preset median e S=3.0, K=20 tem margem confortável (cobre gap até 30 USD, observado ~5-10 USD na pior semana auditada). Documentação operacional desta calibração entra em `docs/CHEATSHEET.md` em ciclo posterior.
+
+- **Estratégias que querem guardar-se contra entradas pós-gap consultam timestamps.** O padrão recomendado é: na entrada, comparar `currentBrick.closeTimeMsc` com `previousBrick.closeTimeMsc`; se delta > threshold escolhido pela estratégia, skip a entrada por uma ou mais barras. Esta lógica vive na estratégia, não no builder.
+
+- **Determinismo total preservado.** O fato de o builder não consultar relógio entre ticks é o que mantém a paridade bit-a-bit (ADR-024) automaticamente válida em qualquer caminho com gap. Replay sobre `.mkstick` que cobre uma janela com gap produz exatamente os mesmos bricks que o live produziu.
+
+- **Fronteira com ADR-024 fechada.** O `.mkstick` capturado em live preserva o gap como exatamente o que ele é no broker: ausência de ticks por N horas. O Replayer EA sobre esse `.mkstick` consome o último tick de sexta, depois o primeiro de segunda — sem nenhum tratamento intermediário. A combinação produz reprodutibilidade total.
+
+- **Não introduz código de erro novo.** A faixa RenkoBuilder 100–199 do `Error.mqh` já tem `MKS_ERR_RENKO_THRESHOLD_LIMIT_EXCEEDED=102`, que é exatamente o erro disparado por gap patológico além de `K`. Cobertura completa do caso pelo erro existente.
+
+**Fronteiras:**
+
+- **Não cobre interrupção de feed durante o pregão.** Falha de conexão broker→cliente que cause perda de ticks intra-sessão não é gap de mercado; é falha de infraestrutura, e o framework propaga o stream que recebeu (ADR-012 §1: arquivo histórico grava ticks crus, sem preencher buracos). Estratégia robusta a esse caso é responsabilidade do operador (monitoramento de healthcheck, não do builder).
+
+- **Não cobre weekend trading em criptomoedas.** Cripto não tem gap de fim-de-semana — a discussão é inaplicável. Quando o framework operar cripto, esta ADR continua válida (sem detecção temporal de qualquer espécie), simplesmente o caso não dispara.
+
+- **Não cobre eventos extraordinários** (decisões de banco central fora-do-horário, suspensão de pregão por falha de bolsa, etc.). Esses casos exigem decisão operacional do dono, não regra do framework. Se gerarem gap superior a `K · (1−PO) · S`, o erro 102 dispara — e essa é a defesa estrutural.
+
+- **Não cobre rollover diário do broker** (ex.: ~22h GMT na Exness, pausa de 1-3 minutos para reset de swap). Tecnicamente é um micro-gap, mas o `K=20` cobre confortavelmente. Trate-se como tick normal pós-pausa, mesmo mecanismo desta ADR.
+
+---
+
 ## 4. Decisões pendentes
 
-Pontos que precisam virar ADR assim que forem enfrentados:
-
-- **ADR-008 (pendente):** Como tratar reabertura de mercado (segunda-feira) no RenkoBuilder. Gap vira brick? Vira múltiplos bricks? Vira nada? Evidência parcial já registrada em `CHECKPOINT-2026-05-20-slice2.md` §6.
-
-Essas decisões são registradas formalmente quando forem enfrentadas, não antes. Decidir arquitetura no vazio produz decisões erradas.
+Nenhuma decisão arquitetural formal pendente neste momento. Decisões novas são registradas formalmente quando forem enfrentadas, não antes — decidir arquitetura no vazio produz decisões erradas.
 
 ## 5. Convenções de nomenclatura
 
