@@ -92,11 +92,11 @@ public:
 
       // Symbol é fronteira fatal. ADR-024 §4: sem proveniência canônica
       // de símbolo, o feed pode ser de outro instrumento — backtest
-      // inteiro fica inválido. Reutilizamos HEADER_INVALID (slice 24c
-      // reconciliará para SYMBOL_MISMATCH dedicado).
+      // inteiro fica inválido. Código dedicado MKS_ERR_DATA_SYMBOL_MISMATCH
+      // (807) materializado no slice 24c.
       if(StringCompare(m_reader.Symbol(), m_expectedSymbol) != 0)
       {
-         MKS_SET_ERROR(err, MKS_ERR_DATA_HEADER_INVALID,
+         MKS_SET_ERROR(err, MKS_ERR_DATA_SYMBOL_MISMATCH,
                        "symbol mismatch — fatal por ADR-024 §4",
                        StringFormat("file=%s expected=%s got=%s",
                                     m_path, m_expectedSymbol, m_reader.Symbol()));

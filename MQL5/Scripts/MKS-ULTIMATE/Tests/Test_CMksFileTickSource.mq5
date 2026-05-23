@@ -147,7 +147,7 @@ void Test_SymbolMismatchIsFatal()
    MksError err;
    bool ok = src.Open(err);
    MKS_ASSERT_FALSE(ok, "src.Open com symbol diferente deve falhar");
-   MKS_ASSERT_EQ_INT((int)MKS_ERR_DATA_HEADER_INVALID, (int)err.code, "err.code = HEADER_INVALID");
+   MKS_ASSERT_EQ_INT((int)MKS_ERR_DATA_SYMBOL_MISMATCH, (int)err.code, "err.code = SYMBOL_MISMATCH (807)");
    MKS_ASSERT_TRUE(StringFind(err.message, "symbol mismatch") >= 0, "err.message menciona symbol mismatch");
 
    DeleteIfExists(path);
