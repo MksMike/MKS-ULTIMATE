@@ -67,10 +67,11 @@ enum ENUM_MKS_ERROR_CODE
    MKS_ERR_DATA_FILE_EXISTS = 806,         // arquivo já existe na abertura para escrita (ADR-014)
    MKS_ERR_DATA_SYMBOL_MISMATCH = 807,     // símbolo do .mkstick ≠ esperado pelo consumo (ADR-024 §4, fatal)
    MKS_ERR_DATA_RECORDER_INIT_FAILED = 809, // TickRecorder Service falhou no init (SymbolSelect, broker info, etc.)
-   // 808 e 810 reservados:
+   MKS_ERR_DATA_SEQ_DISCONTINUITY = 810,    // multi-arquivo com seq descontínua cross-file (ADR-024 §4, fatal)
+   MKS_ERR_DATA_MULTI_PROVENANCE_MISMATCH = 811, // multi-arquivo com broker/account/symbol divergente entre arquivos (fatal)
+   // 808 reservado:
    //   808 — MKS_ERR_DATA_PROVENANCE_MISMATCH (broker/account WARN; hoje só flag interno no FileTickSource)
-   //   810 — MKS_ERR_DATA_SEQ_DISCONTINUITY    (multi-arquivo com seq descontínua cross-file — slice 24d/e)
-   // Reservados-por-comentário em vez de declarados no enum agora porque
+   // Reservado-por-comentário em vez de declarado no enum agora porque
    // ADR-012 §Consequências proíbe fixar número no vazio: o consumidor
    // que exige o código entra junto com o número no slice que o materializa.
 };
