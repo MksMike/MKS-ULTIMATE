@@ -27,6 +27,10 @@ public:
       // TimeCurrent retorna em segundos; padronizamos em ms desde epoch.
       return (long)TimeCurrent() * 1000;
    }
+
+   // TimeCurrent está disponível desde o OnInit em qualquer chart bound;
+   // não há janela em que o clock real não esteja pronto.
+   virtual bool IsReady() const override { return true; }
 };
 
 #endif // MKS_ULTIMATE_CORE_CLOCK_CMKSMT5CLOCK_MQH

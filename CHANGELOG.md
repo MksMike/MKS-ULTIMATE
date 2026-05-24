@@ -7,6 +7,15 @@ O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/) e es
 ## [Não lançado]
 
 ### Added
+- `docs/ARCHITECTURE.md` §3 — nota de esclarecimento da ADR-007 (WARN/ERROR rate-limited em hot path). Refina a §3 "hot path mudo" para reconhecer a categoria de uso já implementada no `Producer.mq5:241-263`: `WARN`/`ERROR` são aceitos em hot path desde que rate-limited explicitamente (caller-side, padrão `InpInvalidLogEvery=100`); `TRACE`/`DEBUG`/`INFO` permanecem proibidos sem exceção. Identificado em auditoria forense de 2026-05-24.
+- `MQL5/Include/MKS-ULTIMATE/Core/Interfaces/IClock.mqh` — método `IsReady()` (pure virtual) na interface. Live (`CMksMt5Clock`) sempre `true`; replay (`CMksReplayClock`) `true` somente após o primeiro tick válido; mock (`CMksFakeClock`) sempre `true`. Fecha a janela em que `NowMsc()` retornaria 0 silenciosamente antes do primeiro tick em replay, permitindo ao composition root validar prontidão antes da primeira decisão temporal da estratégia.
+- `MQL5/Experts/MKS-ULTIMATE/Test_MksMt5BrokerLive.mq5` — guard contra anexar em conta real (`AccountInfoInteger(ACCOUNT_TRADE_MODE) == ACCOUNT_TRADE_MODE_REAL`). EA executa Send/Close reais — guard fecha porta de acidente em produção. Magic 13371337 continua como defesa complementar.
+
+### Changed
+- `MQL5/Include/MKS-ULTIMATE/Core/RenkoBuilder/CMksRenkoBuilder.mqh` — doc-comment 1 linha acima da declaração da classe ("Coração do framework — transforma stream de ticks em sequência determinística de bricks Renko. Caminho único entre live e replay."), conformidade com Protocolo 1 item "Classe tem doc-comment na declaração". Doc-comments adicionais em `ContinuationThreshold` e `ReversalThreshold` explicando a fórmula de cada limiar.
+- `MQL5/Include/MKS-ULTIMATE/Core/Trade/CMksTradeManager.mqh` — comentário de definição de "point" corrigido: referência a `SymbolInfoDouble(SYMBOL_POINT)` substituída por `ISymbol::Point()`, evitando sugerir violação do Protocolo 9 (o módulo já consome `ISymbol` corretamente; só o comentário enganava).
+
+### Added
 - `docs/ARCHITECTURE.md` §3 — ADR-026 aceita: Producer classic-only. Remove `ENUM_MKS_GEOMETRY_TYPE` e os inputs `InpGeometryType`/`InpPro`/`InpPo` do Producer; hardcoda `MksGeometryClassic()` no OnInit. Fecha a porta do espaço de preços fictício do median pelo caminho de produção, sem remover capability do core. Registra a equivalência matemática `median S=X ≡ classic S=(1−PO)·X`. Substitui parcialmente as regras 1/5/7 da ADR-022. Naming do CS simplifica para `<symbol>.MKS_<sizeStr>`.
 
 ### Changed

@@ -34,6 +34,15 @@ public:
       if(m_source == NULL) return 0;
       return m_source.LastTickTimeMsc();
    }
+
+   // Antes do primeiro Next() bem-sucedido, LastTickTimeMsc()==0. Código
+   // de estratégia que comparasse contra horário decidiria sobre tempo
+   // inexistente — composition root checa IsReady() antes da primeira
+   // decisão temporal. Pronto quando o source já entregou ≥1 tick.
+   virtual bool IsReady() const override
+   {
+      return m_source != NULL && m_source.TicksRead() > 0;
+   }
 };
 
 #endif // MKS_ULTIMATE_CORE_CLOCK_CMKSREPLAYCLOCK_MQH

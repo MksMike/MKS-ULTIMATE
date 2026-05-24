@@ -55,6 +55,15 @@ void Cleanup()
 
 int OnInit()
 {
+   // Guarda contra conta real. Este EA executa Send/Close reais —
+   // anexar em conta real por engano abre posição com capital de verdade.
+   // O magic 13371337 já é defensivo; o guard fecha a porta de vez.
+   if(AccountInfoInteger(ACCOUNT_TRADE_MODE) == ACCOUNT_TRADE_MODE_REAL)
+   {
+      Print("Test_MksMt5BrokerLive: recusado em conta REAL. Use DEMO ou CONTEST.");
+      return INIT_FAILED;
+   }
+
    g_sym = new CMksMt5Symbol(_Symbol);
    g_acc = new CMksMt5Account();
    g_brk = new CMksMt5Broker(g_sym, g_acc, InpMagic, InpDeviation);

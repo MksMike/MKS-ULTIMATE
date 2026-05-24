@@ -973,6 +973,26 @@ O log estruturado do MKS-ULTIMATE assenta sobre cinco regras: JSON-line, destino
 
 ---
 
+**Nota de esclarecimento — WARN/ERROR rate-limited em hot path** (2026-05-24)
+
+A ADR-007 §3 fixou "hot path mudo" — `OnTick`, `IngestTick`, `OnBookEvent` e qualquer função chamada por tick **não logam**. Auditoria forense de 2026-05-24 identificou que o `Producer.mq5` (linhas 241–263, `IngestOne` chamado a partir de `OnTick`) emite `g_logger.Warn`/`g_logger.Error` para reportar erros do builder: `MKS_ERR_RENKO_INVALID_TICK` (103), `MKS_ERR_RENKO_THRESHOLD_LIMIT_EXCEEDED` (102) e `MKS_ERR_RENKO_TICK_STREAM_CORRUPT` (104). Pela letra da §3, isso é violação.
+
+A regra é refinada — não revogada — para reconhecer a categoria de uso que o Producer já implementa: **`WARN` e `ERROR` são aceitos em hot path desde que rate-limited**. A configuração `InpInvalidLogEvery=100` do Producer ilustra o padrão — uma linha de log a cada N ocorrências do mesmo erro, com contador agregado no `OnDeinit` para o total real. `Error` 104 (stream corrupt) é não-rate-limited porque dispara uma única vez por sessão.
+
+Razões para a exceção:
+- Eventos de erro são **eventos**, não tráfego de rotina — `TRACE`/`DEBUG`/`INFO` continuam proibidos em hot path porque o volume é por tick. `WARN`/`ERROR` aparecem proporcionais à frequência de **anomalias**, não de ticks.
+- Sem logar erros do builder no momento em que ocorrem, o operador perde a janela onde o feed estava degradado — a auditoria post-mortem fica cega sobre exatamente o tipo de problema que matou o V5.
+- O rate-limit (1 a cada N) garante que mesmo um feed 100% inválido em pico não trava o terminal — N=100 em XAUUSD a 100tps = 1 log/segundo no pior caso.
+
+Restrições que **continuam vigentes**:
+- `TRACE`, `DEBUG`, `INFO` permanecem proibidos em hot path, sem exceção. O log de inicialização, de fim de sessão e o `META` do header vivem na borda (`OnInit`, `OnDeinit`).
+- `WARN`/`ERROR` em hot path **devem ser rate-limited explicitamente**. Caller é responsável pelo rate-limit (não o logger) — o logger continua emitindo cada chamada sem amortecimento próprio.
+- O `OnDeinit` deve incluir contadores agregados (`seen`, `logged`) para que a contagem real apareça mesmo com o rate-limit suprimindo a maior parte.
+
+A ADR-007 não é alterada; esta nota registra a categoria refinada que o código de produção já segue. Code review: WARN/ERROR no hot path sem rate-limit explícito é defeito a corrigir.
+
+---
+
 ### ADR-015: Strategy Tester nativo como ferramenta, não fonte de verdade
 
 **Data:** 2026-05-21
