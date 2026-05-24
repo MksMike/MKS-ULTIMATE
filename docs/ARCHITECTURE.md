@@ -1709,6 +1709,80 @@ O `CMksRenkoBuilder` trata o primeiro tick pós-gap como **qualquer outro tick d
 
 ---
 
+### ADR-025: Sensores como categoria arquitetural
+
+**Data:** 2026-05-24
+**Status:** Aceita
+
+**Contexto:**
+
+Indicadores (Donchian, RSI, MACD, etc.) são funções numéricas atômicas sobre o preço — emitem valores. Estratégias precisam de algo diferente: **estado semântico do mercado** ("estou em range?", "qual é o topo dessa range?", "a tendência ainda está intacta?"). Sem categoria arquitetural própria, cada estratégia reimplementaria essa lógica embutida — duplicação, falta de teste isolado, decisão de mercado espalhada em N EAs. A análise de mercado lateral (premissa de ~70% do tempo lateral, ~30% em tendência) exige um detector dedicado de range que entregue estado + níveis + confiança de forma consumível por qualquer estratégia. Esta ADR estabelece a categoria, antes do primeiro sensor concreto (o Caixote) entrar.
+
+**Decisão:**
+
+Sensores são categoria arquitetural independente, vivendo entre Indicadores (valores atômicos) e Estratégias (decisões de trade).
+
+1. **Interface `ISensor`** em `Core/Interfaces/ISensor.mqh` define o contrato. Métodos: `State()`, `LevelCount()`, `Level(int idx)`, `Confidence()`, `LastUpdateMsc()`, e `Update(MksError &err)` para reprocessar. Segue as 7 convenções da ADR-004 (prefixo `I`, zero campos, destrutor virtual vazio, todos os métodos virtuais puros, `const` onde aplicável, `override` na implementação, argumentos por `const&` ou ponteiro).
+
+2. **Estado tipado** via `ENUM_MKS_SENSOR_STATE` em `Core/Types/SensorState.mqh`. Quatro valores:
+   - `MKS_SENSOR_INACTIVE` — sensor não disparou
+   - `MKS_SENSOR_FORMING` — sinal aparecendo, ainda não confirmado
+   - `MKS_SENSOR_ACTIVE` — sinal confirmado, EA pode consumir
+   - `MKS_SENSOR_BREAKING` — sinal quebrando, EA deve sair
+
+3. **Sub-categorias** organizam o domínio sob `Core/Sensors/`:
+   - `Regime/` — detectores de regime (lateral vs trend)
+   - `Structure/` — pivots, swings, clusters de níveis
+   - `Confirm/` — gates de promoção `FORMING → ACTIVE`
+   - `Break/` — detectores de quebra `ACTIVE → BREAKING`
+   - (futuras: `Momentum/`, `Volatility/`, `Session/`, `News/`)
+
+4. **Sensores compostos** orquestram sub-sensores ou outras leituras (indicadores, brick history). Cada um implementa `ISensor` e pode internamente compor outros sensores via injeção (mesma forma que `CMksRiskGatedBroker` compõe `CMksRiskManager` + `IBroker`).
+
+5. **Visualização é opcional** via indicador wrapper em `MQL5/Indicators/MKS-ULTIMATE/CMks<Nome>Indicator.mq5`. O sensor `.mqh` é a fonte da verdade; o indicador é apenas display. Lógica não é duplicada — o indicador instancia o sensor e plota seus estados/níveis. Visualização não é requisito — sensores headless (consumidos apenas por EA) são válidos.
+
+6. **Sensores NÃO tomam decisões de trade.** Emitem estado. Quem decide é o EA, consultando o sensor + Risk Manager + Trade Manager. Esta cláusula é fronteira de responsabilidade: violá-la transforma sensor em estratégia disfarçada e quebra a composabilidade.
+
+7. **Testes seguem o padrão de `INDICATORS.md`** — `Test_CMks<Nome>.mq5` paralelo, com invariantes específicas do tipo do sensor. Detalhes consolidados em `docs/SENSORS.md` quando 2-3 sensores existirem (mesma cláusula do INDICATORS.md: não escrever doc no vazio).
+
+**Alternativas consideradas:**
+
+- **Tudo dentro de indicadores:** rejeitada. Indicadores são números, sensores são estados. Misturar quebra o protocolo de validação do `INDICATORS.md` (invariantes numéricas) e força sensores a fingirem ser plots. Buffer-de-enum-em-double é hack.
+
+- **Lógica embutida em cada EA:** rejeitada. Duplica análise de mercado em N estratégias, impossibilita teste isolado, espalha decisões semânticas pelos EAs. Foi o padrão do V5 — eixo 2 do colapso (múltiplos caminhos de decisão semântica sem fonte única).
+
+- **Sensores como subclasses de `IRenkoSink`:** rejeitada. `IRenkoSink` é interface de **consumo passivo** de bricks (gravar, plotar, push). Sensor tem semântica de **leitura ativa** + análise + emissão de estado — outro contrato. Combiná-los acopla coisas que devem ser separadas.
+
+- **`Update()` por sub-tipo de evento (`OnBrickClose`, `OnBrickForming`, `OnTick`):** rejeitada por enquanto. Forçaria todo sensor a saber em qual fluxo de eventos vive. O modelo atual (`Update(err)` chamado pelo consumidor) é mais simples e suficiente para Caixote. Se sensores futuros precisarem de granularidade fina, evolui-se a interface via ADR de substituição.
+
+**Consequências:**
+
+- Nova pasta `Core/Sensors/` é criada com sub-categorias listadas em §3. `Core/Interfaces/ISensor.mqh` define o contrato e fica ao lado de `IBroker`, `IClock`, `ILogger`.
+
+- Tipos compartilhados (enum + helpers de conversão) em `Core/Types/SensorState.mqh`.
+
+- Indicadores existentes (Donchian, Chandelier, SuperTrend, RSI, MACD) **não viram sensores nem ganham state** — eles continuam atômicos. Sensores os consomem como input quando precisarem.
+
+- EAs futuros consomem sensores via interface, não via lógica embutida. Cada estratégia consulta `sensor.State()` e `sensor.Level(idx)` em vez de reimplementar regime detection.
+
+- O primeiro sensor concreto a entrar é o **Caixote** (detector de range mean-revertível), exercitando a categoria e validando o contrato `ISensor` por uso real.
+
+- Sensores reivindicam a faixa **900-999** do `ENUM_MKS_ERROR_CODE` para erros próprios. Códigos específicos não são declarados nesta ADR (cláusula da ADR-012: não declarar código no vazio); o primeiro consumidor concreto materializa o primeiro código quando o caso aparecer.
+
+- `docs/SENSORS.md` será criado depois de 2-3 sensores existirem (provavelmente Caixote + um Momentum/Pulse) com a metodologia de validação consolidada — espelhando o que `INDICATORS.md` faz para indicadores.
+
+**Fronteiras:**
+
+- Não decide quais sensores serão construídos nem em que ordem — isso fica para slices subsequentes do roadmap (Caixote primeiro).
+
+- Não fixa frequência de atualização. Cada concreto decide se atualiza por brick-close (callback), por timer, por demanda do EA, ou combinação.
+
+- Não fixa serialização/persistência de estado de sensor entre sessões. Sensor é stateful em runtime; se reinício do EA precisa restaurar estado, é responsabilidade do EA, não da categoria.
+
+- Não estende a estrutura do `MksBrick` ou `MksTick` — sensores leem o que já existe.
+
+---
+
 ## 4. Decisões pendentes
 
 Nenhuma decisão arquitetural formal pendente neste momento. Decisões novas são registradas formalmente quando forem enfrentadas, não antes — decidir arquitetura no vazio produz decisões erradas.
