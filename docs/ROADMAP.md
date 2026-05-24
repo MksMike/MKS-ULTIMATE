@@ -148,6 +148,39 @@ Este documento define **o que construir e em que ordem**. Cada fase tem entregá
 
 ---
 
+## Fase 4.5 — Tick Recorder + Replayer (pipeline de paridade)
+
+**Status:** Concluída (código + script), validação empírica end-to-end pendente
+
+**Nota:** Fase inserida por ADR-024 (aceita 2026-05-23) entre a Fase 4 (Broker abstractions, concluída) e a Fase 5 (Trade Management). Materializa o pipeline canônico de paridade bit-a-bit do feed Renko e da decisão da estratégia — sem essa fase, a paridade do projeto é teorema; com ela, é fato verificável.
+
+**Entregáveis** (todos concluídos em 2026-05-24, branch `feat/producer-classic-only`):
+
+- `MQL5/Include/MKS-ULTIMATE/Core/Data/TickFileFormat.mqh` — layout binário `.mkstick` v1 (header 256B + record 64B, little-endian)
+- `MQL5/Include/MKS-ULTIMATE/Core/Data/CMksTickFileWriter.mqh` — writer com `Checkpoint()` para tolerância a crash
+- `MQL5/Include/MKS-ULTIMATE/Core/Data/CMksTickFileReader.mqh`
+- `MQL5/Include/MKS-ULTIMATE/Core/Data/CMksFileTickSource.mqh` — `ITickSource` single-file
+- `MQL5/Include/MKS-ULTIMATE/Core/Data/CMksMultiFileTickSource.mqh` — `ITickSource` multi-day com validação cross-file (810, 811)
+- `MQL5/Include/MKS-ULTIMATE/Core/Clock/CMksMt5Clock.mqh` — `IClock` live
+- `MQL5/Include/MKS-ULTIMATE/Core/Clock/CMksReplayClock.mqh` — `IClock` replay (função pura do feed)
+- `MQL5/Services/MKS-ULTIMATE/TickRecorder.mq5` — Service captura `.mkstick` em background, roll-over diário UTC
+- `MQL5/Experts/MKS-ULTIMATE/Replayer.mq5` — EA monta composition root fora do Strategy Tester e replaya
+- `tools/verify-parity.ps1` — script PowerShell que executa a validação canônica (fc /b dos `.mksbk` + diff dos logs)
+- `MQL5/Scripts/MKS-ULTIMATE/Tests/Test_CMksTickFile.mq5`, `Test_CMksFileTickSource.mq5`, `Test_CMksMultiFileTickSource.mq5` — testes unitários cobrindo formato binário, single-file, multi-day, ReplayClock
+
+**Critério de saída:**
+- ✅ Todos os arquivos acima compilam 0 erros / 0 warnings via MetaEditor64 headless
+- ✅ Testes unitários cobrem cenários de proveniência, descontinuidade, EOF, ReplayClock
+- ⏳ **Validação empírica pendente**: rodar Producer + TickRecorder por ≥1h em demo, rodar Replayer sobre o `.mkstick` capturado, `verify-parity.ps1` deve retornar exit code 0 (paridade byte-a-byte)
+
+**Por que importa:** Sem esta fase, qualquer afirmação de "backtest e live produzem o mesmo resultado" é fé. Com ela, é prova mecânica e automatizável a cada commit que toca o caminho de paridade (`RenkoBuilder`, `ITickSource`, `IClock`, sinks que escrevem `.mksbk`). Protocolo 1 ganha item exigindo `verify-parity.ps1` antes de declarar pronto módulos que tocam paridade.
+
+**Riscos:**
+- **R4.5.1:** Validação empírica ainda não foi executada — o pipeline pode revelar bug que escapou aos testes unitários. Resposta: rodar antes de qualquer estratégia entrar (Fase 9).
+- **R4.5.2:** O fill histórico do `Producer.mq5` ainda lê de `CopyTicksRange`, fonte diferente dos ticks live. Paridade canônica vale apenas para o trecho live capturado. Resposta documentada como dívida na auditoria; ADR-027 futura quando estratégia entrar.
+
+---
+
 ## Fase 5 — Trade Management
 
 **Status:** Não iniciada

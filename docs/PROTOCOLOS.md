@@ -29,6 +29,7 @@ Aplicável quando um módulo novo (ex: `CMksRenkoBuilder`) está para ter status
 - [ ] Unit tests cobrem: caminho feliz, casos de borda, condições de erro
 - [ ] Unit tests passam
 - [ ] Determinismo verificado (duas execuções com mesma entrada produzem mesma saída)
+- [ ] Se o módulo toca paridade (`RenkoBuilder`, `ITickSource`, `IClock`, `IBroker`, estratégia, sink que escreve `.mksbk`), executar `tools/verify-parity.ps1` antes de declarar pronto. O pipeline canônico (ADR-024 §regra 7) é: rodar Producer em chart real + TickRecorder em Service em paralelo por ≥1h → rodar Replayer sobre o `.mkstick` capturado → `verify-parity -LiveMksbk live.mksbk -ReplayMksbk replay.mksbk` deve dar exit code 0. Qualquer divergência byte-a-byte indica não-determinismo no builder ou regressão de dados — bloqueia o "pronto".
 - [ ] `ARCHITECTURE.md` atualizado se a conclusão do módulo trouxe decisões arquiteturais novas
 - [ ] `CHANGELOG.md` atualizado na seção "Não lançado"
 - [ ] Commit na convenção (`feat:` ou `refactor:` conforme o caso)

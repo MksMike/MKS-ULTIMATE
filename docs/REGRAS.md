@@ -97,6 +97,32 @@ Nenhuma estratégia é construída antes do core ter cobertura de testes:
 
 Só depois construímos o primeiro EA simples para validação end-to-end.
 
+### 1.9 Estratégia é replay-safe
+
+Toda estratégia construída sobre o framework consome **exclusivamente** o que o composition root injeta. Isso é o que garante que o mesmo código rode em live e em replay produzindo decisões idênticas (ADR-024 §regra 6).
+
+**Proibido em código de estratégia (não em borda/composition root)**:
+
+| API MQL5 | Substituto obrigatório |
+|---|---|
+| `TimeCurrent`, `TimeLocal`, `TimeGMT`, `TimeTradeServer` | `IClock::NowMsc()` |
+| `MathRand` (sem seed injetada) | `CMksRandom` (seedável, determinístico) |
+| `_Symbol`, `Symbol()` | parâmetro injetado pelo composition root |
+| `_Period`, `Period()` | proibido — Renko não tem timeframe |
+| `SymbolInfoDouble/Integer/String`, `SymbolInfoTick` | `ISymbol::*` |
+| `AccountInfoDouble/Integer/String` | `IAccount::*` |
+| `iCustom`, `iOpen`, `iHigh`, `iLow`, `iClose`, `iTime` | proibido — estratégia opera sobre `MksBrick.triggerPrice` e callbacks de `IRenkoSink` |
+| `iATR`, `iMA`, `iRSI`, `i*` família | proibido — cálculo próprio sobre `MksTick`/`MksBrick` injetado |
+| `CopyTicks`, `CopyRates`, `CopyBuffer` | `ITickSource::Next()` para ticks; bricks chegam via `IRenkoSink::OnBrickClose` |
+| `OrderSend`, `OrderSendAsync` | `IBroker::Send()` |
+| `PositionSelect*`, `OrderSelect*`, `HistorySelect*` | `IPositionBook::*` e `IBroker::*` |
+
+A regra é absoluta para a pasta de estratégias (futura `MQL5/Experts/MKS-ULTIMATE/<estrategia>/`). Borda (composition root no `OnInit`/`OnTick`/`OnDeinit` do EA hospedeiro, e implementações concretas como `CMksMt5Symbol`, `CMksMt5Broker`, `CMksLogger`) **pode** chamar essas APIs — é onde elas existem.
+
+**Verificação**: grep no Protocolo 1 (item específico) sobre a pasta de estratégias. Qualquer match = bug de paridade, bloqueia merge.
+
+A regra existe porque, no V5, o `InpUseStressLab=true/false` bifurcava a lógica de execução entre backtest e live — backtest e live rodavam programas funcionalmente diferentes (eixo 4 do V5-POSTMORTEM). A regra §1.7 proíbe o gatilho da bifurcação; esta §1.9 proíbe o **mecanismo** pelo qual a bifurcação se instalaria — chamadas de runtime que retornam valores diferentes em live e replay.
+
 ## 2. Regras de conduta do dono
 
 ### 2.1 Aprovar mudanças explicitamente
