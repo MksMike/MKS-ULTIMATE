@@ -57,8 +57,10 @@ public:
 
       // ADR-022 regra 8: bricks no CS têm tamanho VISUAL full (=
       // brickSizePts), independentemente de PO/PRO. close visual =
-      // open ± size na direção. Reproduz visual Median Renko V5
-      // (sobreposição = PO*size). Fallback: se brickSizePts não foi
+      // open ± size na direção. Em classic (ADR-026, Producer atual),
+      // visualClose == brick.close real — sem divergência preço/desenho.
+      // Em median legado (PO>0), reproduz visual Median Renko V5 com
+      // sobreposição = PO*size. Fallback: se brickSizePts não foi
       // configurado (0), usa close matemático (modo legado).
       double visualClose = brick.close;
       if(brickSizePts > 0.0)

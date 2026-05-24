@@ -66,8 +66,10 @@ void RunScenario(const string title, MksTick &ticks[])
    Print("=== ", title, " ===");
 
    CInspectorSink sink;
-   CMksFixedBrickSizer sizer(100.0);
-   MksRenkoGeometry geom = MksGeometryMedian();
+   // ADR-026: classic-only em produção. S=50 (classic) é equivalente a S=100 (median):
+   // ambos têm threshold = open + 50, então os mesmos ticks produzem os mesmos bricks.
+   CMksFixedBrickSizer sizer(50.0);
+   MksRenkoGeometry geom = MksGeometryClassic();
    CMksRenkoBuilder builder(geom, GetPointer(sizer), GetPointer(sink));
 
    int n = ArraySize(ticks);
@@ -90,8 +92,10 @@ void RunOvershootScenario(const string title, double initMid, double triggerMid)
    Print("=== ", title, " ===");
 
    CInspectorSink sink;
-   CMksFixedBrickSizer sizer(100.0);
-   MksRenkoGeometry geom = MksGeometryMedian();
+   // ADR-026: classic-only em produção. S=50 (classic) é equivalente a S=100 (median):
+   // ambos têm threshold = open + 50, então os mesmos ticks produzem os mesmos bricks.
+   CMksFixedBrickSizer sizer(50.0);
+   MksRenkoGeometry geom = MksGeometryClassic();
    CMksRenkoBuilder builder(geom, GetPointer(sizer), GetPointer(sink));
 
    MksError err;

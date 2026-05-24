@@ -26,7 +26,7 @@
 input string   InpSymbol         = "";    // vazio => _Symbol (ADR-013)
 input datetime InpFrom           = 0;     // 0 => agora - 7 dias
 input datetime InpTo             = 0;     // 0 => agora
-input double   InpBrickSizePts   = 3.0;   // S=3 (produção XAUUSD median)
+input double   InpBrickSizePts   = 3.0;   // S=3 (produção XAUUSD classic — ADR-026)
 input int      InpGapThreshMin   = 30;    // dt entre ticks > N min => gap
 input bool     InpPrintAllBricks = false; // imprime cada brick (verboso)
 
@@ -113,7 +113,7 @@ void OnStart()
    PrintFormat("window: from=%s to=%s",
                TimeToString(from, TIME_DATE|TIME_MINUTES),
                TimeToString(to,   TIME_DATE|TIME_MINUTES));
-   PrintFormat("config: S=%s preset=median gapThreshMin=%d printAll=%s",
+   PrintFormat("config: S=%s preset=classic gapThreshMin=%d printAll=%s",
                Fmt(InpBrickSizePts), InpGapThreshMin,
                (InpPrintAllBricks ? "true" : "false"));
 
@@ -127,7 +127,7 @@ void OnStart()
    }
    PrintFormat("ticks carregados: %d", n);
 
-   MksRenkoGeometry geom = MksGeometryMedian();
+   MksRenkoGeometry geom = MksGeometryClassic(); // ADR-026: classic-only em produção
    CMksFixedBrickSizer sizer(InpBrickSizePts);
    MksError szErr;
    if(!sizer.Validate(szErr))

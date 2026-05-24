@@ -30,8 +30,10 @@
 // Modelo de threshold (decisão de implementação; ADR-010 não fixa fórmula):
 // - Continuação: lastClose ± (1-PO)*S, no sentido do último brick.
 // - Reversão:    lastClose ∓ (1-PRO)*S*revSizeRatio, sentido oposto.
-// Consistente com median (0.5,0.5,1.0) → 0.5*S em ambos os lados e
-// classic (0.0,0.0,1.0) → S em ambos os lados, simétricos.
+// Consistente com classic (0.0,0.0,1.0) → S em ambos os lados e
+// median (0.5,0.5,1.0) → 0.5*S em ambos os lados, simétricos. Producer
+// usa classic em produção (ADR-026); median permanece no core para testes
+// e para leitura de .mksbk antigos.
 class CMksRenkoBuilder
 {
 private:
