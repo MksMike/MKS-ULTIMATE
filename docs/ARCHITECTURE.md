@@ -1709,6 +1709,91 @@ O `CMksRenkoBuilder` trata o primeiro tick pós-gap como **qualquer outro tick d
 
 ---
 
+### ADR-026: Producer classic-only — remoção de geometria selecionável
+
+**Data:** 2026-05-24
+**Status:** Aceita
+**Relação com ADR-010:** Não revoga. ADR-010 permanece — eixos ortogonais geometria/sizer continuam no core. Esta ADR só restringe a superfície exposta pelo Producer.
+**Relação com ADR-022:** Substitui parcialmente as regras 1, 5 e 7. ADR-022 permanece Aceita; ADR-026 estreita o conjunto de geometrias selecionáveis via Producer para `{classic}`.
+
+**Contexto:**
+
+A ADR-022 fixou o Producer como dinâmico em geometria (`MKS_GEOM_MEDIAN`, `MKS_GEOM_CLASSIC`, `MKS_GEOM_CUSTOM`), com naming do CS carregando `typeCode` para evitar colisão entre presets. Inspeção do pipeline `MksBrick → MqlRates → CustomRatesUpdate` em sessão de 2026-05-24 revelou três distorções estruturais quando o preset é `median` (ou qualquer geometria com `PO > 0`):
+
+1. **`brick.close` matemático ≠ preço real do tick disparador.** Em median (PO=0.5, S=3.0), o brick fecha quando o mid atinge `open + 1.5`, mas o `close` registrado é `open + 1.5` enquanto o tick disparador real (com overshoot) tipicamente está em `open + 1.5 + ε`. Estratégia que ler `brick.close` cru opera em espaço de preços fictício — o eixo 1 do `V5-POSTMORTEM`. Mitigado no core pelo `triggerPrice`, mas a possibilidade de erro de leitura existe.
+
+2. **`visualClose` no CS ≠ `brick.close` matemático.** [CMksCustomSymbolSink.mqh:63-65](MQL5/Include/MKS-ULTIMATE/Core/Output/CMksCustomSymbolSink.mqh#L63-L65) recalcula `visualClose = open ± brickSizePts` (ADR-022 §8 — "tamanho VISUAL full"). Em median, isso é `open ± S`, enquanto o `brick.close` matemático é `open ± (1−PO)·S = open ± 0.5·S`. O CS mostra um nível de preço a `0.5·S` (1.5 USD em XAU) **além do threshold matemático real**, e a `(1−PO)·S + overshoot` além do preço de mercado de fato impresso pelo broker. Indicadores nativos do MT5 arrastados sobre o chart do CS (RSI, Donchian, MACD, SuperTrend, Chandelier) leem `iClose(CS) = visualClose` — calculam sobre números fictícios.
+
+3. **Equivalência matemática descoberta no caminho.** Os thresholds do builder dependem só de `(1−PO)·S`. Logo, **`median S=X` é matematicamente equivalente a `classic S=(1−PO)·X` em termos de quando e onde os bricks fecham** — mesmos `triggerPrice`, mesmos `triggerTickId`, mesma sequência. Para `PO=0.5`, `median S=3 ≡ classic S=1.5`. Mantida a cadência, classic oferece tudo o que median oferece *exceto* a sobreposição visual de 50% entre bricks consecutivos. Em classic, `brick.close = visualClose = threshold real cruzado` — as três distorções acima desaparecem.
+
+A escolha histórica por median no Producer veio de costume visual do V5, não de análise de fidelidade. Esta ADR fecha a porta para o operador cair em median por inércia, sem remover a capability do core (testes, decoder de `.mksbk` antigos, experimentos futuros).
+
+**Decisão:**
+
+O Producer do MKS-ULTIMATE opera **exclusivamente em geometria classic** (PO=PRO=0, revSizeRatio=1.0). Seis cláusulas:
+
+1. **`MksGeometryClassic()` hardcoded no Producer.** O EA `Producer.mq5` constrói a geometria via `MksGeometryClassic()` no `OnInit`, sem input. Sem `ENUM_MKS_GEOMETRY_TYPE`, sem `InpGeometryType`, sem `InpPro`, sem `InpPo`, sem `BuildGeometry()`. O grupo de inputs `=== Brick ===` reduz a um único campo: `InpBrickSizePts`.
+
+2. **Default do construtor `MksRenkoGeometry()` muda para classic.** O construtor sem argumentos (`MksRenkoGeometry g;`) passa a inicializar com `(po=0, pro=0, revSizeRatio=1.0)` — antes era `(0.5, 0.5, 1.0)`, ou seja, median silencioso. Fecha a porta no core também: nenhum código que esqueça de chamar fábrica recebe median por acidente.
+
+3. **Naming do CS simplifica para `<symbol>.MKS_<sizeStr>`.** O `typeCode` da ADR-022 §5 (`M`/`C`/`X`) some — não há mais tipo a distinguir. `BuildCustomSymbolName(symbol, sizePts)` recebe dois argumentos em vez de cinco.
+
+4. **Core intocado — fábricas e suporte completo a presets preservados.** `MksGeometryMedian()`, `MksGeometryClassic()`, `MksGeometryCustom()` continuam definidas em [RenkoGeometry.mqh](MQL5/Include/MKS-ULTIMATE/Core/Types/RenkoGeometry.mqh). O `CMksRenkoBuilder` continua recebendo `MksRenkoGeometry` por injeção e processando qualquer triplo válido. Razões para não remover:
+   - **Testes existentes.** `Test_CMksRenkoBuilder.mq5` (428 assertions) cobre median e custom; remover reduziria cobertura matemática do builder.
+   - **Leitura de `.mksbk` antigos.** Header `.mksbk` carrega geometria como 3 doubles; reler arquivos gerados em median exige as fábricas no core.
+   - **Experimentos comparativos.** Validar empiricamente esta decisão (ou outras presets para instrumentos diferentes) exige o suporte intacto.
+   - **Custo de manter é trivial** — ~10 linhas de fábricas.
+
+5. **Naming do `.mksbk` não muda.** ADR-014 §2 já fixou `<symbol>_<YYYYMMDDTHHMMSS>.mksbk` com proveniência completa (incluindo `po`, `pro`, `revSizeRatio`) no header binário. Como o nome não carregava typeCode, esta ADR não toca em `.mksbk` naming. Arquivos novos serão lidos pelo decoder normalmente; arquivos antigos em median permanecem decodificáveis pela mesma rota.
+
+6. **Equivalência registrada como invariante.** O fato matemático `median S=X ≡ classic S=(1−PO)·X` fica registrado nesta ADR como contrato. Operador que queira reproduzir o comportamento de cadência do "median S=3" antigo configura `InpBrickSizePts=1.5` em classic. Operador que queira reproduzir "median S=5" usa `classic S=2.5`. A conversão é mecânica.
+
+**Alternativas consideradas:**
+
+- **(a) Manter ADR-022 intacta — Producer dinâmico com default classic + tooltip forte em median.** Rejeitada. Default + tooltip resolve "operador escolheu median por engano", mas não fecha a porta — alguém futuro, sem o contexto desta análise, pode ainda selecionar median por curiosidade e cair na armadilha sem perceber as três distorções. Tornar a opção inacessível pelo Producer é proteção estrutural, não cosmética.
+
+- **(b) Remover `MksGeometryMedian()` do core completamente.** Rejeitada. Quebra `Test_CMksRenkoBuilder.mq5`, invalida o argumento de eixos ortogonais da ADR-010, e impede a leitura de `.mksbk` antigos em median (decoder precisa do struct correspondente). Custo alto, ganho zero — a cláusula 1 já garante "impossível selecionar pela GUI", que é o objetivo real.
+
+- **(c) Manter median via flag de compilação `MKS_ALLOW_MEDIAN`.** Rejeitada. Adiciona condicional de compilação ao Producer — polui o caminho de produção por algo que se resolve simplesmente removendo a opção da GUI. Quem quiser experimentar median escreve um script de teste próprio que instancie o builder direto com `MksGeometryMedian()`.
+
+- **(d) Estender o escopo: remover também o `CMksAtrBrickSizer`.** Rejeitada. O sizer ATR é eixo ortogonal à geometria (ADR-010 §1), não compartilha as distorções do median, e o ADR-018 cobre a sua corretude. "Não usar agora" não é razão para remover — está pronto, testado (72 assertions), e é compatível com classic (`classic geometry + ATR sizer = bricks de tamanho variável com close fiel`).
+
+- **(e) Mudar o default do construtor `MksRenkoGeometry()` para classic, mas manter Producer dinâmico.** Rejeitada como cobertura única. A mudança do construtor (cláusula 2 desta ADR) é necessária mas não suficiente — o Producer ainda exporia inputs que permitem chegar em median explicitamente. Esta ADR aplica as duas mudanças em conjunto.
+
+**Consequências:**
+
+- **Producer.mq5 reduz ~90 linhas.** Removidos: enum `ENUM_MKS_GEOMETRY_TYPE`, inputs `InpGeometryType`/`InpPro`/`InpPo`, funções `BuildGeometry()` e `GeometryTypeName()`, lógica de switch no `BuildCustomSymbolName`. Hardcoded: `MksGeometryClassic()` no OnInit, `"Classic"` literal no `g_panel.LiveMode`, `"preset":"classic"` no log de starting.
+
+- **`RenkoGeometry.mqh` muda 1 linha.** Construtor default passa de `(0.5, 0.5, 1.0)` para `(0.0, 0.0, 1.0)`. Comentário-âncora atualizado.
+
+- **Naming do CS muda para `<symbol>.MKS_<sizeStr>`** (sem `_C_`/`_M_`/`_X_`). CSs gerados por sessões anteriores em median ou classic permanecem visíveis no Market Watch com naming antigo — sem migração automática. Operador limpa via `MksCleanupCustomSymbols.mq5` quando quiser (regra 8 da ADR-020).
+
+- **`Test_CMksRenkoBuilder.mq5` continua passando sem mudança** — instancia geometrias via fábricas diretamente, não toca em código do Producer.
+
+- **`.mksbk` produzidos pós-ADR-026 carregam `po=0, pro=0, revSizeRatio=1.0` no header.** `.mksbk` antigos em median continuam legíveis pelo `CMksBrickFileReader` sem mudança.
+
+- **ADR-022 ganha nota de substituição parcial:** regras 1 (tipo dinâmico), 5 (naming com typeCode), 7 (input group "Geometria" com 4 inputs) substituídas. Regras 2 (defaults sensatos), 3 (`InpShowWicksInCS`), 4 (auto-open chart), 6 (`InpResetCustomSymbolBars`), 8 (`brickSizePts` no sink — visual full), 9 (inputs em grupos) permanecem intactas.
+
+- **ADR-008 argumento simplifica.** O produto `K · (1−PO) · S` do raciocínio sobre gap de fim-de-semana vira `K · S` em classic. Conclusões idênticas, fronteira ainda mais clara. Sem nota de esclarecimento necessária — texto da ADR-008 continua válido (PO=0 é caso particular).
+
+- **Estratégias futuras nascem em classic.** Toda estratégia construída a partir desta ADR opera sobre bricks onde `brick.close` é o threshold real. A guarda de "use `triggerPrice` em vez de `brick.close`" continua válida (overshoot do tick disparador pode adicionar fração de ponto), mas o risco de raciocínio em espaço fictício é estruturalmente menor.
+
+- **Sem mudança em ADRs aceitas adjacentes:** ADR-010 (eixos ortogonais), ADR-011 (multi-threshold), ADR-018 (ATR sizer), ADR-020 (CS contrato visual), ADR-021 (bar parcial), ADR-024 (tick recorder/replay) ficam intactas. Esta ADR estreita a superfície exposta, não revoga capability.
+
+**Fronteiras:**
+
+- Não cobre presets futuros (asymmetric reversal, breakout-tuned, etc). Se algum dia surgir necessidade real e validada empiricamente, nova ADR pode reabrir a porta no Producer — provavelmente com nome e racional próprios.
+
+- Não cobre o `CMksAtrBrickSizer`. O sizer ATR continua existindo e testado, compatível com classic. Não está em uso pelo Producer hoje (usa `CMksFixedBrickSizer`), mas a opção está disponível quando/se for necessária.
+
+- Não cobre a remoção do CS como categoria. ADR-020 segue válida — CS continua como camada de visualização humana exclusiva.
+
+- Não cobre migração retroativa de `.mksbk` ou CSs antigos. Arquivos e CSs gerados em median permanecem no disco/Market Watch com naming antigo, sem renomeação automática. Operador limpa o que não precisa mais via scripts utility.
+
+- Não cobre estratégias externas ao framework (EAs do usuário fora de `MQL5/Experts/MKS-ULTIMATE/`). Esta ADR vincula apenas o `Producer.mq5` do framework. EAs externos que leiam `.mksbk` podem operar em qualquer geometria — sob responsabilidade do operador.
+
+---
+
 ## 4. Decisões pendentes
 
 Nenhuma decisão arquitetural formal pendente neste momento. Decisões novas são registradas formalmente quando forem enfrentadas, não antes — decidir arquitetura no vazio produz decisões erradas.

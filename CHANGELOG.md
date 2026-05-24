@@ -7,6 +7,13 @@ O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/) e es
 ## [Não lançado]
 
 ### Added
+- `docs/ARCHITECTURE.md` §3 — ADR-026 aceita: Producer classic-only. Remove `ENUM_MKS_GEOMETRY_TYPE` e os inputs `InpGeometryType`/`InpPro`/`InpPo` do Producer; hardcoda `MksGeometryClassic()` no OnInit. Fecha a porta do espaço de preços fictício do median pelo caminho de produção, sem remover capability do core. Registra a equivalência matemática `median S=X ≡ classic S=(1−PO)·X`. Substitui parcialmente as regras 1/5/7 da ADR-022. Naming do CS simplifica para `<symbol>.MKS_<sizeStr>`.
+
+### Changed
+- `MQL5/Include/MKS-ULTIMATE/Core/Types/RenkoGeometry.mqh` — default do construtor `MksRenkoGeometry()` muda de median (`0.5/0.5/1.0`) para classic (`0/0/1.0`). Fábricas `MksGeometryMedian/Classic/Custom` continuam disponíveis no core. Consequência da ADR-026 cláusula 2.
+- `MQL5/Experts/MKS-ULTIMATE/Producer.mq5` — ~90 linhas removidas. Saem: enum `ENUM_MKS_GEOMETRY_TYPE`, inputs `InpGeometryType`/`InpPro`/`InpPo`, funções `BuildGeometry()` e `GeometryTypeName()`, switch no `BuildCustomSymbolName`. Entra: `MksGeometryClassic()` hardcoded no OnInit, `"Classic"` literal no painel UX, `"preset":"classic"` no log de starting. Naming do CS reduz a `<symbol>.MKS_<sizeStr>`. Consequência da ADR-026 cláusulas 1, 3, 6.
+
+### Added
 - `docs/V5-POSTMORTEM.md` — análise de causa-raiz do colapso do V5, baseada na leitura direta do código-fonte. Identifica quatro eixos de falha estrutural.
 - `docs/ARCHITECTURE.md` §3 — ADR-004 aceita: polimorfismo em MQL5 via classe abstrata com métodos virtuais puros (em vez da keyword `interface` nativa), com sete convenções operacionais para toda interface do core (`I*`).
 - `MQL5/Include/MKS-ULTIMATE/Core/Types/` — quatro tipos primitivos do core, autocontidos: `MksTick` (com `seq` como fonte de verdade do determinismo), `MksBrick` (com `triggerPrice`, `triggerTickId` e `Overshoot()` — resposta direta ao eixo 1 do V5-POSTMORTEM), `MksOrderRequest` e `MksExecutionResult` (preço real de preenchimento, não fictício).
