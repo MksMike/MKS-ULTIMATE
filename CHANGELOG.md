@@ -6,6 +6,17 @@ O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/) e es
 
 ## [Não lançado]
 
+### Fixed
+- `tools/verify-parity.ps1` — corrigido falso negativo iminente identificado em auditoria pré-empírica. O `.mksbk` tem `createdAtMsc` (8 bytes wall-clock no offset 184-191 do header) que diverge inerentemente entre live (`Producer.OnDeinit`) e replay (`Replayer.OnDeinit`). A versão anterior (Slice 24f, commit 29a32e0) fazia `fc /b` direto, o que teria dado fail garantido na validação empírica de amanhã mesmo com builder 100% determinístico. Reescrita: lê ambos arquivos como `[byte[]]`, ignora explicitamente o range 184-191, compara byte-a-byte manualmente. Em divergência, reporta offset exato + identifica o campo (`header.broker`, `brick[42].close`, etc.) + bytes em hex ao redor do ponto de divergência. Smoke test em 3 cenários (idênticos, só wall-clock diferente, brick[0].direction diferente) passa.
+
+### Added
+- `tools/compile-all.ps1` — sanity check headless que compila todos os 35 `.mq5` do projeto (Experts, Services, Scripts, Indicators) via MetaEditor64 e reporta consolidado. Auto-detecta terminal data path via `%APPDATA%\MetaQuotes\Terminal\` procurando junctions `MQL5\Include\MKS-ULTIMATE`. Modos `-Quiet` (só summary) e `-Editor <path>` (override do MetaEditor). Exit codes: 0 limpo, 1 erros, 2 warnings, 3 setup. Útil pré-commit grande ou após refactor amplo (complementa o `watch-compile.ps1` incremental).
+- `docs/ARCHITECTURE.md` §3 — nota de esclarecimento da ADR-024 (timestamps wall-clock no header do `.mksbk`). Refina a §regra 7c — `fc /b` byte-idêntico fica restrito ao **range fora de 184-191** do header (8 bytes de `createdAtMsc`). Documenta que o `.mkstick` tem 2 timestamps wall-clock (184-191 e 192-199) que devem ser excluídos em pipelines futuros de comparação de `.mkstick`. ADR-024 não é alterada; nota registra o caveat técnico.
+- `docs/CHEATSHEET.md` §9 — seção nova "Fluxos do framework MKS-ULTIMATE". Cobre: validação headless via `compile-all.ps1`, watcher incremental, **pipeline canônico de paridade da ADR-024 passo-a-passo** (Producer + TickRecorder em paralelo → Replayer → `verify-parity.ps1`), localização dos arquivos do framework e das junctions, comandos para recriar junctions em máquina nova.
+
+### Changed
+- `MQL5/Include/MKS-ULTIMATE/Core/Log/CMksLogger.mqh` — `#define MKS_MODULE_LOGGER "Logger"` para consistência com o padrão do projeto (em vez de string literal `"Logger"` hardcoded na linha que escreve o META header). P3-1 da auditoria de 2026-05-24 endereçado.
+
 ### Added
 - `tools/verify-parity.ps1` — Slice 24f: script PowerShell que executa a validação canônica da paridade (ADR-024 §regra 7). Recebe paths de `live.mksbk` e `replay.mksbk` (e opcionalmente `live.log` + `replay.log`), faz comparação de tamanho, `fc /b` byte-a-byte, e diff de linhas de decisão dos logs (após normalização de `ts` e `sessionStartMsc`). Exit codes: 0 = paridade verificada, 1 = `.mksbk` divergem, 2 = logs divergem, 3 = arquivo não encontrado. Fecha a dívida da Fase 8 (log-diff tool).
 - `docs/PROTOCOLOS.md` — Protocolo 1 ganha item: "se o módulo toca paridade (RenkoBuilder, ITickSource, IClock, IBroker, estratégia, sink que escreve .mksbk), executar tools/verify-parity.ps1 antes de declarar pronto". Materializa ADR-024 §Consequências.

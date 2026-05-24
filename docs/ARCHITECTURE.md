@@ -1661,6 +1661,33 @@ Materializa-se o caminho `tick → Builder → brick` como infraestrutura de cap
 
 ---
 
+**Nota de esclarecimento — timestamps wall-clock no header do `.mksbk`** (2026-05-24)
+
+A ADR-024 §regra 7c diz: "`fc /b live.mksbk replay.mksbk` byte-idêntico. Diferiu = não-determinismo no builder ou regressão de dados". Auditoria pré-validação empírica em 2026-05-24 identificou que essa formulação é literalmente incorreta — o `.mksbk` tem um campo de timestamp wall-clock no header que diverge inerentemente entre live e replay:
+
+```
+offset 184  size 8  int64  createdAtMsc  (TimeCurrent na hora do Close)
+```
+
+- Em **live**: `createdAtMsc` = `TimeCurrent` no momento de `Producer.OnDeinit` (quando o operador desanexa o EA).
+- Em **replay**: `createdAtMsc` = `TimeCurrent` no momento de `Replayer.OnDeinit` (quando o EA atinge EOF — pode ser horas ou dias depois).
+
+Esses 8 bytes (offset 184-191) divergem sempre, mesmo com builder 100% determinístico. `fc /b` puro daria falso negativo garantido.
+
+**A regra 7c é refinada — não revogada — para excluir esse range específico**:
+
+> "**Comparação byte-a-byte do `.mksbk` ignorando o range 184-191 do header** (`createdAtMsc`, wall-clock). Divergência em qualquer outro byte = não-determinismo no builder ou regressão de dados."
+
+O `tools/verify-parity.ps1` implementa exatamente essa exclusão. O range ignorado é mínimo (8 bytes em ~700KB típicos = 0.001% do arquivo) e bem-delimitado. Todos os outros campos do header (proveniência, geometria, `brickSizePoints`, `brickCount`, `timeMscFirst`, `timeMscLast` — esses últimos vêm dos ticks, não wall-clock) e os 72 bytes × N de cada brick continuam sob escrutínio total.
+
+**Para diagnosticar uma divergência futura**: o script reporta o offset exato + identifica o campo (`header.<field>` ou `brick[N].<field>`), e exibe os bytes em hex ao redor do ponto de divergência. Divergência em campo do header indica problema de metadata (proveniência, geometry, brickSize); divergência em campo de brick indica não-determinismo do `CMksRenkoBuilder` ou feed divergente (o `.mkstick` consumido pelo Replayer não corresponde aos ticks que o Producer viu em live).
+
+Esta nota também identifica que o `.mkstick` tem **dois** timestamps wall-clock no header (`createdAtMsc` em 184-191 e `closedAtMsc` em 192-199). O `.mkstick` não é comparado pelo `verify-parity.ps1` — apenas o `.mksbk`. Se um pipeline de comparação de `.mkstick` for criado no futuro, deve excluir o range 184-199 (16 bytes).
+
+A ADR-024 não é alterada; esta nota registra o caveat técnico descoberto na auditoria pré-empírica.
+
+---
+
 ### ADR-008: Tratamento de reabertura de mercado (gap de fim-de-semana) no RenkoBuilder
 
 **Data:** 2026-05-23

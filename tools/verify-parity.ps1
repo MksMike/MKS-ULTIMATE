@@ -1,8 +1,9 @@
-# tools/verify-parity.ps1
+﻿# tools/verify-parity.ps1
 #
 # Valida paridade bit-a-bit entre uma sessão live do Producer e uma
 # reconstrução via Replayer sobre o .mkstick capturado em paralelo.
-# Materializa ADR-024 §regra 7.
+# Materializa ADR-024 §regra 7 (com refinamento da nota de esclarecimento
+# 2026-05-24 sobre timestamps wall-clock no header).
 #
 # Pipeline canônico (executado pelo operador antes de rodar este script):
 #   (a) Rodar Producer em chart real por >=1h → gera live.mksbk + live.log
@@ -11,10 +12,14 @@
 #       → gera replay.mksbk + replay.log
 #
 # Este script:
-#   1. Compara live.mksbk vs replay.mksbk byte-a-byte (fc /b)
-#   2. Reporta primeira divergência em caso de falha
-#   3. Reporta tamanho/contagem de bricks em sucesso
-#   4. (Opcional) Compara linhas de decisão dos logs quando flag passado
+#   1. Compara live.mksbk vs replay.mksbk byte-a-byte, IGNORANDO o range
+#      wall-clock do header (offset 184-191 = createdAtMsc, que vale o
+#      momento do Close do writer — inerentemente diferente entre live
+#      e replay).
+#   2. Reporta primeira divergência com offset + interpretação
+#      (header field, brick #N, campo qual) em caso de falha.
+#   3. Reporta tamanho/contagem de bricks em sucesso.
+#   4. (Opcional) Compara linhas de decisão dos logs quando flag passado.
 #
 # Uso:
 #   powershell -ExecutionPolicy Bypass -File tools\verify-parity.ps1 `
@@ -61,12 +66,79 @@ if (-not (Test-Path -LiteralPath $ReplayMksbk)) {
   exit 3
 }
 
-# Normaliza para Windows-style backslashes — `fc` recusa `/`.
 $LiveMksbk   = (Resolve-Path -LiteralPath $LiveMksbk).Path
 $ReplayMksbk = (Resolve-Path -LiteralPath $ReplayMksbk).Path
 
 Write-Info "live   = $LiveMksbk"
 Write-Info "replay = $ReplayMksbk"
+
+#------------------------------------------------------------------#
+# Constantes do layout .mksbk (espelham Core/Data/BrickFileFormat.mqh).
+# Mantenha sincronizado se o formato mudar.
+#------------------------------------------------------------------#
+$MKSBK_HEADER_SIZE  = 256
+$MKSBK_RECORD_SIZE  = 72
+$MKSBK_OFF_CREATED  = 184   # int64 — TimeCurrent na hora do Close (wall-clock)
+$MKSBK_CREATED_LEN  = 8
+
+# Tabela de campos do header para diagnóstico de divergência.
+$headerFieldMap = @(
+  @{ off =   0; len =  8; name = "magic"           },
+  @{ off =   8; len =  2; name = "formatVersion"   },
+  @{ off =  10; len =  2; name = "brickRecordSize" },
+  @{ off =  12; len =  4; name = "headerSize"      },
+  @{ off =  16; len = 64; name = "broker"          },
+  @{ off =  80; len =  8; name = "accountLogin"    },
+  @{ off =  88; len = 32; name = "symbol"          },
+  @{ off = 120; len =  1; name = "digits"          },
+  @{ off = 128; len =  8; name = "geometryPO"      },
+  @{ off = 136; len =  8; name = "geometryPRO"     },
+  @{ off = 144; len =  8; name = "geometryRevSizeRatio" },
+  @{ off = 152; len =  8; name = "brickSizePoints" },
+  @{ off = 160; len =  8; name = "brickCount"      },
+  @{ off = 168; len =  8; name = "timeMscFirst"    },
+  @{ off = 176; len =  8; name = "timeMscLast"     },
+  @{ off = 184; len =  8; name = "createdAtMsc (wall-clock — IGNORADO)" }
+)
+
+# Tabela de campos do record (72 bytes). Offset relativo ao início do record.
+$recordFieldMap = @(
+  @{ off =  0; len = 4; name = "direction"         },
+  @{ off =  4; len = 4; name = "thresholdsCrossed" },
+  @{ off =  8; len = 8; name = "open"              },
+  @{ off = 16; len = 8; name = "close"             },
+  @{ off = 24; len = 8; name = "high"              },
+  @{ off = 32; len = 8; name = "low"               },
+  @{ off = 40; len = 8; name = "triggerPrice"      },
+  @{ off = 48; len = 8; name = "triggerTickId"     },
+  @{ off = 56; len = 8; name = "closeTimeMsc"      },
+  @{ off = 64; len = 8; name = "volume"            }
+)
+
+function Identify-Offset([int]$offset, [int]$headerSize, [int]$recordSize) {
+  if ($offset -lt $headerSize) {
+    foreach ($f in $headerFieldMap) {
+      $fStart = [int]$f.off
+      $fEnd   = $fStart + [int]$f.len
+      if ($offset -ge $fStart -and $offset -lt $fEnd) {
+        $fName = [string]$f.name
+        return "header." + $fName + " (offset " + $fStart + ", len " + [int]$f.len + ")"
+      }
+    }
+    return "header reserved (offset " + $offset + ")"
+  }
+  $brickIdx = [Math]::Floor(($offset - $headerSize) / $recordSize)
+  $inRec    = ($offset - $headerSize) % $recordSize
+  foreach ($f in $recordFieldMap) {
+    $fStart = [int]$f.off
+    $fEnd   = $fStart + [int]$f.len
+    if ($inRec -ge $fStart -and $inRec -lt $fEnd) {
+      $fName = [string]$f.name
+      return "brick[" + $brickIdx + "]." + $fName + " (record offset " + $fStart + ", len " + [int]$f.len + ")"
+    }
+  }
+  return "brick[" + $brickIdx + "] reserved (record offset " + $inRec + ")"
+}
 
 #------------------------------------------------------------------#
 # 2. Tamanho comparado primeiro — divergência de tamanho é diagnóstico
@@ -87,26 +159,56 @@ if ($liveSize -ne $replaySize) {
 }
 
 #------------------------------------------------------------------#
-# 3. Comparação byte-a-byte via fc /b. fc é nativo Windows e retorna
-#    exit 0 em igualdade, !=0 em divergência. Saída inclui o offset
-#    da primeira divergência.
+# 3. Comparação byte-a-byte com janela de exclusão para timestamps
+#    wall-clock. O range 184-191 do header (.mksbk createdAtMsc) carrega
+#    o TimeCurrent no momento do Close — diferente entre live (Producer
+#    fecha quando operador desanexa) e replay (Replayer fecha em EOF).
+#    Esses 8 bytes divergem inerentemente. Resto deve ser idêntico.
 #------------------------------------------------------------------#
-Write-Header "fc /b live.mksbk replay.mksbk"
+Write-Header "comparação byte-a-byte (ignorando wall-clock no header)"
 
-$fcOutput = & cmd /c "fc /b `"$LiveMksbk`" `"$ReplayMksbk`"" 2>&1
-$fcExit   = $LASTEXITCODE
+$liveBytes   = [System.IO.File]::ReadAllBytes($LiveMksbk)
+$replayBytes = [System.IO.File]::ReadAllBytes($ReplayMksbk)
 
-if ($fcExit -eq 0) {
-  Write-Ok "byte-a-byte IDÊNTICOS ($liveSize bytes, ~$([Math]::Round(($liveSize - 256) / 72.0)) bricks)"
+$firstDiverge = -1
+$diffCount    = 0
+$ignoreStart  = $MKSBK_OFF_CREATED
+$ignoreEnd    = $MKSBK_OFF_CREATED + $MKSBK_CREATED_LEN
+
+for ($i = 0; $i -lt $liveBytes.Length; $i++) {
+  if ($i -ge $ignoreStart -and $i -lt $ignoreEnd) { continue } # range wall-clock
+  if ($liveBytes[$i] -ne $replayBytes[$i]) {
+    if ($firstDiverge -lt 0) { $firstDiverge = $i }
+    $diffCount++
+  }
+}
+
+if ($diffCount -eq 0) {
+  $brickCount = [Math]::Round(($liveSize - $MKSBK_HEADER_SIZE) / $MKSBK_RECORD_SIZE)
+  Write-Ok "byte-a-byte IDÊNTICOS ($liveSize bytes, $brickCount bricks; wall-clock ignorado)"
 } else {
-  Write-Fail "byte-a-byte DIVERGEM (fc exit=$fcExit)"
+  $field = Identify-Offset $firstDiverge $MKSBK_HEADER_SIZE $MKSBK_RECORD_SIZE
+  Write-Fail "DIVERGEM em $diffCount byte(s)"
+  Write-Info "primeira divergência: offset $firstDiverge"
+  Write-Info "campo identificado:   $field"
+
+  # Mostra os bytes em hex (12 ao redor do ponto de divergência).
+  $rangeStart = [Math]::Max(0, $firstDiverge - 4)
+  $rangeEnd   = [Math]::Min($liveBytes.Length - 1, $firstDiverge + 7)
+  $liveHex    = ""
+  $replayHex  = ""
+  for ($i = $rangeStart; $i -le $rangeEnd; $i++) {
+    $marker     = if ($i -eq $firstDiverge) { "[" } else { " " }
+    $liveHex   += "$marker{0:X2}" -f $liveBytes[$i]
+    $replayHex += "$marker{0:X2}" -f $replayBytes[$i]
+  }
+  Write-Host "      live   bytes: $liveHex" -ForegroundColor DarkYellow
+  Write-Host "      replay bytes: $replayHex" -ForegroundColor DarkYellow
   Write-Host ""
-  Write-Host "Primeiras divergências reportadas pelo fc:" -ForegroundColor Yellow
-  Write-Host $fcOutput -ForegroundColor DarkYellow
-  Write-Host ""
-  Write-Info "Offsets do header (.mksbk): 0-255 header, 256+ records de 72 bytes."
-  Write-Info "Divergência em offset < 256 = metadata (header, proveniência, geometry)."
-  Write-Info "Divergência em offset >= 256 = brick data (open/high/low/close, seq, time)."
+  Write-Info "Divergência em campo do header = problema de metadata"
+  Write-Info "  (proveniência, geometry, brickSize, brickCount, timeMscFirst/Last)."
+  Write-Info "Divergência em campo de brick = não-determinismo do builder OU"
+  Write-Info "  feed divergente (.mkstick != ticks reais que o Producer viu)."
   exit 1
 }
 
