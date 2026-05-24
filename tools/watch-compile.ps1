@@ -14,9 +14,10 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-$repoRoot    = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
-$includeRoot = Join-Path $repoRoot "MQL5\Include\MKS-ULTIMATE"
-$scriptsRoot = Join-Path $repoRoot "MQL5\Scripts\MKS-ULTIMATE"
+$repoRoot       = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
+$includeRoot    = Join-Path $repoRoot "MQL5\Include\MKS-ULTIMATE"
+$scriptsRoot    = Join-Path $repoRoot "MQL5\Scripts\MKS-ULTIMATE"
+$indicatorsRoot = Join-Path $repoRoot "MQL5\Indicators\MKS-ULTIMATE"
 
 if (-not (Test-Path -LiteralPath $Editor)) {
   Write-Host "MetaEditor não encontrado em: $Editor" -ForegroundColor Red
@@ -52,7 +53,10 @@ function Get-IncludeClosure([string]$entryFile) {
 }
 
 function Get-ReverseMap {
-  $files = Get-ChildItem -Path $scriptsRoot -Recurse -Filter "*.mq5" -ErrorAction SilentlyContinue
+  $entryRoots = @($scriptsRoot, $indicatorsRoot) | Where-Object { Test-Path -LiteralPath $_ }
+  $files = $entryRoots | ForEach-Object {
+    Get-ChildItem -Path $_ -Recurse -Filter "*.mq5" -ErrorAction SilentlyContinue
+  }
   $map = @{}
   foreach ($mq5 in $files) {
     $closure = Get-IncludeClosure $mq5.FullName
@@ -115,8 +119,10 @@ function Invoke-Compile([string]$mq5File) {
   }
 }
 
+$watchRoots = @($includeRoot, $scriptsRoot, $indicatorsRoot) | Where-Object { Test-Path -LiteralPath $_ }
+
 $lastSeen = @{}
-foreach ($p in @($includeRoot, $scriptsRoot)) {
+foreach ($p in $watchRoots) {
   Get-ChildItem -Path $p -Recurse -Include "*.mqh","*.mq5" -ErrorAction SilentlyContinue | ForEach-Object {
     $lastSeen[$_.FullName] = $_.LastWriteTimeUtc
   }
@@ -124,8 +130,7 @@ foreach ($p in @($includeRoot, $scriptsRoot)) {
 
 Write-Host ""
 Write-Host "Watch ativo:"
-Write-Host "  $includeRoot"
-Write-Host "  $scriptsRoot"
+foreach ($p in $watchRoots) { Write-Host "  $p" }
 Write-Host "Editor: $Editor"
 Write-Host "Ctrl+C para sair."
 Write-Host ""
@@ -133,7 +138,7 @@ Write-Host ""
 while ($true) {
   Start-Sleep -Milliseconds $PollMs
   $changes = @()
-  foreach ($p in @($includeRoot, $scriptsRoot)) {
+  foreach ($p in $watchRoots) {
     Get-ChildItem -Path $p -Recurse -Include "*.mqh","*.mq5" -ErrorAction SilentlyContinue | ForEach-Object {
       $prev = $lastSeen[$_.FullName]
       if ($null -eq $prev -or $_.LastWriteTimeUtc -gt $prev) {
