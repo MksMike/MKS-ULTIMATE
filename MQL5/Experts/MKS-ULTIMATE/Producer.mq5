@@ -5,10 +5,14 @@
 //| @responsibility : EA produtor fundido — embute Builder + Sizer +
 //|                   Writer + Custom Symbol num programa único. OnInit
 //|                   faz fill histórico opcional, OnTick processa ticks
-//|                   live, OnDeinit fecha o arquivo .mksbk. Slice 3b.
+//|                   live, OnDeinit fecha o arquivo .mksbk.
 //|                   Combate o eixo 2 do V5 (mesmo motor para histórico
 //|                   e live). Cada brick é gravado no .mksbk e empurrado
 //|                   como barra no Custom Symbol via multi-sink.
+//|                   Geometria FIXA em CLASSIC (ADR-026): brick.close
+//|                   coincide com threshold real cruzado; visualClose
+//|                   no CS coincide com brick.close — zero divergência
+//|                   entre preço desenhado e preço de mercado.
 //| @depends_on     : Core/RenkoBuilder/CMksRenkoBuilder.mqh,
 //|                   Core/RenkoBuilder/CMksFixedBrickSizer.mqh,
 //|                   Core/Data/CMksBrickFileWriter.mqh,
@@ -43,19 +47,12 @@
 #include <MKS-ULTIMATE/Core/Interfaces/ISymbol.mqh>
 #include <MKS-ULTIMATE/Core/Interfaces/IAccount.mqh>
 
-// ADR-022: inputs em grupos. Tipo de geometria selecionável.
-enum ENUM_MKS_GEOMETRY_TYPE
-{
-   MKS_GEOM_MEDIAN  = 0,  // Median Renko (pro/po 0.50/0.50)
-   MKS_GEOM_CLASSIC = 1,  // Classic Renko (pro/po 0.00/0.00)
-   MKS_GEOM_CUSTOM  = 2   // Custom (usa InpPro/InpPo)
-};
-
-input group "=== Brick / Geometria ==="
-input ENUM_MKS_GEOMETRY_TYPE InpGeometryType = MKS_GEOM_MEDIAN; // Tipo (Median/Classic/Custom)
+// ADR-026: geometria fixa em CLASSIC (PO=PRO=0). Median e Custom removidos
+// do Producer pra eliminar o espaço de preços fictício no caminho de
+// produção; presets continuam suportados pelo core para testes e leitura
+// de .mksbk antigos via fábricas MksGeometryMedian/Classic/Custom.
+input group "=== Brick ==="
 input double InpBrickSizePts          = 3.0;   // Brick Size (em pontos do símbolo)
-input double InpPro                   = 0.50;  // PRO — só usado se Type = Custom
-input double InpPo                    = 0.50;  // PO  — só usado se Type = Custom
 
 input group "=== Histórico / Live ==="
 input int    InpHistoricalFillDays    = 30;    // Histórico (dias). 0 = só live.
@@ -119,62 +116,19 @@ uint                 g_lastTimerMs = 0;
 double               g_ticksPerSec = 0.0;
 
 //+------------------------------------------------------------------+
-//| Nome do Custom Symbol — ADR-022 regra 5.                           |
-//| Formato:                                                            |
-//|   Median/Classic:  <symbol>.MKS_<typeCode>_<sizeStr>                |
-//|   Custom:          <symbol>.MKS_X_<sizeStr>_<proInt>_<poInt>        |
-//| typeCode: M / C / X. sizeStr inteiro quando size é inteiro, senão  |
-//| 2 casas decimais. proInt/poInt = round(pro*100), round(po*100).    |
+//| Nome do Custom Symbol — ADR-026 (classic-only).                    |
+//| Formato: <symbol>.MKS_<sizeStr>                                    |
+//| sizeStr inteiro quando size é inteiro, senão 2 casas decimais.    |
+//| Sem typeCode — não há mais tipos a distinguir.                    |
 //+------------------------------------------------------------------+
-string BuildCustomSymbolName(const string &symbol,
-                             ENUM_MKS_GEOMETRY_TYPE type,
-                             double sizePts,
-                             double pro,
-                             double po)
+string BuildCustomSymbolName(const string &symbol, double sizePts)
 {
    string sizeStr;
    if(MathAbs(sizePts - MathRound(sizePts)) < 1e-9)
       sizeStr = StringFormat("%d", (int)MathRound(sizePts));
    else
       sizeStr = DoubleToString(sizePts, 2);
-
-   string typeCode;
-   switch(type)
-   {
-      case MKS_GEOM_MEDIAN:  typeCode = "M"; break;
-      case MKS_GEOM_CLASSIC: typeCode = "C"; break;
-      case MKS_GEOM_CUSTOM:  typeCode = "X"; break;
-      default:               typeCode = "?"; break;
-   }
-
-   if(type == MKS_GEOM_CUSTOM)
-   {
-      int proInt = (int)MathRound(pro * 100.0);
-      int poInt  = (int)MathRound(po  * 100.0);
-      return StringFormat("%s.MKS_X_%s_%d_%d", symbol, sizeStr, proInt, poInt);
-   }
-   return StringFormat("%s.MKS_%s_%s", symbol, typeCode, sizeStr);
-}
-
-//+------------------------------------------------------------------+
-//| Constrói a MksRenkoGeometry conforme InpGeometryType (ADR-022 §1). |
-//+------------------------------------------------------------------+
-MksRenkoGeometry BuildGeometry(ENUM_MKS_GEOMETRY_TYPE type, double pro, double po)
-{
-   switch(type)
-   {
-      case MKS_GEOM_MEDIAN:  return MksGeometryMedian();
-      case MKS_GEOM_CLASSIC: return MksGeometryClassic();
-      case MKS_GEOM_CUSTOM:
-      {
-         MksRenkoGeometry g;
-         g.pro = pro;
-         g.po  = po;
-         g.revSizeRatio = 1.0;
-         return g;
-      }
-   }
-   return MksGeometryMedian(); // fallback inerte; OnInit aborta antes
+   return StringFormat("%s.MKS_%s", symbol, sizeStr);
 }
 
 //+------------------------------------------------------------------+
@@ -378,18 +332,6 @@ void FinalizeHistoricalFill()
       StringFormat("\"bricks\":%d", g_histBricks));
 }
 
-// Helper: nome legível do tipo de geometria (pra painel/log).
-string GeometryTypeName(ENUM_MKS_GEOMETRY_TYPE t)
-{
-   switch(t)
-   {
-      case MKS_GEOM_MEDIAN:  return "Median";
-      case MKS_GEOM_CLASSIC: return "Classic";
-      case MKS_GEOM_CUSTOM:  return "Custom";
-   }
-   return "?";
-}
-
 //+------------------------------------------------------------------+
 //| Limpeza segura para uso em meio de OnInit (parcial) ou OnDeinit.   |
 //+------------------------------------------------------------------+
@@ -462,7 +404,7 @@ int OnInit()
    g_logger.WriteHeader(g_broker, g_account, g_symbol, g_digits,
                         "Producer", (long)sessionStart * 1000);
    g_logger.Info("Producer", "starting",
-      StringFormat("\"S\":%.4f,\"preset\":\"median\",\"L\":%d,\"K\":%d,"
+      StringFormat("\"S\":%.4f,\"preset\":\"classic\",\"L\":%d,\"K\":%d,"
                    "\"histDays\":%d,\"printBricks\":%s,\"resetCS\":%s",
                    InpBrickSizePts, InpInvalidTickLimit, InpThresholdLimit,
                    InpHistoricalFillDays,
@@ -479,19 +421,19 @@ int OnInit()
       return INIT_PARAMETERS_INCORRECT;
    }
 
-   // ADR-022: geometry dinâmica via InpGeometryType.
-   MksRenkoGeometry geom = BuildGeometry(InpGeometryType, InpPro, InpPo);
+   // ADR-026: geometry FIXA em classic. Validate mantido por consistência
+   // (se a fábrica MksGeometryClassic mudar no futuro, o EA pega aqui).
+   MksRenkoGeometry geom = MksGeometryClassic();
    if(!geom.Validate(err))
    {
       g_logger.Error("Producer", "geometry invalid",
-         StringFormat("\"type\":%d,\"err\":\"%s\"",
-                      (int)InpGeometryType, MksJsonEscape(err.ToString())));
+         StringFormat("\"err\":\"%s\"", MksJsonEscape(err.ToString())));
       Cleanup();
       return INIT_PARAMETERS_INCORRECT;
    }
    g_logger.Info("Producer", "geometry",
-      StringFormat("\"type\":%d,\"pro\":%.4f,\"po\":%.4f",
-                   (int)InpGeometryType, geom.pro, geom.po));
+      StringFormat("\"preset\":\"classic\",\"pro\":%.4f,\"po\":%.4f",
+                   geom.pro, geom.po));
 
    if(!g_isTesting) g_panel.UpdateSubtitle("Abrindo arquivo .mksbk...");
 
@@ -536,9 +478,8 @@ int OnInit()
    // limpa bars antigas (simétrico com ADR-014: sessão nova = histórico
    // limpo). Setado APÓS WriteHeader do .mksbk para que uma falha aqui
    // não bagunce a invariante do writer.
-   // ADR-022: naming carrega tipo + tamanho + pro/po (se Custom).
-   g_csName = BuildCustomSymbolName(g_symbol, InpGeometryType,
-                                    InpBrickSizePts, InpPro, InpPo);
+   // ADR-026: naming simplificado — só symbol + size, sem typeCode.
+   g_csName = BuildCustomSymbolName(g_symbol, InpBrickSizePts);
    if(StringLen(g_csName) > 32)
    {
       g_logger.Error("Producer", "custom symbol name exceeds 32 chars",
@@ -643,7 +584,7 @@ void FinishInitAndGoLive()
    if(!g_isTesting)
    {
       g_panel.LiveMode(g_symbol, g_csName,
-                       GeometryTypeName(InpGeometryType),
+                       "Classic",
                        InpBrickSizePts, TimeCurrent());
    }
 

@@ -30,8 +30,13 @@
 // Modelo de threshold (decisão de implementação; ADR-010 não fixa fórmula):
 // - Continuação: lastClose ± (1-PO)*S, no sentido do último brick.
 // - Reversão:    lastClose ∓ (1-PRO)*S*revSizeRatio, sentido oposto.
-// Consistente com median (0.5,0.5,1.0) → 0.5*S em ambos os lados e
-// classic (0.0,0.0,1.0) → S em ambos os lados, simétricos.
+// Consistente com classic (0.0,0.0,1.0) → S em ambos os lados e
+// median (0.5,0.5,1.0) → 0.5*S em ambos os lados, simétricos. Producer
+// usa classic em produção (ADR-026); median permanece no core para testes
+// e para leitura de .mksbk antigos.
+
+// Coração do framework — transforma stream de ticks em sequência
+// determinística de bricks Renko. Caminho único entre live e replay.
 class CMksRenkoBuilder
 {
 private:
@@ -52,15 +57,23 @@ private:
    double                m_lastMid;       // último mid observado (ADR-021 §5)
    bool                  m_emitForming;   // dispara OnBrickForming a cada tick (ADR-021)
 
+   // Próximo limiar de continuação na direção `dir`:
+   //   base + sign · (1 - PO) · S
+   // Em classic (PO=0), o limiar fica a S do close anterior; em median
+   // (PO=0.5), fica a 0.5·S (bricks com 50% de sobreposição).
    double ContinuationThreshold(double base, ENUM_MKS_BRICK_DIR dir, double size) const
    {
       double sign = (dir == MKS_BRICK_BULL) ? 1.0 : -1.0;
       return base + sign * (1.0 - m_geometry.po) * size;
    }
 
+   // Limiar de reversão (sentido oposto a `dir`):
+   //   base + sign_oposto · (1 - PRO) · S · revSizeRatio
+   // Em classic (PRO=0, revSizeRatio=1), reversão a S do close anterior.
+   // O `revSizeRatio` permite presets com brick de reversão de tamanho
+   // diferente do de continuação (não usado em produção atualmente).
    double ReversalThreshold(double base, ENUM_MKS_BRICK_DIR dir, double size) const
    {
-      // Reversão é no sentido oposto a 'dir'
       double sign = (dir == MKS_BRICK_BULL) ? -1.0 : 1.0;
       return base + sign * (1.0 - m_geometry.pro) * size * m_geometry.revSizeRatio;
    }

@@ -24,6 +24,10 @@ public:
 
    long NowMsc() const override { return m_nowMsc; }
 
+   // Mock sempre pronto — testes que precisam exercitar "clock não pronto"
+   // injetam um mock alternativo ou usam um flag específico do teste.
+   bool IsReady() const override { return true; }
+
    void   SetNowMsc(long v)   { m_nowMsc = v; }
    void   Advance(long dtMsc) { m_nowMsc += dtMsc; }
 };

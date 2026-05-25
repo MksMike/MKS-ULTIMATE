@@ -19,10 +19,15 @@ struct MksRenkoGeometry
    double pro;           // abertura de reversão, fração [0, 1)
    double revSizeRatio;  // tamanho do brick de reversão / tamanho normal; > 0
 
-   //--- Default: median renko (PO=PRO=0.5, reversão do mesmo tamanho).
+   //--- Default: classic renko (PO=PRO=0, reversão do mesmo tamanho).
+   //    Mudado de median (0.5/0.5) para classic (0/0) na ADR-026 — median
+   //    abre espaço de preços fictício (brick.close ≠ preço real do trigger);
+   //    classic preserva fidelidade entre brick.close e o threshold cruzado.
+   //    Fábricas explícitas (MksGeometryMedian/Classic/Custom) continuam
+   //    existindo no core para testes e leitura de .mksbk antigos.
    MksRenkoGeometry()
    {
-      po = 0.50; pro = 0.50; revSizeRatio = 1.0;
+      po = 0.0; pro = 0.0; revSizeRatio = 1.0;
    }
 
    //--- Valida o triplo. NÃO loga (ADR-009) — o chamador decide.

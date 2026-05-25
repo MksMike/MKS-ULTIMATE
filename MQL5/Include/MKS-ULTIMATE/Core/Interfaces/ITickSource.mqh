@@ -23,6 +23,14 @@ public:
    // false quando não há tick disponível (fim do feed em
    // backtest; nenhum tick novo em live).
    virtual bool Next(MksTick &tick) = 0;
+
+   // timeMsc do último tick entregue por Next() bem-sucedido.
+   // 0 antes do primeiro tick. Substituiu o getter não-virtual antigo
+   // do CMksFileTickSource para que CMksReplayClock possa receber
+   // qualquer ITickSource (single-file, multi-file, futuras).
+   // Live tick sources (futuras) podem retornar timeMsc do último
+   // SymbolInfoTick observado, ou TimeCurrent()*1000.
+   virtual long LastTickTimeMsc() const = 0;
 };
 
 #endif // MKS_ULTIMATE_CORE_INTERFACES_ITICKSOURCE_MQH

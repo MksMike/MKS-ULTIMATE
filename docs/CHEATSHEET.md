@@ -371,7 +371,110 @@ Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned -Force
 
 ---
 
-## 9. Links rápidos
+## 9. Fluxos do framework MKS-ULTIMATE
+
+### 9.1 Validar que tudo compila (sanity check)
+
+Compila headless todos os `.mq5` do projeto (Experts, Services, Scripts, Indicators) via MetaEditor64. Útil antes de cada commit grande ou após refactor amplo.
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tools\compile-all.ps1
+```
+
+Modos:
+- Default: imprime cada arquivo + summary.
+- `-Quiet`: só summary final.
+- `-Editor <path>`: usa outro MetaEditor (default = Exness).
+
+Exit codes: `0` tudo limpo, `1` erros, `2` warnings, `3` setup inválido.
+
+### 9.2 Watcher de compile incremental (durante desenvolvimento)
+
+Já roda automaticamente quando você abre o VSCode (task `watch: compile MQL5`). Para rodar manualmente:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tools\watch-compile.ps1
+```
+
+Recompila apenas os `.mq5` afetados por mudanças em `.mqh` ou `.mq5` em `MQL5/Include/MKS-ULTIMATE/` e `MQL5/Scripts/MKS-ULTIMATE/`.
+
+### 9.3 Pipeline de paridade canônica (ADR-024)
+
+Provar que backtest e live produzem o mesmo `.mksbk` byte-a-byte. **Esta é a prova mecânica que valida o framework antes de qualquer estratégia entrar.**
+
+**Fase A — Captura (mercado aberto, ≥ 1h):**
+
+1. MetaTrader → arrastar `Producer.mq5` num chart XAUUSDm
+   - Inputs: `InpBrickSizePts=3.0`, `InpHistoricalFillDays=0` (sem fill histórico — paridade vale só para o trecho live)
+   - Saída: `MQL5\Files\MKS-ULTIMATE\Bricks\XAUUSDm_<YYYYMMDD>T<HHMMSS>.mksbk` + `MQL5\Files\MKS-ULTIMATE\Logs\XAUUSDm_<TS>.log`
+2. Navigator → Services → `TickRecorder` → instalar → input `InpSymbol=XAUUSDm`
+   - Saída: `MQL5\Files\MKS-ULTIMATE\Ticks\XAUUSDm_<YYYYMMDD>.mkstick`
+3. Deixar ambos rodando por ≥ 1h (idealmente atravessando momento de movimento — abertura de Londres, news).
+4. Parar Producer (desanexar do chart) e TickRecorder (Stop no Services).
+
+**Fase B — Replay (qualquer hora, qualquer chart):**
+
+5. Arrastar `Replayer.mq5` em qualquer chart (mesmo símbolo ou não — Replayer é símbolo-agnóstico).
+   - Input: `InpTickFilePath=MKS-ULTIMATE\Ticks\XAUUSDm_<YYYYMMDD>.mkstick` (mesmo arquivo da captura)
+   - `InpBrickSizePts=3.0` (mesmo do Producer)
+   - Saída: `MQL5\Files\MKS-ULTIMATE\Bricks\replay_XAUUSDm_<YYYYMMDD>_<TS>.mksbk` + log
+6. EA encerra automaticamente ao atingir EOF (`ExpertRemove()`).
+
+**Fase C — Verificação:**
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tools\verify-parity.ps1 `
+  -LiveMksbk "C:\Users\<você>\AppData\Roaming\MetaQuotes\Terminal\<hash>\MQL5\Files\MKS-ULTIMATE\Bricks\XAUUSDm_<live>.mksbk" `
+  -ReplayMksbk "C:\Users\<você>\AppData\Roaming\MetaQuotes\Terminal\<hash>\MQL5\Files\MKS-ULTIMATE\Bricks\replay_XAUUSDm_<TS>.mksbk"
+```
+
+Exit code:
+- `0` = paridade verificada (byte-a-byte idênticos exceto pelo range 184-191 do header, que é wall-clock por design).
+- `1` = divergência detectada. O script reporta offset exato + qual campo (`header.broker`, `brick[42].close`, etc.) + bytes em hex.
+- `3` = arquivo não encontrado.
+
+**Diagnosticando divergência (exit 1):**
+- Divergência em `header.*` (offset < 256) = problema de metadata (proveniência, geometria, contagem).
+- Divergência em `brick[N].*` (offset ≥ 256) = não-determinismo do builder OU feed divergente (o `.mkstick` consumido pelo Replayer não corresponde aos ticks que o Producer viu em live).
+
+**Opcional — comparar logs também:**
+
+```powershell
+powershell ... -LiveLog <live>.log -ReplayLog <replay>.log
+```
+
+Filtra linhas com eventos do builder (brick emitido, erros 102/103/104), normaliza `ts` e `sessionStartMsc` (que divergem inerentemente), compara linha-a-linha.
+
+### 9.4 Onde estão os arquivos do framework
+
+O terminal MT5 e o repo estão sincronizados via junctions. Path do terminal:
+```
+%APPDATA%\MetaQuotes\Terminal\<HASH>\MQL5\
+```
+
+Junctions ativas:
+- `MQL5\Include\MKS-ULTIMATE` → `C:\dev\MKS-ULTIMATE\MQL5\Include\MKS-ULTIMATE`
+- `MQL5\Experts\MKS-ULTIMATE` → `C:\dev\MKS-ULTIMATE\MQL5\Experts\MKS-ULTIMATE`
+- `MQL5\Services\MKS-ULTIMATE` → `C:\dev\MKS-ULTIMATE\MQL5\Services\MKS-ULTIMATE`
+- `MQL5\Scripts\MKS-ULTIMATE` → `C:\dev\MKS-ULTIMATE\MQL5\Scripts\MKS-ULTIMATE`
+- `MQL5\Indicators\MKS-ULTIMATE` → `C:\dev\MKS-ULTIMATE\MQL5\Indicators\MKS-ULTIMATE`
+
+Outputs ficam em `MQL5\Files\MKS-ULTIMATE\` (NÃO sincronizado com repo, gitignorado):
+- `Bricks\` — `.mksbk` do Producer e do Replayer
+- `Ticks\` — `.mkstick` do TickRecorder
+- `Logs\` — `.log` JSON-line de qualquer EA/Service
+
+### 9.5 Criar junction quando faltar (após clonar repo em máquina nova)
+
+```powershell
+cd "%APPDATA%\MetaQuotes\Terminal\<HASH>\MQL5\Include"
+mklink /J MKS-ULTIMATE C:\dev\MKS-ULTIMATE\MQL5\Include\MKS-ULTIMATE
+# Repetir para Experts, Services, Scripts, Indicators
+```
+
+---
+
+## 10. Links rápidos
 
 - **Repo:** https://github.com/MksMike/MKS-ULTIMATE
 - **Conventional Commits:** https://www.conventionalcommits.org
@@ -382,7 +485,7 @@ Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned -Force
 
 ---
 
-## 10. Como este documento evolui
+## 11. Como este documento evolui
 
 Toda vez que um comando novo virar parte do fluxo de trabalho, adicionar aqui na seção apropriada. Não deixar conhecimento solto "na cabeça" — se é usado mais de uma vez, entra no cheatsheet.
 

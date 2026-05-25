@@ -32,7 +32,8 @@
 // ligavel via flag para que estratégias possam pegar só o que precisam
 // (so trailing, so partial, so BE, ou combinações).
 //
-// Pontos (points) são unidades do símbolo (point = SymbolInfoDouble(SYMBOL_POINT)).
+// Pontos (points) são unidades do símbolo (point obtido via ISymbol::Point()
+// — o módulo NÃO chama SymbolInfoDouble direto, ver Protocolo 9).
 // Para XAUUSD com 3 digits, 1 ponto = 0.001 unidade de preço.
 //
 // beActivationPoints/trailStartPoints/partialTriggerPoints são lucros

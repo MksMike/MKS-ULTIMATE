@@ -16,6 +16,11 @@
 #include <MKS-ULTIMATE/Core/Types/Error.mqh>
 #include <MKS-ULTIMATE/Core/Version.mqh>
 
+// Nome do módulo de origem em logs internos do próprio logger (ex: header
+// META). Constante em vez de string literal para consistência com o
+// padrão do projeto e para facilitar refactor futuro.
+#define MKS_MODULE_LOGGER "Logger"
+
 // Helper livre: escapa um valor para uso seguro em ctxJson.
 // Usar antes de StringFormat ao compor ctxJson com strings vindas
 // de paths, mensagens de erro, ou qualquer texto que possa conter
@@ -177,7 +182,7 @@ public:
          EscapeJson(symbol), digits,
          MKS_ULTIMATE_VERSION_STR,
          EscapeJson(eaName), sessionStartMsc);
-      Log(MKS_LOG_META, "Logger", "session header", ctxJson);
+      Log(MKS_LOG_META, MKS_MODULE_LOGGER, "session header", ctxJson);
    }
 
    void Log(ENUM_MKS_LOG_LEVEL level,

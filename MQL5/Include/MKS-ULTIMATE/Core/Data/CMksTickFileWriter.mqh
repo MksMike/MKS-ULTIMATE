@@ -225,6 +225,47 @@ public:
       return true;
    }
 
+   // Checkpoint: patcheia tickCount/timeMscFirst/timeMscLast no header SEM
+   // fechar o handle, depois faz seek de volta para o final do arquivo
+   // e força FileFlush. Permite que um crash do Service deixe o arquivo
+   // parcialmente válido — leitor (CMksTickFileReader) lê exatamente os
+   // ticks acumulados até o último Checkpoint. createdAtMsc e closedAtMsc
+   // NÃO são gravados aqui (closedAtMsc só faz sentido em Close).
+   bool Checkpoint(MksError &err)
+   {
+      if(m_handle == INVALID_HANDLE || m_closed)
+      {
+         MKS_SET_ERROR(err, MKS_ERR_DATA_STATE_INVALID,
+                       "Checkpoint em writer fechado ou não aberto", "");
+         return false;
+      }
+      if(!m_headerWritten)
+      {
+         MKS_SET_ERROR(err, MKS_ERR_DATA_STATE_INVALID,
+                       "Checkpoint sem WriteHeader prévio", "");
+         return false;
+      }
+
+      ulong endPos = FileTell(m_handle);
+
+      FileSeek(m_handle, MKS_TICKFILE_OFF_TICK_COUNT, SEEK_SET);
+      FileWriteLong(m_handle, m_tickCount);
+      FileWriteLong(m_handle, m_timeMscFirst);
+      FileWriteLong(m_handle, m_timeMscLast);
+
+      FileSeek(m_handle, (long)endPos, SEEK_SET);
+      FileFlush(m_handle);
+      return true;
+   }
+
+   // Força flush dos bytes pendentes para disco sem mexer no header.
+   // Cheap; pode ser chamado a cada N ticks no Service.
+   void Flush()
+   {
+      if(m_handle != INVALID_HANDLE)
+         FileFlush(m_handle);
+   }
+
    // closedAtMscOverride < 0 => usa TimeCurrent (produção). Valor explícito
    // permite golden file test reproduzível byte-a-byte.
    bool Close(MksError &err, long closedAtMscOverride = -1)

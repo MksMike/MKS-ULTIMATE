@@ -149,7 +149,9 @@ public:
    }
 
    // Consultado pelo CMksReplayClock. 0 antes do primeiro Next() bem-sucedido.
-   long LastTickTimeMsc() const { return m_lastTickTimeMsc; }
+   // Override de ITickSource (estendido para suportar polimorfismo
+   // entre single-file e multi-file no Replayer).
+   virtual long LastTickTimeMsc() const override { return m_lastTickTimeMsc; }
 
    // Proveniência observada (delegada ao reader).
    string Broker()       const { return m_reader.Broker(); }
