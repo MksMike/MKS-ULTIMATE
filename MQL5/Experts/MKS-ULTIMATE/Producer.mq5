@@ -553,6 +553,17 @@ int OnInit()
 
    g_logger.Info("Producer", "OnInit done; fill+ChartOpen via OnTimer",
       StringFormat("\"fillRequested\":%s", (g_fillRequested ? "true" : "false")));
+
+   // FIX 2026-05-25: quando InpHistoricalFillDays=0, StartHistoricalFill
+   // retorna false sem setar g_fillRunning. Sem isso, o OnTimer fica
+   // em loop sem chamar FinishInitAndGoLive — painel preso em "init",
+   // ChartOpen do CS nunca dispara. Detectamos a condição aqui e
+   // chamamos FinishInitAndGoLive imediatamente para transitar o EA
+   // direto para o modo live (caminho legítimo, usado para teste de
+   // paridade canônica ADR-024 onde o Producer não pode ter fill).
+   if(!g_fillRequested)
+      FinishInitAndGoLive();
+
    return INIT_SUCCEEDED;
 }
 
