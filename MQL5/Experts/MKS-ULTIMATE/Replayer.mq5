@@ -158,10 +158,20 @@ string AutoOutputPath(const string &sourceStem)
 
 //+------------------------------------------------------------------+
 //| Extrai stem (nome sem extensão e sem path) de um caminho.         |
+//| FIX 2026-05-25: StringFind retorna a PRIMEIRA ocorrência, não a   |
+//| última — versão anterior cortava no primeiro `\` e deixava sub-   |
+//| pastas no stem (ex: "Ticks\XAUUSDm_..." virava stem). Agora       |
+//| varremos do fim para o início para achar o último separador.      |
 //+------------------------------------------------------------------+
 string PathStem(const string &path)
 {
-   int lastSep = MathMax(StringFind(path, "\\", 0), StringFind(path, "/", 0));
+   int len = StringLen(path);
+   int lastSep = -1;
+   for(int i = len - 1; i >= 0; i--)
+   {
+      ushort c = StringGetCharacter(path, i);
+      if(c == '\\' || c == '/') { lastSep = i; break; }
+   }
    string name = (lastSep >= 0) ? StringSubstr(path, lastSep + 1) : path;
    int dot = StringFind(name, ".");
    return (dot > 0) ? StringSubstr(name, 0, dot) : name;
