@@ -32,6 +32,8 @@
 
 #include <MKS-ULTIMATE/Core/RenkoBuilder/CMksRenkoBuilder.mqh>
 #include <MKS-ULTIMATE/Core/RenkoBuilder/CMksFixedBrickSizer.mqh>
+#include <MKS-ULTIMATE/Core/RenkoBuilder/CMksAtrBrickSizer.mqh>
+#include <MKS-ULTIMATE/Core/Interfaces/IBrickSizer.mqh>
 #include <MKS-ULTIMATE/Core/Data/CMksBrickFileWriter.mqh>
 #include <MKS-ULTIMATE/Core/Data/CMksBrickWriterSink.mqh>
 #include <MKS-ULTIMATE/Core/Output/CMksCustomSymbolSink.mqh>
@@ -51,8 +53,27 @@
 // do Producer pra eliminar o espaço de preços fictício no caminho de
 // produção; presets continuam suportados pelo core para testes e leitura
 // de .mksbk antigos via fábricas MksGeometryMedian/Classic/Custom.
+
+// Modo de cálculo do tamanho do brick. Permite o operador trocar entre
+// tamanho fixo (clássico) e tamanho dinâmico baseado em ATR sobre bricks
+// fechados (ADR-018). A escolha é feita no composition root via factory
+// abaixo; o builder consome qualquer IBrickSizer sem distinguir.
+enum ENUM_BRICK_SIZER_MODE
+{
+   SIZER_MODE_FIXED = 0,   // CMksFixedBrickSizer — tamanho constante
+   SIZER_MODE_ATR   = 1    // CMksAtrBrickSizer — ATR * multiplier (ADR-018)
+};
+
 input group "=== Brick ==="
-input double InpBrickSizePts          = 3.0;   // Brick Size (em pontos do símbolo)
+input ENUM_BRICK_SIZER_MODE InpSizerMode = SIZER_MODE_FIXED; // Modo do sizer
+input double InpBrickSize             = 3.0;   // Tamanho do brick (price units: USD para XAU, EUR para EUR/USD, etc. NÃO é ponto do símbolo apesar de "Pts" interno)
+
+input group "=== ATR Sizer (usado apenas se InpSizerMode = SIZER_MODE_ATR) ==="
+input int    InpAtrPeriod             = 14;    // Período do ATR em bricks fechados (Wilder smoothing)
+input double InpAtrMultiplier         = 1.0;   // SizePoints = ATR * multiplier
+input double InpAtrDefaultSize        = 1.5;   // Fallback durante warm-up (price units)
+input double InpAtrMinSize            = 0.0;   // Clamp inferior (0 = sem limite)
+input double InpAtrMaxSize            = 1e18;  // Clamp superior
 
 input group "=== Histórico / Live ==="
 input int    InpHistoricalFillDays    = 30;    // Histórico (dias). 0 = só live.
@@ -84,7 +105,7 @@ bool     g_streamHalted   = false;
 int      g_histLoaded     = 0;
 int      g_histBricks     = 0;
 
-CMksFixedBrickSizer  *g_sizer    = NULL;
+IBrickSizer          *g_sizer    = NULL;  // polimorfico (Fixed ou ATR via factory)
 CMksBrickFileWriter  *g_writer   = NULL;
 CMksRenkoBuilder     *g_builder  = NULL;
 CMksLogger           *g_logger   = NULL;
@@ -116,19 +137,72 @@ uint                 g_lastTimerMs = 0;
 double               g_ticksPerSec = 0.0;
 
 //+------------------------------------------------------------------+
-//| Nome do Custom Symbol — ADR-026 (classic-only).                    |
-//| Formato: <symbol>.MKS_<sizeStr>                                    |
-//| sizeStr inteiro quando size é inteiro, senão 2 casas decimais.    |
-//| Sem typeCode — não há mais tipos a distinguir.                    |
+//| Formata label de tamanho fixo: "3", "1.50".                       |
 //+------------------------------------------------------------------+
-string BuildCustomSymbolName(const string &symbol, double sizePts)
+string FormatFixedSizeLabel(double size)
 {
-   string sizeStr;
-   if(MathAbs(sizePts - MathRound(sizePts)) < 1e-9)
-      sizeStr = StringFormat("%d", (int)MathRound(sizePts));
-   else
-      sizeStr = DoubleToString(sizePts, 2);
-   return StringFormat("%s.MKS_%s", symbol, sizeStr);
+   if(MathAbs(size - MathRound(size)) < 1e-9)
+      return StringFormat("%d", (int)MathRound(size));
+   return DoubleToString(size, 2);
+}
+
+//+------------------------------------------------------------------+
+//| Formata label de ATR: "ATR14x100" (period × round(multiplier*100))|
+//+------------------------------------------------------------------+
+string FormatAtrSizeLabel(int period, double multiplier)
+{
+   return StringFormat("ATR%dx%d", period, (int)MathRound(multiplier * 100.0));
+}
+
+//+------------------------------------------------------------------+
+//| Nome do Custom Symbol — ADR-026 (classic-only).                    |
+//| Formato: <symbol>.MKS_<sizeLabel>                                  |
+//| sizeLabel é "3"/"1.50" para Fixed, "ATR14x100" para ATR.           |
+//+------------------------------------------------------------------+
+string BuildCustomSymbolName(const string &symbol, const string &sizeLabel)
+{
+   return StringFormat("%s.MKS_%s", symbol, sizeLabel);
+}
+
+//+------------------------------------------------------------------+
+//| Factory de sizer (IBrickSizer). Despacha pelo enum InpSizerMode.  |
+//| Caller é dono do ponteiro retornado (delete em Cleanup).          |
+//+------------------------------------------------------------------+
+IBrickSizer *CreateSizer(ENUM_BRICK_SIZER_MODE mode)
+{
+   switch(mode)
+   {
+      case SIZER_MODE_FIXED:
+         return new CMksFixedBrickSizer(InpBrickSize);
+      case SIZER_MODE_ATR:
+         return new CMksAtrBrickSizer(InpAtrPeriod, InpAtrMultiplier,
+                                       InpAtrDefaultSize,
+                                       InpAtrMinSize, InpAtrMaxSize);
+   }
+   return NULL; // unreachable em ENUM_BRICK_SIZER_MODE válido
+}
+
+//+------------------------------------------------------------------+
+//| Label do sizer corrente — usado no naming do CS e no log.         |
+//+------------------------------------------------------------------+
+string CurrentSizerLabel()
+{
+   if(InpSizerMode == SIZER_MODE_ATR)
+      return FormatAtrSizeLabel(InpAtrPeriod, InpAtrMultiplier);
+   return FormatFixedSizeLabel(InpBrickSize);
+}
+
+//+------------------------------------------------------------------+
+//| Nome do sizer — pretty print no log.                              |
+//+------------------------------------------------------------------+
+string SizerModeName(ENUM_BRICK_SIZER_MODE mode)
+{
+   switch(mode)
+   {
+      case SIZER_MODE_FIXED: return "fixed";
+      case SIZER_MODE_ATR:   return "atr";
+   }
+   return "unknown";
 }
 
 //+------------------------------------------------------------------+
@@ -404,15 +478,27 @@ int OnInit()
    g_logger.WriteHeader(g_broker, g_account, g_symbol, g_digits,
                         "Producer", (long)sessionStart * 1000);
    g_logger.Info("Producer", "starting",
-      StringFormat("\"S\":%.4f,\"preset\":\"classic\",\"L\":%d,\"K\":%d,"
+      StringFormat("\"sizerMode\":\"%s\",\"S\":%.4f,\"preset\":\"classic\","
+                   "\"L\":%d,\"K\":%d,"
+                   "\"atrPeriod\":%d,\"atrMult\":%.4f,\"atrDefault\":%.4f,"
                    "\"histDays\":%d,\"printBricks\":%s,\"resetCS\":%s",
-                   InpBrickSizePts, InpInvalidTickLimit, InpThresholdLimit,
+                   SizerModeName(InpSizerMode),
+                   InpBrickSize, InpInvalidTickLimit, InpThresholdLimit,
+                   InpAtrPeriod, InpAtrMultiplier, InpAtrDefaultSize,
                    InpHistoricalFillDays,
                    (InpPrintBricks ? "true" : "false"),
                    (InpResetCustomSymbolBars ? "true" : "false")));
 
-   // Sizer (heap para que cleanup parcial seja uniforme).
-   g_sizer = new CMksFixedBrickSizer(InpBrickSizePts);
+   // Sizer via factory (heap para que cleanup parcial seja uniforme).
+   // Despacho pelo enum InpSizerMode (Fixed ou ATR — ADR-018).
+   g_sizer = CreateSizer(InpSizerMode);
+   if(g_sizer == NULL)
+   {
+      g_logger.Error("Producer", "sizer factory failed",
+         StringFormat("\"sizerMode\":%d", (int)InpSizerMode));
+      Cleanup();
+      return INIT_PARAMETERS_INCORRECT;
+   }
    if(!g_sizer.Validate(err))
    {
       g_logger.Error("Producer", "sizer invalid",
@@ -465,8 +551,17 @@ int OnInit()
    }
    g_logger.Info("Producer", "mksbk opened",
       StringFormat("\"path\":\"%s\"", MksJsonEscape(g_filePath)));
+   // Tamanho de referência para gravação no header do .mksbk e para
+   // o sink visual. Em Fixed = InpBrickSize literal. Em ATR = size
+   // corrente do sizer (defaultSize durante warm-up, depois ATR*mult).
+   // O header carrega esse valor como proveniência do tamanho INICIAL
+   // da sessão; o tamanho efetivo de cada brick é o threshold real
+   // gravado no record (close - open) — informação completa e
+   // recuperável post-mortem.
+   double sizerInitialSize = g_sizer.SizePoints();
+
    if(!g_writer.WriteHeader(g_broker, g_account, g_symbol, g_digits,
-                            geom, InpBrickSizePts, err))
+                            geom, sizerInitialSize, err))
    {
       g_logger.Error("Producer", "writer.WriteHeader failed",
          StringFormat("\"err\":\"%s\"", MksJsonEscape(err.ToString())));
@@ -478,8 +573,11 @@ int OnInit()
    // limpa bars antigas (simétrico com ADR-014: sessão nova = histórico
    // limpo). Setado APÓS WriteHeader do .mksbk para que uma falha aqui
    // não bagunce a invariante do writer.
-   // ADR-026: naming simplificado — só symbol + size, sem typeCode.
-   g_csName = BuildCustomSymbolName(g_symbol, InpBrickSizePts);
+   // ADR-026: naming simplificado — symbol + label do sizer.
+   // Fixed: <symbol>.MKS_3. ATR: <symbol>.MKS_ATR14x100.
+   // MQL5 não aceita rvalue em `const string &` — variável local força lvalue.
+   string sizerLabel = CurrentSizerLabel();
+   g_csName = BuildCustomSymbolName(g_symbol, sizerLabel);
    if(StringLen(g_csName) > 32)
    {
       g_logger.Error("Producer", "custom symbol name exceeds 32 chars",
@@ -528,7 +626,7 @@ int OnInit()
    g_csSink = new CMksCustomSymbolSink();
    g_csSink.csName       = g_csName;
    g_csSink.nextBarTime  = g_nextBarTime;
-   g_csSink.brickSizePts = InpBrickSizePts;  // ADR-022 regra 8
+   g_csSink.brickSizePts = sizerInitialSize;  // ADR-022 regra 8 (initial size)
    g_csSink.showWicks    = InpShowWicksInCS; // ADR-022 regra 3
 
    g_multiSink = new CMksMultiSink();
@@ -591,12 +689,15 @@ void FinishInitAndGoLive()
                       MksJsonEscape(g_csName), chartId));
    }
 
-   // Transição painel para modo live.
+   // Transição painel para modo live. Tamanho exibido é o corrente do
+   // sizer — em Fixed = InpBrickSize constante; em ATR varia (mas painel
+   // só lê uma vez aqui; atualização dinâmica seria future work).
    if(!g_isTesting)
    {
+      double currentSize = (g_sizer != NULL) ? g_sizer.SizePoints() : 0.0;
       g_panel.LiveMode(g_symbol, g_csName,
                        "Classic",
-                       InpBrickSizePts, TimeCurrent());
+                       currentSize, TimeCurrent());
    }
 
    g_logger.Info("Producer", "ready, processing live ticks", "");
