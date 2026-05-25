@@ -28,32 +28,33 @@ Qualquer decisão arquitetural registrada neste documento deve ser compatível c
 Esta é a estrutura-alvo. Cresce conforme fases do ROADMAP são implementadas.
 
 MKS-ULTIMATE/
-├── docs/                           # Documentação viva
+├── docs/                                  # Documentação viva (ADRs, ROADMAP, REGRAS, PROTOCOLOS, INDICATORS, TOM-E-CHATS, CHECKPOINTs, etc.)
 ├── MQL5/
 │   ├── Include/MKS-ULTIMATE/
 │   │   ├── Core/
-│   │   │   ├── Version.mqh         # Versão única do framework
-│   │   │   ├── Interfaces/         # IBroker, ITickSource, IClock, ILogger, IRenkoSink, IBrickSizer, IPositionBook
-│   │   │   ├── Types/              # Tick, Brick, OrderRequest, ExecutionResult, Error, RenkoGeometry
-│   │   │   ├── RenkoBuilder/       # CMksRenkoBuilder, sizers (Fixed, Atr)
-│   │   │   ├── Data/               # BrickFileFormat, TickFileFormat, CMksBrickFile/TickFile Writer/Reader, CMksFileTickSource
-│   │   │   ├── Clock/              # CMksMt5Clock (live), CMksReplayClock (replay)
-│   │   │   ├── Symbol/             # CMksMt5Symbol (impl de ISymbol)
-│   │   │   ├── Account/            # CMksMt5Account (impl de IAccount), CMksAccountSnapshot
-│   │   │   ├── Position/           # CMksMt5PositionBook (impl de IPositionBook)
-│   │   │   ├── Broker/             # CMksMt5Broker, CMksSimulatedBroker, CMksCostModel
-│   │   │   ├── Trade/              # CMksPositionSizer (Fixed/PercentRisk), CMksTradeManager (BE+Trail+Partial), CMksTradeJournal (diário de trades + agregados)
-│   │   │   ├── Risk/               # CMksRiskManager (Por Trade + Estratégia + Conta), CMksRiskGatedBroker
-│   │   │   ├── Log/                # CMksLogger (logging estruturado)
-│   │   │   └── Testing/            # Framework mínimo de asserções
-│   │   └── StressLab/              # CMksRandom (RNG seedável), CMksStressParams (presets None/Light/Medium/High/Nightmare), CMksStressLabBroker (wrapper IBroker injetando slippage/rejection/requote), CMksStressLabReport (snapshot agregado + PrintComparison)
-│   ├── Experts/
-│   │   └── MKS-ULTIMATE/           # EAs que usam o framework
-│   ├── Scripts/                    # Scripts utilitários
-│   └── Services/                   # Coletores de tick em background e workers independentes de gráfico
-├── tests/                          # Testes unitários e de integração
-├── logs/                           # Logs de backtest e live (gitignored)
-│   └── .gitkeep
+│   │   │   ├── Version.mqh                # Versão única do framework (SemVer — ADR-001)
+│   │   │   ├── Interfaces/                # IBroker, ITickSource, IClock, ILogger, IRenkoSink, IBrickSizer, ISymbol, IAccount, IPositionBook, IPositionSizer
+│   │   │   ├── Types/                     # Tick, Brick, FormingBrick, OrderRequest, ExecutionResult, Error, RenkoGeometry
+│   │   │   ├── RenkoBuilder/              # CMksRenkoBuilder + CMksFixedBrickSizer + CMksAtrBrickSizer
+│   │   │   ├── Data/                      # BrickFileFormat, TickFileFormat, CMksBrick/TickFile Writer/Reader, CMksFileTickSource, CMksMultiFileTickSource, CMksBrickWriterSink
+│   │   │   ├── Clock/                     # CMksMt5Clock (live), CMksReplayClock (replay — função pura do feed)
+│   │   │   ├── Symbol/                    # CMksMt5Symbol (impl de ISymbol via SymbolInfo*)
+│   │   │   ├── Account/                   # CMksMt5Account (impl de IAccount via AccountInfo*) + CMksAccountSnapshot (camada 6.3)
+│   │   │   ├── Position/                  # CMksMt5PositionBook (impl de IPositionBook, camada 6.2)
+│   │   │   ├── Broker/                    # CMksMt5Broker (real), CMksSimulatedBroker (backtest), CMksCostModel
+│   │   │   ├── Trade/                     # CMksFixedLotSizer + CMksPercentRiskSizer (slice 5a), CMksTradeManager (slice 5b — BE+Trail+Partial), CMksTradeJournal
+│   │   │   ├── Risk/                      # CMksRiskManager (slices 6.1+6.2+6.3) + CMksRiskGatedBroker (decorator de IBroker)
+│   │   │   ├── Output/                    # CMksMultiSink (compositor), CMksCustomSymbolSink (CS visual), CMksProgressPanel (UX)
+│   │   │   ├── Log/                       # CMksLogger (JSON-line — ADR-007)
+│   │   │   └── Testing/                   # Framework próprio (Asserts.mqh + TestRunner.mqh — ADR-005) + Mocks/ (Fake* + Capturing* + Recording*)
+│   │   └── StressLab/                     # CMksRandom (LCG seedável), CMksStressParams (5 presets), CMksStressLabBroker (wrapper IBroker), CMksStressLabReport
+│   ├── Experts/MKS-ULTIMATE/              # EAs do framework — Producer, Replayer, Test_MksMt5BrokerLive
+│   ├── Indicators/MKS-ULTIMATE/           # CMksDonchian, CMksChandelier, CMksSuperTrend, CMksRSI, CMksMACD (brick-driven — ver docs/INDICATORS.md)
+│   ├── Scripts/MKS-ULTIMATE/              # Validate* (scripts manuais) + Tests/Test_* (suítes do framework Testing)
+│   └── Services/MKS-ULTIMATE/             # TickRecorder (Service que captura .mkstick em background — ADR-024)
+├── tools/                                 # PowerShell — watch-compile.ps1, compile-all.ps1, verify-parity.ps1
+├── reference/                             # Código auditado mas NÃO integrado — V5 (post-mortem) e Renko-MQL5 (estudo de arquitetura)
+├── logs/                                  # Logs de runtime (gitignored, .gitkeep mantém pasta)
 ├── CLAUDE.md
 ├── README.md
 ├── CHANGELOG.md
@@ -451,6 +452,17 @@ A fonte de dados histórica de ticks do MKS-ULTIMATE assenta sobre um contrato d
 
 ---
 
+**Nota de esclarecimento — dívida de implementação quitada** (2026-05-25)
+
+A ADR-012 §Consequências registrou como dívida explícita o "mecanismo de comparação de proveniência em runtime (cláusula 3)" com dono definido: a classe de `ITickSource` de backtest, quando fosse escrita. Essa dívida foi quitada pelo slice 24b:
+
+- `CMksFileTickSource` (`Core/Data/CMksFileTickSource.mqh`) compara, no `Open`, a proveniência observada no header do `.mkstick` contra os valores esperados injetados pelo composition root. Política graduada pela ADR-024 §4: símbolo divergente é FATAL (código `MKS_ERR_DATA_SYMBOL_MISMATCH = 807`); broker e account divergentes são WARN-flag, expostos via `BrokerMismatch()`/`AccountMismatch()`/`*Msg()` para o composition root logar.
+- `CMksMultiFileTickSource` (slice 24d-parte-2) estende a política para conjunto multi-arquivo: símbolo/broker/account divergente cross-file é fatal — códigos `MKS_ERR_DATA_MULTI_PROVENANCE_MISMATCH = 811` e `MKS_ERR_DATA_SEQ_DISCONTINUITY = 810`. WARN-flag vs conta corrente herda do primeiro arquivo aberto.
+
+A ADR-012 não é alterada; esta nota registra a quitação da dívida.
+
+---
+
 ### ADR-013: Independência de broker e proveniência no rastro de auditoria
 
 **Data:** 2026-05-20
@@ -500,6 +512,27 @@ O MKS-ULTIMATE é broker-agnóstico por construção, e todo artefato persistido
 - Não é a estrutura de detecção e perfil de broker — essa é a dívida registrada na cláusula 5 e na lista de Consequências.
 - Não é o contrato de integridade do arquivo histórico — essa é a ADR-012.
 - Não é o formato do log estruturado — essa é a ADR-007.
+
+---
+
+**Nota de esclarecimento — status da dívida da §5 (detecção de broker)** (2026-05-25)
+
+A ADR-013 §5 e §Consequências registraram como dívida arquitetural a "nova ADR para detecção de broker e perfil estruturado, a ser proposta após o Slice 3 (Custom Symbol), com evidência empírica do que de fato varia entre brokers em mão". O Slice 3 e os subsequentes (4, 4.5, 5a, 5b, 6.1–6.3, 7, 8) foram fechados sem a dívida ser acionada. Esta nota registra o porquê e o gatilho de reabertura.
+
+**Status:** a dívida **permanece em aberto sem ação requerida**. Razões:
+
+1. **Variação entre brokers já absorvida pelo `ISymbol`/`IAccount`** (ADR-016). Ficha técnica do instrumento (digits, point, tickSize, volume*, stops/freeze, filling, currencies) e estado da conta (login, company, balance/equity, margin mode, trade mode) são consultados via interface injetada. Toda decisão downstream consome a interface; nenhuma cláusula condicional `if (broker == "X")` vive no código.
+2. **Variações de execução absorvidas pelo `CMksMt5Broker`** (ADR-017). Filling mode pré-detectado com fallback automático em `INVALID_FILL`, retry interno em retcodes retryable (REQUOTE/PRICE_CHANGED/PRICE_OFF), margin mode handling dual (netting/hedging). Estas são respostas a **comportamento observado** do broker, não a "perfil estruturado a priori".
+3. **Evidência empírica permanece em 1 broker.** O framework foi validado contra Exness demo (XAUUSDm). Sem rodada equivalente em segundo broker, qualquer "perfil estruturado" seria ficção. A §4 deste documento proíbe arquitetura no vazio.
+
+**Gatilho explícito de reabertura.** A dívida volta à fila como ADR concreta quando qualquer um destes acontecer:
+- Framework operar contra segundo broker (ICMarkets, XM, FTMO, qualquer outro) e divergência de comportamento for observada e documentada.
+- Caso de uso concreto exigir conhecimento prévio de propriedades do broker (ex.: estratégia que precisa decidir entre `OrderSendAsync` vs síncrono por broker, política de horário de sessão por broker, regras de margem específicas).
+- Adição da camada de detecção de broker virar pré-requisito de outra ADR aceita.
+
+Até lá, a §5 segue como registrada — a dívida existe, tem dono (a futura ADR), o gatilho está fixado, e o framework opera bem sob a regra "sem hardcode de broker, ficha técnica via interface".
+
+A ADR-013 não é alterada; esta nota registra o estado da dívida e o gatilho de reabertura.
 
 ---
 
@@ -1262,6 +1295,21 @@ O Custom Symbol no MKS-ULTIMATE é exclusivamente **camada de visualização hum
 - **Não cobre uso do CS por EAs do usuário fora do MKS-ULTIMATE.** Eles podem ler do CS — regra 1 vincula apenas código DENTRO do framework. Mas o usuário que fizer isso opera sob seu próprio risco de paridade.
 
 - **Armadilha conhecida — backtest do EA do usuário no Strategy Tester apontado para o CS.** O Strategy Tester do MT5 mantém seu próprio cache de séries históricas isolado do terminal real. Um EA backtestado no Strategy Tester apontando para o Custom Symbol `<symbol>.MKS_RKN<size>` **não vê os mesmos bricks** que o `.mksbk` da sessão real produziu — o tester pode regenerar a série OHLC sinteticamente a partir de ticks aproximados, ou simplesmente não ter dado. Esta ADR não impede esse uso, mas registra como **armadilha**: bricks como fonte de verdade para backtest são consumidos exclusivamente do `.mksbk` via leitor próprio (futuro), nunca do CS via Strategy Tester. Lição V5 #2 ("um único produtor de bricks") aplicada literalmente.
+
+---
+
+**Nota de esclarecimento — alcance da regra 1 (indicadores como visualização)** (2026-05-25)
+
+A regra 1 da ADR-020 lista "estratégia, indicador customizado, EA consumer" entre os agentes proibidos de ler o Custom Symbol via `iOpen`/`iClose`/`iHigh`/`iLow`/`iTime`/`CopyRates`. A redação ampla criou conflito aparente com `docs/INDICATORS.md` (catálogo de 5 indicadores customizados que rodam sobre o CS para visualização humana, lendo `close[]`/`high[]`/`low[]` no `OnCalculate`).
+
+O conflito é textual, não arquitetural. O objeto real da regra 1 é proteger contra a cadeia `Strategy → iCustom(indicator) → CS`, que recriaria o eixo 2 do `V5-POSTMORTEM` (múltiplos produtores de bricks alimentando a decisão da estratégia). Essa cadeia é fechada **pelo outro lado** pela `REGRAS.md` §1.9 — `iCustom` está explicitamente proibido em código de estratégia (tabela "Séries e indicadores"). Logo, indicadores rodando no chart do CS para olho humano não criam o risco que a regra 1 quer impedir.
+
+Esclarecimento operativo:
+- **"Indicador customizado" da ADR-020 §1 refere-se a indicador consumido por código de estratégia via `iCustom`** — esse caminho é proibido (pela REGRAS §1.9, não pela ADR-020 §1).
+- **Indicadores `.mq5` em `MQL5/Indicators/MKS-ULTIMATE/` rodando no chart do CS para visualização humana ficam fora do escopo da regra 1.** Eles leem o CS via API global do MQL5 — é onde o trabalho de visualização vive.
+- O dia em que estratégia precisar de RSI/MACD/etc. para decidir trade, ela calcula sobre `MksBrick` direto (consumindo `IRenkoSink::OnBrickClose`), não via `iCustom`. Trade-off de trabalho duplicado vs. paridade absoluta é resolvido a favor de paridade — quando a duplicação virar dor real, ADR futura pode introduzir família brick-driven (`IRenkoIndicator`).
+
+A ADR-020 não é alterada; esta nota registra que a regra 1 fica restrita ao caminho `Strategy → iCustom(indicator) → CS`, e que indicadores como visualização humana sobre o CS são uso aceito.
 
 ---
 

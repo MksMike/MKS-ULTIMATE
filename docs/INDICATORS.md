@@ -23,6 +23,12 @@ Indicadores que **não usam ATR mesmo no original** (RSI, MACD, EMA) seguem a fo
 
 ATR baseado em tempo real (do símbolo base via M1) é um caminho válido em tese mas exige mapeamento `triggerTime ↔ tempo real` por brick, que hoje não está exposto no CS. Quando entrar (mudança no `CMksCustomSymbolSink` para gravar `triggerTime` em `real_volume`, ADR a fazer), indicadores time-aware passam a ser possíveis. Até lá, brick-driven é o padrão fechado.
 
+### 1.1 Indicadores são camada de visualização — paridade pelo lado da estratégia
+
+Indicadores deste diretório leem o CS via API global do MQL5 (`iOpen`/`iClose`/`iHigh`/`iLow`/`CopyRates`) — é onde o trabalho de visualização vive. A nota de esclarecimento da ADR-020 (2026-05-25, em `docs/ARCHITECTURE.md` §3) restringe o alcance da regra 1 ao caminho `Strategy → iCustom(indicator) → CS`; indicadores como visualização humana sobre o CS ficam **fora** do escopo da regra 1.
+
+A paridade backtest/live da estratégia é protegida pelo lado da estratégia, não pelo lado do indicador: a `REGRAS.md` §1.9 (tabela de APIs proibidas em código de estratégia) lista `iCustom` como **proibido**. Estratégia que precisa de RSI/MACD/etc. calcula sobre `MksBrick` direto (consumindo `IRenkoSink::OnBrickClose`), não via `iCustom`. Quando o trabalho duplicado virar dor real, ADR futura pode introduzir família brick-driven (`IRenkoIndicator`) para reuso entre estratégias.
+
 ## 2. Estrutura
 
 Cada indicador vive como par de arquivos:

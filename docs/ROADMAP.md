@@ -183,48 +183,57 @@ Este documento define **o que construir e em que ordem**. Cada fase tem entregá
 
 ## Fase 5 — Trade Management
 
-**Status:** Não iniciada
+**Status:** Concluída
 
-**Nota (ADR-019):** A fase está sub-dividida em **5a (`CMksPositionSizer`)** e **5b (`CMksTradeManager`)**. Sequência real: **5a → Fase 6 → 5b**. Razão: o Risk Manager (Fase 6) consome o Sizer; construir o Risk antes do TradeManager faz a rede de segurança nascer antes do gatilho. Cláusula anti-precedente: outras sub-divisões de fase só são permitidas via ADR própria.
+**Nota (ADR-019):** A fase está sub-dividida em **5a (sizers)** e **5b (`CMksTradeManager`)**. Sequência real executada: **5a → Fase 6 → 5b**. Razão: o Risk Manager (Fase 6) consome o Sizer; construir o Risk antes do TradeManager faz a rede de segurança nascer antes do gatilho. Cláusula anti-precedente: outras sub-divisões de fase só são permitidas via ADR própria.
 
-**Entregáveis:**
-- `Core/Trade/CMksTradeManager.mqh` — gestão de trade aberto
-  - Break-even
-  - Trailing stop (start point + step)
-  - Partial close (em percentual, não em lot hardcoded)
-  - State machine explícita (evita re-executar ações)
-- `Core/Trade/CMksPositionSizer.mqh` — sizing plugável
-  - Fixed lot
-  - Percent risk
-  - ATR-adjusted
-  - Kelly fracionado (para referência, não recomendado como default)
+**Entregáveis (concluídos):**
+- `Core/Interfaces/IPositionSizer.mqh` — contrato `ComputeLots(slDistancePoints, lots&, err&) → bool`.
+- `Core/Trade/CMksFixedLotSizer.mqh` — lots fixos validados contra `VolumeMin/Max/Step` do símbolo (slice 5a).
+- `Core/Trade/CMksPercentRiskSizer.mqh` — lots calculados a partir de % do balance e distância do SL; floor para `VolumeStep` (slice 5a).
+- `Core/Trade/CMksTradeManager.mqh` — gestão de trade aberto (slice 5b):
+  - Break-even (gatilho + offset).
+  - Trailing stop (start point + step, ratchet — nunca afrouxa).
+  - Partial close (em percentual dos lots iniciais).
+  - State machine idempotente (re-executar `Update` não re-aplica ações).
+- `Core/Trade/CMksTradeJournal.mqh` — diário de trades + agregados (win rate, profit factor, gross/avg/largest, sequências); consumido pelo `CMksStressLabReport` (Fase 7).
+- Cobertura de testes: `Test_CMksPositionSizer.mq5`, `Test_CMksTradeManager.mq5`, `Test_CMksTradeJournal.mq5` no framework `Core/Testing/` (ADR-005).
 
-**Critério de saída:**
-- Unit tests para todas as combinações de BE + trail + partial
-- Sem `Sleep` bloqueante
-- Sem bifurcação live/backtest
+**Critério de saída:** atendido — testes cobrem combinações BE+trail+partial, zero `Sleep` bloqueante, zero bifurcação live/backtest.
 
-**Por que importa:** Gestão errada de trade transforma estratégia boa em perdedora e vice-versa. Precisa ser testável em isolamento.
+**Escopo reduzido (assumido):**
+- **`ATR-adjusted` sizer e `Kelly fracionado` sizer não foram implementados.** O eixo de tamanho dinâmico já está coberto no `CMksAtrBrickSizer` (tamanho do brick, ADR-018), e sizing por Kelly é estatística agressiva sem dados de retorno realizados ainda. Ficam para ADR futura quando estratégia rodando produzir histórico suficiente.
+
+**Limitações conhecidas (auditoria 2026-05-25):**
+- **`CMksTradeManager` + conta netting:** `positionId` em netting não identifica posição individual; partial close pode dessincronizar estado interno. Aceitável enquanto o pipeline operar em hedging; ADR explícita necessária se conta netting virar caso de uso.
+- **Auto-detach em fechamento externo (SL hit, manual close):** `IPositionBook` existe mas o `TradeManager` não o consulta para detectar que a posição sumiu do broker. Estado obsoleto possível em SL hit.
+
+**Por que importa:** Gestão errada de trade transforma estratégia boa em perdedora e vice-versa. Precisa ser testável em isolamento — e é, em testes do framework `Core/Testing`.
 
 ---
 
 ## Fase 6 — Risk Management em camadas
 
-**Status:** Não iniciada
+**Status:** Concluída
 
-**Nota (ADR-019):** Sub-dividida em três sub-slices **executados na mesma ordem**, apenas em commits/rodadas separadas: **6.1 Por trade** (SL/TP obrigatórios, max lots, limite via Sizer), **6.2 Por estratégia** (max posições simultâneas, exposure total), **6.3 Por conta** (daily loss limit, max drawdown, circuit breaker). A sub-divisão **não viola** a cláusula anti-precedente da ADR-019 porque não inverte ordem (todas vêm antes da Fase 7). Cumpre o critério de saída só quando 6.1, 6.2 e 6.3 estão fechados e o teste end-to-end passa.
+**Nota (ADR-019):** Sub-dividida em três sub-slices executados na ordem **6.1 → 6.2 → 6.3**: cada slice fechou camada própria no `CMksRiskManager` sem refator das anteriores. A sub-divisão **não violou** a cláusula anti-precedente da ADR-019 porque não inverteu ordem (todas vieram antes da Fase 7).
 
-**Entregáveis:**
-- `Core/Risk/CMksRiskManager.mqh` — middleware que toda `OrderRequest` atravessa antes de virar ordem real
-- Camadas:
-  - **Por trade:** SL/TP obrigatórios, tamanho máximo por trade
-  - **Por estratégia:** máximo de posições simultâneas, exposure total
-  - **Por conta:** daily loss limit, max drawdown, circuit breaker
-- Logging estruturado de toda rejeição de ordem pelo risk manager
+**Entregáveis (concluídos):**
+- `Core/Interfaces/IPositionBook.mqh` — contrato de leitura de estado (`OpenCount`, `TotalLots`), consumido pelas checagens da camada estratégia.
+- `Core/Position/CMksMt5PositionBook.mqh` — implementação real via API `PositionsTotal`/`PositionGet*`, filtrável por símbolo + magic.
+- `Core/Account/CMksAccountSnapshot.mqh` — stateful: rastreia `dayStartBalance` (rollover UTC) e `peakEquity` (monotônico) para alimentar camada Por Conta.
+- `Core/Risk/CMksRiskManager.mqh` — middleware com 3 construtores (trade only / trade+strategy / trade+strategy+account):
+  - **6.1 Por trade:** SL/TP obrigatórios (config), `maxLotsPerTrade`, limite vs `IPositionSizer`. Códigos 400–404.
+  - **6.2 Por estratégia:** `maxOpenPositions`, `maxTotalLots` via `IPositionBook`. Códigos 405–406.
+  - **6.3 Por conta:** `maxDailyLossPct`, `maxDrawdownPct`, `minEquityAbs` (circuit breaker) via `CMksAccountSnapshot`. Códigos 407–409.
+- `Core/Risk/CMksRiskGatedBroker.mqh` — decorator de `IBroker` que força toda `Send` a passar pelo `CMksRiskManager`. Eliminação estrutural de "esqueci de chamar o risk manager".
+- Logging estruturado de toda rejeição via `ILogger` injetado (`MKS_LOG_WARN`).
+- Cobertura de testes: `Test_CMksRiskManager.mq5`, `Test_CMksRiskGatedBroker.mq5`, `Test_CMksAccountSnapshot.mq5`.
 
-**Critério de saída:**
-- Cada camada testada isoladamente
-- Teste end-to-end: configurar limite, violar limite, verificar que trade é bloqueado com log claro
+**Critério de saída:** atendido — cada camada testada isoladamente; teste end-to-end (configurar limite → violar → trade bloqueado com log) coberto em `Test_CMksRiskGatedBroker`.
+
+**Limitações conhecidas (auditoria 2026-05-25):**
+- **`CMksRiskManager.CheckOrder` não chama `snapshot.Update()`.** Depende do EA chamar `Update()` no `OnTick`. Se o EA esquecer, `DayPnLPct`/`DrawdownPct` ficam congelados desde o último `Init()`. Fix barato (1 linha em `CheckOrder`) pendente.
 
 **Por que importa:** Foi a ausência disso que permitiu o V5 quebrar conta em 4 horas.
 
@@ -232,32 +241,40 @@ Este documento define **o que construir e em que ordem**. Cada fase tem entregá
 
 ## Fase 7 — StressLab
 
-**Status:** Não iniciada
+**Status:** Concluída — com limitações materiais documentadas (ver "Limitações conhecidas" abaixo)
 
-**Entregáveis:**
-- `StressLab/CStressLabEngine.mqh` — envolve o `CMksSimulatedBroker` e injeta condições adversas
-- Parâmetros ajustáveis por "nível de estresse":
-  - Spread multiplier (1x, 2x, 5x, 10x do spread real do broker)
-  - Slippage distribution (fixo, normal, cauda-pesada)
-  - Latência (média, variância, spikes)
-  - Taxa de rejeição (% de ordens que retornam erro)
-  - Taxa de requote
-  - Delay de preenchimento
-- Capacidade de rodar uma estratégia em múltiplos níveis de estresse e comparar resultados (tabela de sensibilidade)
+**Nota arquitetural:** O `CStressLabEngine.mqh` previsto não foi materializado. A arquitetura final dispensou um "engine" separado em favor de composição direta — o EA monta `CMksSimulatedBroker` → `CMksStressLabBroker` (wrapper) e roda a estratégia. Métricas agregadas em `CMksStressLabReport` capturadas por execução. Trade-off: simplicidade arquitetural vs. ausência de orquestração automatizada multi-nível (operador roda N corridas manualmente e agrega).
 
-**Critério de saída:**
-- Pipeline: estratégia → backtest normal → stress leve → stress médio → stress alto → relatório comparativo
-- Documentação de cada parâmetro: o que significa, como medir no broker real, como setar
+**Entregáveis (concluídos):**
+- `StressLab/CMksRandom.mqh` — RNG seedável (LCG Numerical Recipes), substituto canônico para `MathRand` (ADR-024 §6). Suporta uniform, gaussiana (Box-Muller), bernoulli.
+- `StressLab/CMksStressParams.mqh` — 5 presets escalonados: `MksStressNone()`, `MksStressLight()`, `MksStressMedium()`, `MksStressHigh()`, `MksStressNightmare()`.
+- `StressLab/CMksStressLabBroker.mqh` — wrapper de `IBroker` que injeta:
+  - **Rejeição pré-execução** (probabilística via `rejectionProb`).
+  - **Loop de requote** (até `maxRequotes` tentativas com `requoteProb`).
+  - **Slippage adverso** ao fill price (distribuição `FIXED` ou `NORMAL`, com clamp em zero — "stress só piora").
+- `StressLab/CMksStressLabReport.mqh` — snapshot agregado de uma corrida (métricas do StressLabBroker + do `CMksTradeJournal`); `MksStressLabPrintComparison` produz tabela ASCII comparativa entre níveis com marcador de degradação.
+- Cobertura de testes: `Test_CMksRandom.mq5`, `Test_CMksStressLabBroker.mq5`, `Test_CMksStressLabReport.mq5`.
 
-**Por que importa:** Essa fase é o que separa este framework de qualquer outro. Backtests "bonitos" passam; backtests que sobrevivem ao StressLab são confiáveis.
+**Critério de saída:** atendido — pipeline `estratégia → stress leve/médio/alto → relatório comparativo` é operacionalmente executável; cada parâmetro está documentado em `CMksStressParams.mqh`.
+
+**Limitações conhecidas (auditoria 2026-05-25) — pré-requisito para a Fase 9:**
+- **Latência declarada como "informativa em v1" e NÃO aplicada ao fill price.** `latencyMeanMs`/`latencyStdevMs` são sorteados mas nunca afetam o preço de execução. Em live, latência alta significa que o mid se moveu entre `Send` e fill — o StressLab não modela isso. Estratégias de scalping vão parecer impecáveis sob `MksStressNightmare` e quebrar em live. Recriação sutil do eixo 3 do V5-POSTMORTEM (custo modelado, preço de fill não tocado). Resolver antes da Fase 9.
+- **`spreadMultiplier` mal composto com `CMksCostModel`.** O multiplicador é tratado como "+(mult−1) pontos extras de slippage", não como fator que multiplica o `spreadPoints` do CostModel subjacente. `MksStressNightmare` (`spreadMultiplier=10`) adiciona apenas 9 pontos extras em vez de 10x do half-spread real. Resolver antes da Fase 9.
+- **`CMksSimulatedBroker` não dispara SL/TP automaticamente** (limitação herdada da Fase 4, não da Fase 7) — SL/TP são armazenados na posição mas nunca causam fechamento. Sem auto-close no broker simulado, o "stress test" não captura o evento mais frequente em live (stop hit). Resolver antes da Fase 9.
+
+**Por que importa:** Essa fase é o que separa este framework de qualquer outro. Backtests "bonitos" passam; backtests que sobrevivem ao StressLab são confiáveis — **desde que o StressLab estresse o que precisa estressar**. Hoje, três pontos críticos não são estressados; correção é pré-requisito da Fase 9.
 
 ---
 
 ## Fase 8 — Logging e observabilidade
 
-**Status:** Parcialmente concluída
+**Status:** Concluída
 
-**Nota:** `CMksLogger` (`Core/Log/CMksLogger.mqh`) materializado via ADR-007 e em uso no `Producer.mq5` desde slice3b. Cobre: formato JSON-line, níveis TRACE/DEBUG/INFO/WARN/ERROR + META, output dual (Print + arquivo), header de sessão com proveniência (broker/account/symbol/digits/EA/sessionStartMsc), timestamp ISO 8601 UTC, contexto livre via `ctxJson` parametrizável. Pendente para Concluir: **ferramenta de log-diff** que compara um log de backtest com um de live e aponta a primeira divergência (último item do critério de saída abaixo).
+**Nota:** `CMksLogger` (`Core/Log/CMksLogger.mqh`) materializado via ADR-007 e em uso no `Producer.mq5`, `Replayer.mq5` e `TickRecorder.mq5`. Cobre: formato JSON-line, níveis TRACE/DEBUG/INFO/WARN/ERROR + META, output dual (Print + arquivo), header de sessão com proveniência (broker/account/symbol/digits/EA/sessionStartMsc), timestamp ISO 8601 UTC, contexto livre via `ctxJson` parametrizável. A ferramenta de log-diff foi materializada como `tools/verify-parity.ps1` (slice 24f) — compara linhas de decisão do builder após normalização (remove `ts` e `sessionStartMsc` que divergem inerentemente entre sessões). Quando estratégia entrar (Fase 9+), o filtro do diff expande para incluir `"decision":"buy/sell/close"` etc.
+
+**Limitações conhecidas (auditoria 2026-05-25):**
+- **Timestamp com precisão de segundo** (`.000Z` hardcoded) — MQL5 não expõe `TimeCurrent` com millis. Solução barata pendente: `Log()` aceitar `tickMsc` como overload para precisão quando o caller tem tick à mão.
+- **`FileFlush` por linha** — durável em crash, mas custoso em volume. Aceitável enquanto a regra "hot path mudo" da ADR-007 valer.
 
 **Entregáveis:**
 - `Core/Log/CMksLogger.mqh` — logger estruturado
