@@ -31,6 +31,7 @@ Checkpoints **NÃO estão na ordem de leitura padrão** definida no `CLAUDE.md` 
 | 2026-05-23 | [`CHECKPOINT-2026-05-23-night.md`](CHECKPOINT-2026-05-23-night.md) | Fase 7 StressLab (7a + 7b), ADR-008 aceita; §4 Decisões Pendentes do `ARCHITECTURE.md` vazia pela primeira vez |
 | 2026-05-25 | [`CHECKPOINT-2026-05-25.md`](CHECKPOINT-2026-05-25.md) | Sessão atravessando 24→25/05 — auditoria profunda P0/P1/P2/P3 + pipeline ADR-024 completo em código (slices 24c-24f), pronto para validação empírica |
 | 2026-05-25 | [`CHECKPOINT-2026-05-25-audit.md`](CHECKPOINT-2026-05-25-audit.md) | Auditoria completa de 10 pilares + Lote A (sync documental) + Lote B2/B3 (notas ADR-020/013); B1 suspenso após dono apontar padrão de 3 erros analíticos consecutivos. Próximo passo fixado: validação empírica E2E. |
+| 2026-05-25 | [`CHECKPOINT-2026-05-25-night.md`](CHECKPOINT-2026-05-25-night.md) | Tentativa de validação empírica ADR-024 (bloqueada por holiday US/UK) + 2 bugs descobertos in-vivo e corrigidos (Replayer PathStem, Producer histDays=0) + auditoria forense 3 frentes (median ok, "Pts" enganoso, ATR sizer ocioso) + refactor Producer expondo `CMksAtrBrickSizer` via input. PreloadHistory + DumpMksTick adicionados. |
 
 ---
 
