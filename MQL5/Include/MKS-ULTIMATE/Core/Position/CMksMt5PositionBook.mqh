@@ -60,6 +60,29 @@ public:
       return sum;
    }
 
+   // Itera posições MT5 procurando ticket == positionId no escopo
+   // configurado (símbolo + magic). Em conta hedging do MT5, ticket
+   // coincide com positionId. Custo O(N) onde N = total de posições da
+   // conta — aceitável (N tipicamente << 10).
+   bool IsOpen(ulong positionId) const override
+   {
+      int total = PositionsTotal();
+      for(int i = 0; i < total; i++)
+      {
+         ulong ticket = PositionGetTicket(i);
+         if(ticket == 0) continue;
+         if(ticket != positionId) continue;
+         // Aplica escopo (símbolo + magic) — posição existe mas fora do
+         // escopo conta como "não nossa" → false (TradeManager não
+         // deveria estar attached numa posição fora do escopo).
+         if(PositionGetString(POSITION_SYMBOL) != m_symbol) return false;
+         if(m_magic >= 0 && PositionGetInteger(POSITION_MAGIC) != m_magic)
+            return false;
+         return true;
+      }
+      return false;
+   }
+
    string Symbol() const { return m_symbol; }
    long   Magic()  const { return m_magic; }
 };

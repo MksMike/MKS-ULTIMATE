@@ -23,6 +23,7 @@
 #include <MKS-ULTIMATE/Core/Interfaces/IBroker.mqh>
 #include <MKS-ULTIMATE/Core/Interfaces/ISymbol.mqh>
 #include <MKS-ULTIMATE/Core/Interfaces/ILogger.mqh>
+#include <MKS-ULTIMATE/Core/Interfaces/IPositionBook.mqh>
 #include <MKS-ULTIMATE/Core/Types/Tick.mqh>
 #include <MKS-ULTIMATE/Core/Types/OrderRequest.mqh>
 #include <MKS-ULTIMATE/Core/Types/ExecutionResult.mqh>
@@ -86,6 +87,7 @@ struct MksTradeManagerStep
    bool beApplied;     // BE foi aplicado neste Update (transição)
    bool partialDone;   // partial foi executada neste Update
    bool trailUpdated;  // SL foi movido pelo trailing neste Update
+   bool autoDetached;  // posicao sumiu do book — auto-detach (ADR-027 §7.3 + Fase 9 prep)
    int  brokerCalls;   // total de chamadas a broker (Modify+Close)
 
    MksTradeManagerStep()
@@ -93,6 +95,7 @@ struct MksTradeManagerStep
       beApplied    = false;
       partialDone  = false;
       trailUpdated = false;
+      autoDetached = false;
       brokerCalls  = 0;
    }
 };
@@ -100,9 +103,10 @@ struct MksTradeManagerStep
 class CMksTradeManager
 {
 private:
-   IBroker *m_broker;
-   ISymbol *m_symbol;
-   ILogger *m_logger;
+   IBroker      *m_broker;
+   ISymbol      *m_symbol;
+   ILogger      *m_logger;
+   IPositionBook *m_book;   // opcional — habilita auto-detach quando != NULL
    CMksTradeManagerParams m_params;
 
    // Estado da posição vinculada
@@ -175,14 +179,21 @@ private:
    }
 
 public:
-   // broker e symbol são obrigatorios. logger opcional.
+   // broker e symbol são obrigatorios. logger e book são opcionais.
+   // book habilita auto-detach: em cada Update, se m_positionId não
+   // estiver mais aberto no book, o manager auto-detacha sem chamar
+   // Modify/Close sobre positionId fantasma. Necessário com brokers
+   // que auto-fecham por SL/TP (CMksSimulatedBroker pós-ADR-027 §7.3,
+   // ou qualquer broker live onde stop hit é executado pelo servidor).
    CMksTradeManager(IBroker *broker, ISymbol *symbol,
                     const CMksTradeManagerParams &params,
-                    ILogger *logger = NULL)
+                    ILogger *logger = NULL,
+                    IPositionBook *book = NULL)
    {
       m_broker = broker;
       m_symbol = symbol;
       m_logger = logger;
+      m_book   = book;
       m_params = params;
       m_attached    = false;
       m_positionId  = 0;
@@ -288,6 +299,20 @@ public:
    {
       MksTradeManagerStep step;
       if(!m_attached) return step;
+
+      // Auto-detach: se book foi injetado e posição sumiu (SL/TP hit,
+      // close manual, auto-close do broker simulado), zera o vínculo
+      // e retorna sem chamar broker. Evita Modify/Close em positionId
+      // fantasma.
+      if(m_book != NULL && !m_book.IsOpen(m_positionId))
+      {
+         ulong closedId = m_positionId;
+         m_attached = false;
+         step.autoDetached = true;
+         LogInfo("auto-detach: posição fechada externamente",
+                 StringFormat("\"pid\":%I64u", closedId));
+         return step;
+      }
 
       double profit = ProfitPoints(tick);
 

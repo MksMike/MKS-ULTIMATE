@@ -898,6 +898,52 @@ void Test_Risk_CheckOrder_NoLoggerNoFault()
                      (int)err.code, "code correto");
 }
 
+//==================================================================
+// CheckOrder refresh proativo do snapshot (Fase 9 prep)
+//==================================================================
+
+// Garante que CheckOrder rejeita por daily loss mesmo se o EA esquecer
+// de chamar snapshot.Update() entre os ticks. Pré-Fase 9 prep: o EA da
+// Fase 9 não deve perder essa proteção por bug de esquecimento.
+void Test_Risk_CheckOrder_AutoUpdatesSnapshotForFreshness()
+{
+   CMksFakeAccount acc; CMksFakeClock clk;
+   CMksAccountSnapshot snap(GetPointer(acc), GetPointer(clk));
+   SetupSnapshot(acc, clk, 10000.0, 10000.0, snap);
+
+   // 5% de daily loss → -500 USD → equity abaixo de 9500 rejeita.
+   CMksRiskTradeParams p;
+   CMksRiskStrategyParams sp;
+   CMksRiskAccountParams ap;
+   ap.maxDailyLossPct = 5.0;
+   CMksRiskManager risk(p, sp, ap, NULL, GetPointer(snap));
+
+   // EA "esquece" de chamar snap.Update() — força equity baixa direto
+   // no account fake. snapshot ainda enxerga equity=10000 stale.
+   acc.SetEquity(9400.0);
+
+   MksError err;
+   bool result = risk.CheckOrder(MakeReq(0.1, 100.0), err);
+   MKS_ASSERT_FALSE(result, "CheckOrder rejeita por daily loss usando equity fresca");
+   MKS_ASSERT_EQ_INT((int)MKS_ERR_RISK_REJECTED_DAILY_LOSS, (int)err.code,
+                     "code = DAILY_LOSS (snapshot foi atualizado pelo CheckOrder)");
+}
+
+void Test_Risk_CheckOrder_AutoUpdateNoOpWithoutSnapshot()
+{
+   // Sem snapshot injetado, CheckOrder não tenta atualizar nada — nenhum
+   // crash, comportamento legado preservado.
+   CMksRiskTradeParams p;
+   CMksRiskStrategyParams sp;
+   CMksRiskAccountParams ap;
+   // ap inativo (todos os limites em 0)
+   CMksRiskManager risk(p, sp, ap, NULL, NULL);
+
+   MksError err;
+   MKS_ASSERT_TRUE(risk.CheckOrder(MakeReq(0.1, 100.0), err),
+                   "CheckOrder aceita sem snapshot e sem crash");
+}
+
 //+------------------------------------------------------------------+
 void OnStart()
 {
@@ -970,6 +1016,9 @@ void OnStart()
    MKS_RUN(Test_Risk_Acct_DrawdownBeforeMinEquity);
 
    MKS_RUN(Test_Risk_CheckOrder_NoLoggerNoFault);
+
+   MKS_RUN(Test_Risk_CheckOrder_AutoUpdatesSnapshotForFreshness);
+   MKS_RUN(Test_Risk_CheckOrder_AutoUpdateNoOpWithoutSnapshot);
 
    g_mksTestRunner.Summary();
 }

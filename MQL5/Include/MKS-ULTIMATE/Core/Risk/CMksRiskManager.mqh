@@ -266,6 +266,13 @@ public:
    // como WARN.
    bool CheckOrder(const MksOrderRequest &req, MksError &err)
    {
+      // Refresh proativo do snapshot antes das checagens Por Conta —
+      // garante que DayPnLPct/DrawdownPct/Equity sejam computados
+      // sobre balance e equity correntes, não congelados desde o
+      // último Init/Update do EA. Idempotente (snapshot.Update já
+      // trata rollover de dia + peak monotônico internamente).
+      if(m_snapshot != NULL) m_snapshot.Update();
+
       // 1. SL obrigatório
       if(m_params.requireSl && req.slPoints <= 0.0)
       {

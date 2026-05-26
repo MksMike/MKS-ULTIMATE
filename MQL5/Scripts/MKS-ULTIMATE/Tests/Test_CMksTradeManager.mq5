@@ -18,6 +18,7 @@
 #include <MKS-ULTIMATE/Core/Testing/Asserts.mqh>
 #include <MKS-ULTIMATE/Core/Testing/Mocks/CMksRecordingBroker.mqh>
 #include <MKS-ULTIMATE/Core/Testing/Mocks/CMksFakeSymbol.mqh>
+#include <MKS-ULTIMATE/Core/Testing/Mocks/CMksFakePositionBook.mqh>
 #include <MKS-ULTIMATE/Core/Types/Tick.mqh>
 #include <MKS-ULTIMATE/Core/Types/Error.mqh>
 
@@ -468,6 +469,82 @@ void Test_TM_BePartialTrailAllInOneTick()
    MKS_ASSERT_EQ_INT(1, br.CloseCount(),  "1 Close (partial)");
 }
 
+//==================================================================
+// Auto-detach via IPositionBook (Fase 9 prep + ADR-027 §7.3)
+//==================================================================
+
+void Test_TM_AutoDetach_WhenPositionClosedExternally()
+{
+   // Book injetado + posição marcada como fechada → Update auto-detacha
+   // sem chamar broker e sinaliza autoDetached na step.
+   CMksRecordingBroker br;
+   CMksFakeSymbol sym; sym.SetPoint(POINT_XAU);
+   CMksFakePositionBook book;
+   CMksTradeManagerParams p;
+   p.beEnabled = true; p.beActivationPoints = 50.0; p.beOffsetPoints = 5.0;
+   p.trailEnabled = true; p.trailStartPoints = 100.0; p.trailStepPoints = 30.0;
+   CMksTradeManager tm(GetPointer(br), GetPointer(sym), p, NULL, GetPointer(book));
+   tm.Attach(POS_ID, MKS_ORDER_BUY, ENTRY_BUY, LOTS_INIT,
+             ENTRY_BUY - 100*POINT_XAU, ENTRY_BUY + 200*POINT_XAU);
+
+   // Tick que normalmente dispararia BE + trail (lucro 120pts).
+   MksTick t = TickFromPoints(ENTRY_BUY, 120.0, MKS_ORDER_BUY, POINT_XAU);
+
+   // Broker fechou a posição (ex.: SL/TP auto-trigger do CMksSimulatedBroker).
+   book.MarkClosed(POS_ID);
+
+   MksTradeManagerStep step = tm.Update(t);
+   MKS_ASSERT_TRUE(step.autoDetached, "step.autoDetached marcado");
+   MKS_ASSERT_FALSE(step.beApplied,    "BE NÃO disparou (posição já foi)");
+   MKS_ASSERT_FALSE(step.trailUpdated, "trail NÃO disparou");
+   MKS_ASSERT_EQ_INT(0, step.brokerCalls, "zero chamadas de broker");
+   MKS_ASSERT_EQ_INT(0, br.ModifyCount(), "broker NÃO recebeu Modify");
+   MKS_ASSERT_EQ_INT(0, br.CloseCount(),  "broker NÃO recebeu Close");
+   MKS_ASSERT_FALSE(tm.IsAttached(), "manager auto-detachou");
+}
+
+void Test_TM_AutoDetach_SubsequentUpdateIsNoOp()
+{
+   // Após auto-detach, próximos Update voltam ao no-op (não pollam o book
+   // de novo, não logam, não fazem nada).
+   CMksRecordingBroker br;
+   CMksFakeSymbol sym; sym.SetPoint(POINT_XAU);
+   CMksFakePositionBook book;
+   CMksTradeManagerParams p;
+   CMksTradeManager tm(GetPointer(br), GetPointer(sym), p, NULL, GetPointer(book));
+   tm.Attach(POS_ID, MKS_ORDER_BUY, ENTRY_BUY, LOTS_INIT, 0, 0);
+   book.MarkClosed(POS_ID);
+
+   MksTradeManagerStep step1 = tm.Update(TickFromPoints(ENTRY_BUY, 50, MKS_ORDER_BUY, POINT_XAU));
+   MKS_ASSERT_TRUE(step1.autoDetached, "1o Update auto-detacha");
+
+   MksTradeManagerStep step2 = tm.Update(TickFromPoints(ENTRY_BUY, 60, MKS_ORDER_BUY, POINT_XAU));
+   MKS_ASSERT_FALSE(step2.autoDetached, "2o Update já não auto-detacha");
+   MKS_ASSERT_EQ_INT(0, step2.brokerCalls, "2o Update no-op total");
+}
+
+void Test_TM_NoBook_LegacyBehaviorPreserved()
+{
+   // Sem book → comportamento legado: TradeManager confia que posição
+   // segue aberta, chama broker mesmo se ela tiver sumido. Garante que
+   // código pré-existente que não conhece IPositionBook continua
+   // funcionando idêntico ao antes da mudança.
+   CMksRecordingBroker br;
+   CMksFakeSymbol sym; sym.SetPoint(POINT_XAU);
+   CMksTradeManagerParams p;
+   p.beEnabled = true; p.beActivationPoints = 50.0; p.beOffsetPoints = 5.0;
+   // Sem book — usa overload de 4 args (logger=NULL).
+   CMksTradeManager tm(GetPointer(br), GetPointer(sym), p);
+   tm.Attach(POS_ID, MKS_ORDER_BUY, ENTRY_BUY, LOTS_INIT,
+             ENTRY_BUY - 100*POINT_XAU, ENTRY_BUY + 200*POINT_XAU);
+
+   MksTick t = TickFromPoints(ENTRY_BUY, 60.0, MKS_ORDER_BUY, POINT_XAU);
+   MksTradeManagerStep step = tm.Update(t);
+   MKS_ASSERT_TRUE(step.beApplied, "BE aplica (sem book = legado)");
+   MKS_ASSERT_FALSE(step.autoDetached, "autoDetached fica false sempre sem book");
+   MKS_ASSERT_EQ_INT(1, br.ModifyCount(), "broker recebeu Modify normal");
+}
+
 //+------------------------------------------------------------------+
 void OnStart()
 {
@@ -503,6 +580,10 @@ void OnStart()
 
    MKS_RUN(Test_TM_BeBeforeTrailInSameTick);
    MKS_RUN(Test_TM_BePartialTrailAllInOneTick);
+
+   MKS_RUN(Test_TM_AutoDetach_WhenPositionClosedExternally);
+   MKS_RUN(Test_TM_AutoDetach_SubsequentUpdateIsNoOp);
+   MKS_RUN(Test_TM_NoBook_LegacyBehaviorPreserved);
 
    g_mksTestRunner.Summary();
 }
