@@ -353,6 +353,44 @@ A ADR-011 não é alterada; esta nota registra a regra de borda que a §3 não c
 
 ---
 
+**Nota de esclarecimento — premissa do limiar K e cenário de `lastClose` stale** (2026-05-26)
+
+A ADR-011 §regra 4 estabelece o limiar K como "guarda de corrupção" e afirma que "um tick que cruza um número muito grande de thresholds no XAUUSD é quase certamente um tick corrompido, não um movimento real". A regra está correta em princípio, mas a premissa "tick corrompido é a única causa de M > K" se mostrou **incompleta** na validação empírica de 2026-05-26.
+
+**Cenário não previsto pela ADR:**
+
+O `m_lastClose` do builder pode ficar **stale** em relação ao mid corrente quando há descontinuidade temporal entre o último brick emitido e o próximo tick a ser processado — descontinuidade essa que pode ter causa **legítima**, não corrupção. Dois subcenários observados:
+
+1. **Fill histórico + tempo offline + S pequeno:** o Producer roda fill histórico de N dias, processa milhões de ticks, e o último brick fecha em algum momento do passado. Entre o fim do fill e o primeiro tick live, o mercado moveu legitimamente — em XAU, ~5-20 USD em algumas horas é normal. Com S pequeno (1 USD) e K=20, basta o mercado mover 21 USD para que `M = 21 > K = 20` no primeiro tick live.
+
+2. **Restart após pausa longa em mercado volátil:** equivalente em estrutura — operador para o EA, mercado anda, religa o EA, primeiro tick live aciona M > K contra `m_lastClose` herdado.
+
+**Consequência operacional do comportamento atual:**
+
+Quando M > K, o builder retorna `MksError` mas **não atualiza `m_lastClose`** (decisão correta para evitar absorver dado lixo de tick corrompido). Em corrupção isolada (1 tick outlier), o próximo tick legítimo está perto do `m_lastClose` antigo e a operação volta ao normal sozinha. **Mas no cenário de gap estrutural, os próximos ticks legítimos continuam distantes de `m_lastClose`** — todos rejeitados pelo mesmo M > K. **O builder fica travado permanentemente** até o operador intervir.
+
+**Distinção entre os dois casos:**
+
+| Causa | Frequência | Comportamento ideal |
+|---|---|---|
+| **Tick corrompido isolado** | 1 tick, próximos ticks legítimos perto do `m_lastClose` | Rejeitar + manter `m_lastClose` (recuperação espontânea no próximo tick) |
+| **Gap estrutural / lastClose stale** | N ticks consecutivos com mids próximos entre si mas distantes do `m_lastClose` | Reconhecer que é gap legítimo + reanchorar `m_lastClose = mid` |
+
+O builder atual não distingue: trata os dois casos como corrupção.
+
+**Mitigação operacional (validada na sessão de 2026-05-26):**
+
+- **`InpHistoricalFillDays = 0`** elimina o cenário 1 estruturalmente: builder começa do zero, `m_lastClose` = primeiro tick live, nunca há `lastClose` stale. **Esta é a configuração correta para sessões de paridade canônica (ADR-024) e para qualquer operação onde o objetivo é capturar live + replay determinístico.**
+- **Dimensionar K para cobrir o gap esperado:** se for usado `InpHistoricalFillDays > 0`, `K` precisa ser dimensionado de modo que `K · (1-PO) · S` cubra o **maior gap razoável** entre fim-do-fill e tick-live. Heurística para XAU: 3× o ATR diário típico em USD (≈ 100 USD), dividido por `(1-PO) · S`. Com S=1 e PO=0 (classic), `K ≥ 100`. Com S=3, `K ≥ 33`.
+
+**Refino arquitetural pendente (registrado como follow-up):**
+
+O builder pode ganhar **recovery inteligente** que distingue os dois casos via padrão observado: se há **N rejeições consecutivas** com mids dentro de **variância baixa entre si**, conclui-se gap legítimo (não corrupção de 1 tick isolado), e o builder reanchora `m_lastClose = mid` com warning explícito. Isso preserva a proteção da §regra 4 contra corrupção isolada (1 tick rejeitado não dispara recovery), mas evita o travamento permanente do cenário de gap estrutural. A implementação concreta — qual N, qual variância, qual janela — é decisão da próxima ADR que abrir esta porta. Por ora a regra 4 permanece literalmente como está, e a mitigação é operacional (`fillDays=0` ou K dimensionado).
+
+A ADR-011 não é alterada; esta nota registra a categoria de causa que a premissa da §regra 4 não cobriu e a mitigação operacional verificada.
+
+---
+
 ### ADR-006: Tratamento de tick inválido no RenkoBuilder
 
 **Data:** 2026-05-18

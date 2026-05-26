@@ -76,9 +76,9 @@ input double InpAtrMinSize            = 0.0;   // Clamp inferior (0 = sem limite
 input double InpAtrMaxSize            = 1e18;  // Clamp superior
 
 input group "=== Histórico / Live ==="
-input int    InpHistoricalFillDays    = 30;    // Histórico (dias). 0 = só live.
+input int    InpHistoricalFillDays    = 30;    // Histórico (dias). 0 = só live (recomendado p/ paridade ADR-024).
 input int    InpInvalidTickLimit      = 10;    // L: ticks inválidos consecutivos antes de halt (ADR-006)
-input int    InpThresholdLimit        = 20;    // K: máx thresholds em um tick (ADR-011)
+input int    InpThresholdLimit        = 20;    // K: máx thresholds num tick (ADR-011 + nota 2026-05-26 — dimensionar p/ cobrir maior gap entre fim-do-fill e tick-live; com fillDays=0, K=20 OK; com fillDays>0 e S pequeno, considerar K ≥ 100/S)
 
 input group "=== Custom Symbol ==="
 input bool   InpShowWicksInCS         = false; // Mostrar wicks de excursão no CS (ADR-022 §3)
