@@ -1,0 +1,46 @@
+---
+@document: docs/CHECKPOINTS.md
+@project: MKS-ULTIMATE
+@purpose: Índice cronológico dos checkpoints de sessão (handoffs entre chats)
+@audience: Próxima sessão (humano + IA) que precise rastrear evolução histórica
+---
+
+# MKS-ULTIMATE — Índice de Checkpoints
+
+Cada checkpoint é o **handoff de uma sessão** (humano + IA) para a próxima. São registros datados do que mudou em cada ciclo de trabalho — **não fontes da verdade sobre o estado atual**.
+
+**Regra:** CHECKPOINT é guia, código é verdade. Para o estado canônico do projeto consulte, em ordem, `docs/Projeto.md`, `docs/ROADMAP.md`, `docs/ARCHITECTURE.md` e o `git log`. Checkpoints respondem *"como o projeto chegou ao estado de hoje?"*, não *"qual é o estado de hoje?"*.
+
+Checkpoints **NÃO estão na ordem de leitura padrão** definida no `CLAUDE.md` — só são consultados sob demanda histórica.
+
+---
+
+## Cronologia
+
+| Data | Checkpoint | Marco |
+|---|---|---|
+| 2026-05-20 | [`CHECKPOINT-2026-05-20.md`](CHECKPOINT-2026-05-20.md) | Slice 1 fechado — motor `CMksRenkoBuilder` + testes inline + tipos Tick/Brick/Error |
+| 2026-05-20 | [`CHECKPOINT-2026-05-20-slice2.md`](CHECKPOINT-2026-05-20-slice2.md) | Slice 2 — validação do builder sobre ticks reais (`CopyTicksRange`), gap de fim de semana absorvido |
+| 2026-05-20 | [`CHECKPOINT-2026-05-20-slice3a.md`](CHECKPOINT-2026-05-20-slice3a.md) | Slice 3a — formato binário `.mksbk` v1 + serializador + golden file test |
+| 2026-05-21 | [`CHECKPOINT-2026-05-21-slice3b.md`](CHECKPOINT-2026-05-21-slice3b.md) | Slice 3b — EA `Producer.mq5` fundido (Builder + Sizer + Writer + Custom Symbol); ADR-014 aceita |
+| 2026-05-22 | [`CHECKPOINT-2026-05-22.md`](CHECKPOINT-2026-05-22.md) | Pós-validação ADR-005 — framework de teste em `Core/Testing/`, 4 suítes migradas |
+| 2026-05-22 | [`CHECKPOINT-2026-05-22-adr005.md`](CHECKPOINT-2026-05-22-adr005.md) | ADR-005 validada empiricamente no MT5 (5 scripts, 0 erros, 0 warnings) |
+| 2026-05-22 | [`CHECKPOINT-2026-05-22-cs.md`](CHECKPOINT-2026-05-22-cs.md) | Slices 5a + 6.1 abertos; Custom Symbol completo via ADRs 020/021/022 |
+| 2026-05-23 | [`CHECKPOINT-2026-05-23.md`](CHECKPOINT-2026-05-23.md) | Painel UX `CMksProgressPanel` SaaS Navy + refactor do Producer (`OnInit` → `OnTimer` em chunks); ADR-023 registrada como Proposta |
+| 2026-05-23 | [`CHECKPOINT-2026-05-23-saturday.md`](CHECKPOINT-2026-05-23-saturday.md) | ADR-024 aceita + slices 24a/b/c; Fase 5b + 6.2 + 6.3 fechadas — toda a ADR-019 materializada |
+| 2026-05-23 | [`CHECKPOINT-2026-05-23-night.md`](CHECKPOINT-2026-05-23-night.md) | Fase 7 StressLab (7a + 7b), ADR-008 aceita; §4 Decisões Pendentes do `ARCHITECTURE.md` vazia pela primeira vez |
+| 2026-05-25 | [`CHECKPOINT-2026-05-25.md`](CHECKPOINT-2026-05-25.md) | Sessão atravessando 24→25/05 — auditoria profunda P0/P1/P2/P3 + pipeline ADR-024 completo em código (slices 24c-24f), pronto para validação empírica |
+| 2026-05-25 | [`CHECKPOINT-2026-05-25-audit.md`](CHECKPOINT-2026-05-25-audit.md) | Auditoria completa de 10 pilares + Lote A (sync documental) + Lote B2/B3 (notas ADR-020/013); B1 suspenso após dono apontar padrão de 3 erros analíticos consecutivos. Próximo passo fixado: validação empírica E2E. |
+| 2026-05-25 | [`CHECKPOINT-2026-05-25-night.md`](CHECKPOINT-2026-05-25-night.md) | Tentativa de validação empírica ADR-024 (bloqueada por holiday US/UK) + 2 bugs descobertos in-vivo e corrigidos (Replayer PathStem, Producer histDays=0) + auditoria forense 3 frentes (median ok, "Pts" enganoso, ATR sizer ocioso) + refactor Producer expondo `CMksAtrBrickSizer` via input. PreloadHistory + DumpMksTick adicionados. |
+
+---
+
+## Como usar
+
+- **Início de sessão nova:** **NÃO ler checkpoints por default**. Seguir a ordem de leitura do `CLAUDE.md` (Projeto → REGRAS → ROADMAP → ARCHITECTURE → V5-POSTMORTEM → PROTOCOLOS → CHANGELOG → TOM-E-CHATS). O estado atual do projeto deriva desses, não dos checkpoints.
+- **Sob demanda histórica:** se a conversa referencia "o que fizemos no slice X" ou "quando aceitamos a ADR Y", abrir o checkpoint correspondente da tabela acima.
+- **Auditoria de evolução:** ler em ordem cronológica para ver como o projeto chegou ao estado atual.
+
+## Convenção
+
+Novos checkpoints seguem o naming `CHECKPOINT-YYYY-MM-DD[-suffix].md` no diretório `docs/`. Esta tabela é atualizada a cada novo checkpoint criado.

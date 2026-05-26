@@ -35,6 +35,8 @@
 #include <MKS-ULTIMATE/Core/Data/CMksTickFileReader.mqh>
 #include <MKS-ULTIMATE/Core/Data/CMksBrickFileWriter.mqh>
 #include <MKS-ULTIMATE/Core/Data/CMksBrickWriterSink.mqh>
+#include <MKS-ULTIMATE/Core/Output/CMksMultiSink.mqh>
+#include <MKS-ULTIMATE/Core/Output/CMksAuditLogSink.mqh>
 #include <MKS-ULTIMATE/Core/Clock/CMksReplayClock.mqh>
 #include <MKS-ULTIMATE/Core/RenkoBuilder/CMksRenkoBuilder.mqh>
 #include <MKS-ULTIMATE/Core/RenkoBuilder/CMksFixedBrickSizer.mqh>
@@ -61,6 +63,7 @@ input int    InpThresholdLimit      = 20;  // K (ADR-011)
 input group "=== Output ==="
 input string InpOutputMksbkPath     = "";  // vazio = auto: replay_<sourceFile>.mksbk
 input bool   InpLogToFile           = true;
+input bool   InpAlsoWriteAudit      = false; // true = grava audit.tsv (uma linha por brick) para diff humano contra audit do Producer
 
 input group "=== Performance ==="
 input int    InpTimerMs             = 1;     // intervalo do OnTimer (1ms = throughput max)
@@ -74,16 +77,19 @@ CMksFileTickSource   *g_singleSource = NULL;  // ownership single
 CMksMultiFileTickSource *g_multiSource = NULL; // ownership multi
 CMksReplayClock      *g_clock    = NULL;
 CMksFixedBrickSizer  *g_sizer    = NULL;
-CMksBrickFileWriter  *g_writer   = NULL;
-CMksBrickWriterSink  *g_sink     = NULL;
-CMksRenkoBuilder     *g_builder  = NULL;
-CMksLogger           *g_logger   = NULL;
+CMksBrickFileWriter  *g_writer     = NULL;
+CMksBrickWriterSink  *g_sink       = NULL;
+CMksMultiSink        *g_multiSink  = NULL;  // ativo quando audit ligado
+CMksAuditLogSink     *g_auditSink  = NULL;  // InpAlsoWriteAudit
+CMksRenkoBuilder     *g_builder    = NULL;
+CMksLogger           *g_logger     = NULL;
 
 string  g_sourceSymbol  = "";
 string  g_sourceBroker  = "";
 long    g_sourceAccount = 0;
 int     g_sourceDigits  = 0;
 string  g_outputPath    = "";
+string  g_auditPath     = "";
 string  g_logPath       = "";
 
 bool    g_eof           = false;
@@ -158,10 +164,20 @@ string AutoOutputPath(const string &sourceStem)
 
 //+------------------------------------------------------------------+
 //| Extrai stem (nome sem extensão e sem path) de um caminho.         |
+//| FIX 2026-05-25: StringFind retorna a PRIMEIRA ocorrência, não a   |
+//| última — versão anterior cortava no primeiro `\` e deixava sub-   |
+//| pastas no stem (ex: "Ticks\XAUUSDm_..." virava stem). Agora       |
+//| varremos do fim para o início para achar o último separador.      |
 //+------------------------------------------------------------------+
 string PathStem(const string &path)
 {
-   int lastSep = MathMax(StringFind(path, "\\", 0), StringFind(path, "/", 0));
+   int len = StringLen(path);
+   int lastSep = -1;
+   for(int i = len - 1; i >= 0; i--)
+   {
+      ushort c = StringGetCharacter(path, i);
+      if(c == '\\' || c == '/') { lastSep = i; break; }
+   }
    string name = (lastSep >= 0) ? StringSubstr(path, lastSep + 1) : path;
    int dot = StringFind(name, ".");
    return (dot > 0) ? StringSubstr(name, 0, dot) : name;
@@ -173,6 +189,8 @@ string PathStem(const string &path)
 void Cleanup()
 {
    if(g_builder      != NULL) { delete g_builder;      g_builder      = NULL; }
+   if(g_multiSink    != NULL) { delete g_multiSink;    g_multiSink    = NULL; }
+   if(g_auditSink    != NULL) { delete g_auditSink;    g_auditSink    = NULL; }
    if(g_sink         != NULL) { delete g_sink;         g_sink         = NULL; }
    if(g_writer       != NULL) { delete g_writer;       g_writer       = NULL; }
    if(g_sizer        != NULL) { delete g_sizer;        g_sizer        = NULL; }
@@ -362,8 +380,41 @@ int OnInit()
    g_sink.printBricks = false; // verbose desligado no Replayer
    g_sink.digits      = g_sourceDigits;
 
+   // Sink final passado ao builder: por padrão é g_sink (writer-only).
+   // Se InpAlsoWriteAudit=true, embrulha em MultiSink que também
+   // alimenta um CMksAuditLogSink — gera audit.tsv comparável via
+   // diff contra o audit do Producer em modo paridade.
+   IRenkoSink *builderSink = g_sink;
+   if(InpAlsoWriteAudit)
+   {
+      MqlDateTime ndt;
+      TimeToStruct(now, ndt);
+      string nstamp = StringFormat("%04d%02d%02dT%02d%02d%02d",
+                                    ndt.year, ndt.mon, ndt.day,
+                                    ndt.hour, ndt.min, ndt.sec);
+      g_auditPath = StringFormat("MKS-ULTIMATE\\Logs\\Replayer_audit_%s_%s.tsv",
+                                  g_sourceSymbol, nstamp);
+      g_auditSink = new CMksAuditLogSink();
+      if(!g_auditSink.Open(g_auditPath))
+      {
+         g_logger.Error("Replayer", "auditSink.Open failed",
+            StringFormat("\"path\":\"%s\"", MksJsonEscape(g_auditPath)));
+         Cleanup();
+         return INIT_FAILED;
+      }
+      // Header com mesmos campos do audit do Producer — diff direto.
+      g_auditSink.WriteHeader(g_sourceSymbol, g_sourceBroker, g_sourceAccount,
+                               g_sourceDigits, InpBrickSizePts, "classic");
+      g_multiSink = new CMksMultiSink();
+      g_multiSink.Add(g_sink);
+      g_multiSink.Add(g_auditSink);
+      builderSink = g_multiSink;
+      g_logger.Info("Replayer", "audit mode enabled",
+         StringFormat("\"auditPath\":\"%s\"", MksJsonEscape(g_auditPath)));
+   }
+
    // 11. Builder — mesma geometria classic, mesmos L/K do Producer.
-   g_builder = new CMksRenkoBuilder(geom, g_sizer, g_sink,
+   g_builder = new CMksRenkoBuilder(geom, g_sizer, builderSink,
                                     InpInvalidTickLimit, InpThresholdLimit);
    // Replayer não atualiza CS visual; sem OnBrickForming para evitar
    // milhões de chamadas inúteis durante throughput máximo.
@@ -424,13 +475,20 @@ bool ProcessBatch()
          if(err.code == MKS_ERR_RENKO_INVALID_TICK)
          {
             g_ticksInvalid++;
+            if(g_auditSink != NULL)
+               g_auditSink.RecordInvalidTick(t.seq, t.bid, t.ask);
          }
          else if(err.code == MKS_ERR_RENKO_THRESHOLD_LIMIT_EXCEEDED)
          {
             g_ticksK102++;
+            if(g_auditSink != NULL)
+               g_auditSink.RecordKExceeded(t.seq, (t.bid + t.ask) / 2.0,
+                                            InpThresholdLimit + 1);
          }
          else if(err.code == MKS_ERR_RENKO_TICK_STREAM_CORRUPT)
          {
+            if(g_auditSink != NULL)
+               g_auditSink.RecordStreamHalted(t.seq, InpInvalidTickLimit);
             g_logger.Error("Replayer", "stream corrupt, builder halted",
                StringFormat("\"err\":\"%s\"", MksJsonEscape(err.ToString())));
             g_halted = true;
@@ -462,6 +520,9 @@ void FinishReplay()
          g_logger.Error("Replayer", "writer.Close failed",
             StringFormat("\"err\":\"%s\"", MksJsonEscape(err.ToString())));
    }
+   // Fecha audit sink (escreve rodapé com total). Mesmo padrão do Producer
+   // — garante que diff posterior pegue arquivo finalizado.
+   if(g_auditSink != NULL) g_auditSink.Close();
 
    ulong elapsedMs = GetTickCount() - g_startMs;
    double ticksPerSec = (elapsedMs > 0) ? (double)g_ticksConsumed * 1000.0 / elapsedMs : 0.0;
@@ -473,12 +534,14 @@ void FinishReplay()
                       "\"ticksInvalid\":%I64d,\"ticksK102\":%I64d,"
                       "\"bricksWritten\":%I64d,\"elapsedMs\":%I64u,"
                       "\"ticksPerSec\":%.0f,\"outputPath\":\"%s\","
+                      "\"auditPath\":\"%s\","
                       "\"logPath\":\"%s\"",
                       (g_eof ? "true" : "false"),
                       (g_halted ? "true" : "false"),
                       g_ticksConsumed, g_ticksInvalid, g_ticksK102,
                       fileBricks, elapsedMs, ticksPerSec,
                       MksJsonEscape(g_outputPath),
+                      MksJsonEscape(g_auditPath),
                       MksJsonEscape(g_logPath)));
       g_logger.Close();
    }

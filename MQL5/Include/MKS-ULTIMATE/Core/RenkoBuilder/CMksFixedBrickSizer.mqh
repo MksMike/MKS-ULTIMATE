@@ -3,7 +3,9 @@
 //| @project        : MKS-ULTIMATE
 //| @module         : Core / RenkoBuilder
 //| @responsibility : Implementação de IBrickSizer com tamanho de brick
-//|                   fixo em pontos, constante durante toda a sessão.
+//|                   fixo, em UNIDADES DE PREÇO do símbolo (USD para
+//|                   XAU, EUR para EUR/USD, etc — não é o ponto do
+//|                   símbolo). Constante durante toda a sessão.
 //| @depends_on     : Core/Interfaces/IBrickSizer.mqh, Core/Types/Error.mqh
 //| @install_path   : MQL5/Include/MKS-ULTIMATE/Core/RenkoBuilder/CMksFixedBrickSizer.mqh
 //+------------------------------------------------------------------+
@@ -13,9 +15,15 @@
 #include <MKS-ULTIMATE/Core/Interfaces/IBrickSizer.mqh>
 #include <MKS-ULTIMATE/Core/Types/Error.mqh>
 
-// Sizer de tamanho fixo: devolve sempre o mesmo tamanho de brick, em
-// pontos, definido na construção. Sempre pronto — não tem warm-up.
-// Implementa IBrickSizer (ADR-010, eixo de tamanho).
+// Sizer de tamanho fixo: devolve sempre o mesmo tamanho de brick,
+// definido na construção. Sempre pronto — não tem warm-up. Implementa
+// IBrickSizer (ADR-010, eixo de tamanho).
+//
+// UNIDADE: price units. Valor 3.0 em XAU = 3 USD por brick. O nome
+// histórico "SizePoints" e o argumento "sizePoints" são mantidos por
+// compatibilidade com a interface, mas o builder soma o valor direto
+// no preço — ver IBrickSizer::SizePoints e CMksRenkoBuilder
+// ContinuationThreshold/ReversalThreshold.
 class CMksFixedBrickSizer : public IBrickSizer
 {
 private:

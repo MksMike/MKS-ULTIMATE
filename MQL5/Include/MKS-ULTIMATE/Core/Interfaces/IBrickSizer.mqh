@@ -28,9 +28,16 @@ class IBrickSizer
 public:
    virtual ~IBrickSizer() {}
 
-   // Tamanho-base do brick, em pontos. Snapshot: um sizer variável
-   // pode devolver valores diferentes a cada brick. Só é válido
-   // quando IsReady() == true.
+   // Tamanho-base do brick, em UNIDADES DE PREÇO do símbolo (USD
+   // para XAUUSD, EUR para EURUSD, BTC para BTCUSD, etc — NÃO é o
+   // ponto do símbolo via Symbol::Point()). O nome "SizePoints" é
+   // histórico; o builder soma o valor retornado diretamente no
+   // preço (CMksRenkoBuilder.ContinuationThreshold/ReversalThreshold:
+   //   threshold = base ± (1-PO) * SizePoints()
+   // onde 'base' está em unidades de preço). Sem conversão
+   // multiplicativa por Point().
+   // Snapshot: um sizer variável pode devolver valores diferentes a
+   // cada brick. Só é válido quando IsReady() == true.
    virtual double SizePoints() const = 0;
 
    // true quando SizePoints() devolve um valor utilizável. Um sizer

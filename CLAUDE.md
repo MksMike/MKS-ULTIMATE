@@ -81,3 +81,4 @@ Todos os documentos abaixo existem em `docs/` e devem ser consultados:
 - `docs/PROTOCOLOS.md` — checklists para momentos de risco
 - `docs/CHEATSHEET.md` — referência rápida de comandos
 - `docs/TOM-E-CHATS.md` — tom de voz, regras de confronto e modos de chat estruturados
+- `docs/CHECKPOINTS.md` — índice cronológico de checkpoints de sessão (handoffs entre chats; consultar sob demanda histórica, **não está na ordem de leitura**)
