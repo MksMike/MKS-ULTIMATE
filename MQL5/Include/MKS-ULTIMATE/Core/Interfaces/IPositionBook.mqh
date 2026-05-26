@@ -31,6 +31,13 @@ public:
    // para o slice 6.2; exposure ponderada por risco (lots × pip × SL)
    // pode ser book futuro sem quebrar este contrato.
    virtual double TotalLots() const = 0;
+
+   // True se `positionId` corresponde a posição ainda aberta no escopo.
+   // Usado pelo CMksTradeManager para auto-detach quando o broker
+   // fechou a posição externamente (SL/TP hit, manual close, auto-close
+   // do CMksSimulatedBroker — ADR-027 §7.3). False se a posição não
+   // existe, foi fechada, ou está fora do escopo do book.
+   virtual bool IsOpen(ulong positionId) const = 0;
 };
 
 #endif // MKS_ULTIMATE_CORE_INTERFACES_IPOSITIONBOOK_MQH

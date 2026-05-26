@@ -150,9 +150,11 @@ Este documento define **o que construir e em que ordem**. Cada fase tem entregá
 
 ## Fase 4.5 — Tick Recorder + Replayer (pipeline de paridade)
 
-**Status:** Concluída (código + script), validação empírica end-to-end pendente
+**Status:** Concluída (código + script + validação empírica)
 
 **Nota:** Fase inserida por ADR-024 (aceita 2026-05-23) entre a Fase 4 (Broker abstractions, concluída) e a Fase 5 (Trade Management). Materializa o pipeline canônico de paridade bit-a-bit do feed Renko e da decisão da estratégia — sem essa fase, a paridade do projeto é teorema; com ela, é fato verificável.
+
+**Validação empírica (2026-05-26):** Sessão `T132858` em XAUUSDm/Exness com `InpParityRunMode=true` produziu 38 bricks (2992 bytes), 3377 ticks (216384 bytes) e audit TSV (3799 bytes). `tools/verify-parity.ps1` retornou **exit 0** (`.mksbk` byte-a-byte idênticos, ignorando bytes 184–191 de wall-clock conforme ADR-024); `diff` dos audit TSV (Producer vs Replayer) retornou **0 diferenças**. A canonicidade da paridade (ADR-024 §7c) está empiricamente verificada — fato, não teorema.
 
 **Entregáveis** (todos concluídos em 2026-05-24, branch `feat/producer-classic-only`):
 
@@ -171,7 +173,7 @@ Este documento define **o que construir e em que ordem**. Cada fase tem entregá
 **Critério de saída:**
 - ✅ Todos os arquivos acima compilam 0 erros / 0 warnings via MetaEditor64 headless
 - ✅ Testes unitários cobrem cenários de proveniência, descontinuidade, EOF, ReplayClock
-- ⏳ **Validação empírica pendente**: rodar Producer + TickRecorder por ≥1h em demo, rodar Replayer sobre o `.mkstick` capturado, `verify-parity.ps1` deve retornar exit code 0 (paridade byte-a-byte)
+- ✅ **Validação empírica concluída** (2026-05-26): pipeline `InpParityRunMode` num único EA → `verify-parity.ps1` exit 0 + diff dos audit TSV 0 diferenças
 
 **Por que importa:** Sem esta fase, qualquer afirmação de "backtest e live produzem o mesmo resultado" é fé. Com ela, é prova mecânica e automatizável a cada commit que toca o caminho de paridade (`RenkoBuilder`, `ITickSource`, `IClock`, sinks que escrevem `.mksbk`). Protocolo 1 ganha item exigindo `verify-parity.ps1` antes de declarar pronto módulos que tocam paridade.
 
@@ -206,7 +208,7 @@ Este documento define **o que construir e em que ordem**. Cada fase tem entregá
 
 **Limitações conhecidas (auditoria 2026-05-25):**
 - **`CMksTradeManager` + conta netting:** `positionId` em netting não identifica posição individual; partial close pode dessincronizar estado interno. Aceitável enquanto o pipeline operar em hedging; ADR explícita necessária se conta netting virar caso de uso.
-- **Auto-detach em fechamento externo (SL hit, manual close):** `IPositionBook` existe mas o `TradeManager` não o consulta para detectar que a posição sumiu do broker. Estado obsoleto possível em SL hit.
+- ~~**Auto-detach em fechamento externo (SL hit, manual close)**~~ — **resolvido em 2026-05-26**: `CMksTradeManager` ganhou injeção opcional de `IPositionBook`. Quando provido, `Update()` consulta `book.IsOpen(positionId)` no início e auto-detacha se a posição sumiu. `IPositionBook` ganhou método `IsOpen(positionId)`; `CMksMt5PositionBook` itera posições MT5 com escopo símbolo+magic; `CMksFakePositionBook` ganhou `MarkClosed(id)` para testes. Step do `Update` ganhou flag `autoDetached`.
 
 **Por que importa:** Gestão errada de trade transforma estratégia boa em perdedora e vice-versa. Precisa ser testável em isolamento — e é, em testes do framework `Core/Testing`.
 
@@ -233,7 +235,7 @@ Este documento define **o que construir e em que ordem**. Cada fase tem entregá
 **Critério de saída:** atendido — cada camada testada isoladamente; teste end-to-end (configurar limite → violar → trade bloqueado com log) coberto em `Test_CMksRiskGatedBroker`.
 
 **Limitações conhecidas (auditoria 2026-05-25):**
-- **`CMksRiskManager.CheckOrder` não chama `snapshot.Update()`.** Depende do EA chamar `Update()` no `OnTick`. Se o EA esquecer, `DayPnLPct`/`DrawdownPct` ficam congelados desde o último `Init()`. Fix barato (1 linha em `CheckOrder`) pendente.
+- ~~**`CMksRiskManager.CheckOrder` não chama `snapshot.Update()`**~~ — **resolvido em 2026-05-26**: `CheckOrder` agora faz `if(m_snapshot != NULL) m_snapshot.Update()` no início, garantindo que as checagens Por Conta operem sobre balance/equity correntes mesmo se o EA esquecer de chamar `snapshot.Update()` por tick. Idempotente (Update já trata rollover e peak monotônico).
 
 **Por que importa:** Foi a ausência disso que permitiu o V5 quebrar conta em 4 horas.
 
