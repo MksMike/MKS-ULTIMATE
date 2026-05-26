@@ -1934,6 +1934,102 @@ O Producer do MKS-ULTIMATE opera **exclusivamente em geometria classic** (PO=PRO
 
 ---
 
+### ADR-027: StressLab credível — latência aplicada, spread composto, SL/TP auto-disparados
+
+**Data:** 2026-05-26
+**Status:** Aceita
+**Relação com Fase 7 do ROADMAP:** Materializa as três correções listadas como **pré-requisito da Fase 9** ("Limitações conhecidas (auditoria 2026-05-25) — pré-requisito para a Fase 9"). Após esta ADR, a Fase 7 deixa de ter limitações materiais bloqueantes.
+
+**Contexto:**
+
+A auditoria de 2026-05-25 identificou três defeitos no pipeline `CMksSimulatedBroker → CMksStressLabBroker` que recriavam sutilmente o **eixo 3 do V5-POSTMORTEM** (custo modelado mas sem efeito no equity do backtest). Os defeitos eram:
+
+1. **Latência declarada como "informativa" e nunca aplicada ao fill.** `CMksStressLabBroker` declarava `latencyMeanMs`/`latencyStdevMs` em `CMksStressParams` mas o RNG sequer era tocado para sortear latência — nem o "informativo" funcionava. Estratégia de scalping rodaria sob `MksStressNightmare` (1000ms ± 500ms de latência) sem nenhuma degradação no equity, e quebraria em live onde o mid se move durante o tempo de viagem da ordem.
+
+2. **`spreadMultiplier` mal composto com `CMksCostModel`.** Fórmula original `slipExtra = (spreadMultiplier - 1.0)` somava **1 ponto por unidade acima de 1.0x**, ignorando completamente o `spreadPoints` do CostModel subjacente. `MksStressNightmare` com `spreadMultiplier=10` adicionava 9 pontos em vez de "spread 10× maior". Para um símbolo com spread real de 10 pontos, isso é 11pts em vez de 100pts — sub-estimativa de quase 10×.
+
+3. **`CMksSimulatedBroker` não fechava posições com SL/TP gatilhados pelo movimento de preço.** A struct `MksSimPosition` armazenava SL/TP em preço absoluto, mas o broker nunca verificava se o mid corrente cruzou esses níveis. Posições só fechavam por `Close()` explícito do EA. Resultado: stress test não capturava o evento mais frequente em live (stop hit), e estratégias com SL apertado pareciam imortais no backtest.
+
+Os três defeitos têm severidade equivalente — qualquer um deles isoladamente já invalida o stress test como prova de robustez. Nenhuma estratégia pode entrar na Fase 9 enquanto essas distorções existirem.
+
+**Decisão:**
+
+Três correções em um único ciclo, cada uma vinculada à sua sub-cláusula:
+
+**§7.1 — Latência adversa ao fill via drift configurável.**
+
+- Novo parâmetro `latencyDriftPointsPerMs` em `CMksStressParams` (default `0.0`).
+- Em `Send`, `CMksStressLabBroker.ApplySlippageToFill` sorteia latência via `m_rng.NextGaussian(latencyMeanMs, latencyStdevMs)` (clampada em 0).
+- Slip adicional `slipFromLatency = sampledLatencyMs × latencyDriftPointsPerMs` somado ao slip total, adverso ao lado da ordem.
+- Métricas novas: `CMksStressMetrics.latencyTotalMs`, `latencyMaxMs`.
+- `latencyDriftPointsPerMs = 0.0` preserva semântica legada ("informativa") — latency sorteada não afeta fill. Caller que quer estresse real **deve** setar drift explicitamente, e a heurística sugerida para XAU/Exness é `0.01 pts/ms` (100ms → 1 ponto adverso).
+
+**§7.2 — `spreadMultiplier` compõe sobre baseline real do CostModel.**
+
+- Novo parâmetro `baselineSpreadPoints` em `CMksStressParams` (default `0.0`).
+- Fórmula nova: `extraHalfSpread = (spreadMultiplier - 1.0) × (baselineSpreadPoints / 2.0)`, em pontos, adversa por lado.
+- Resultado: `mult=10` com `baseline=10pts` adiciona **45 pontos extras por lado** (equivalente a "spread efetivo 100pts" = 10× do real 10pts), em vez de 9 pontos.
+- Caller informa `baselineSpreadPoints` ao construir o preset com o spread do CostModel subjacente. Presets `MksStressLight/Medium/High/Nightmare` mantêm `baselineSpreadPoints = 0.0` por default — composição só dispara quando o caller setar explicitamente, porque o spread real **depende do símbolo** (XAU típico 10pts, EUR/USD 8pts, etc.) e fixar valor no preset acopla preset a símbolo (anti-padrão).
+- Caso `baselineSpreadPoints = 0`: fórmula degenera para `extraHalfSpread = 0` — `spreadMultiplier` vira no-op. Preserva backward-compat com setups antigos que não conhecem o parâmetro novo, ao custo de exigir setup explícito para o caller que quer o efeito.
+
+**§7.3 — Auto-trigger de SL/TP no `CMksSimulatedBroker.OnTick`.**
+
+- Nova struct `MksSimAutoCloseEvent` (positionId, side, lots, openPrice, closePrice, commissionClose, openTimeMsc, closeTimeMsc, dealCloseId, hitSl).
+- Nova fila interna `m_autoCloseEvents[]` e contador monotônico `m_autoCloseTotal`.
+- `OnTick` chama `CheckSlTpTriggers()` após atualizar `m_lastMid`.
+- `CheckSlTpTriggers()`:
+  - Para cada posição aberta com `sl > 0` ou `tp > 0`:
+    - Computa `bidProxy = mid - halfSpread`, `askProxy = mid + halfSpread` (half-spread do `CostModel`).
+    - **BUY:** `hitSl` se `bidProxy <= sl`, `hitTp` se `bidProxy >= tp`.
+    - **SELL:** `hitSl` se `askProxy >= sl`, `hitTp` se `askProxy <= tp`.
+    - Se gatilho, fecha posição via `CostModel.FillPriceFor(oppositeSide, mid, point)` — close price inclui slippage do CostModel (modela slippage de SL hit realista: close pode ser pior que o nível). SL tem precedência sobre TP no mesmo tick (worst-case para o trader).
+- Novo método `PollAutoCloses(MksSimAutoCloseEvent &out[]) → int`: caller drena a fila após cada `OnTick` para sincronizar journal/estado próprio. Drena e zera a fila; `AutoCloseTotal()` preserva contagem total monotônica para visibilidade pós-drain.
+- **Convenção sobre o gatilho:** `bidProxy/askProxy` usa `halfSpread = spreadPoints/2 × point` do CostModel. Não usa `bid/ask` reais do tick (que `MksTick` carrega) por dois motivos: (a) consistência com o caminho de fill — `CostModel.FillPriceFor` é o único oráculo de preço executável; (b) determinismo — o tick pode trazer bid/ask atípicos (split, glitch), mas o stress test deve ser previsível.
+
+**Alternativas consideradas:**
+
+- **(a) §7.1: latência como atraso real (event scheduler interno).** Rejeitada. Backtest síncrono não tem fila de eventos; modelar latência como "atraso de processamento" exigiria reescrever o loop de `OnTick` para arquivar Sends pendentes. Drift em pontos captura o efeito econômico (slippage por movimento do mid) sem mudar a arquitetura de tempo do backtest. Quando o framework tiver fila de eventos para outras razões (ex.: timestamps fracionários do `IClock`), pode-se evoluir para modelagem temporal real.
+
+- **(b) §7.2: passar `CMksCostModel*` ao construtor do `CMksStressLabBroker` em vez de duplicar `baselineSpreadPoints` no params.** Rejeitada. Acopla wrapper ao tipo concreto do underlying — quebra abstração `IBroker` que o StressLab decora. Operador é responsável por informar o spread baseline manualmente, e isso fica documentado.
+
+- **(c) §7.3: dispatch dos eventos via callback (`onAutoClose(event)`)** em vez de polling. Rejeitada para v1. Poll é mais simples, não exige interface adicional, e o EA tipicamente chama tudo no `OnTick` em sequência (OnTick do broker → poll de auto-closes → decisão da estratégia → Send/Close). Callback agrega complexidade sem ganho real no padrão atual.
+
+- **(d) §7.3: usar `bid/ask` reais do `MksTick` em vez de `bidProxy/askProxy` via half-spread.** Rejeitada. Cria duas fontes de preço incompatíveis (CostModel para fill, tick cru para trigger). Tick pode trazer bid/ask de uma frame anterior ao mid corrente (cache do `CopyTicks`), introduzindo race condition. Half-spread do CostModel é determinístico e está sob controle do operador.
+
+- **(e) §7.3: SL/TP-trailing dentro do broker simulado.** Rejeitada — fora do escopo. Trailing é responsabilidade do `CMksTradeManager` (Fase 5b), e este já existe e foi materializado. ADR-027 cobre apenas o gatilho de saída quando o preço cruza nível fixo.
+
+**Consequências:**
+
+- **Stress test passa a estressar o que importa.** As três distorções que mascaravam o impacto de latência, spread elevado e SL hit foram corrigidas. Estratégia que sobreviver a `MksStressMedium` com `baselineSpreadPoints` realista e `latencyDriftPointsPerMs > 0` é candidata genuína a live — o teste agora corresponde a uma fração razoável do estresse real.
+
+- **Padrão de uso muda para callers do `CMksStressParams`.** Operador agora **precisa** informar `baselineSpreadPoints` e `latencyDriftPointsPerMs` explicitamente para ativar os dois novos eixos. Defaults zerados preservam backward-compat — código antigo continua compilando e rodando com semântica idêntica à pré-ADR-027 (com os defeitos), mas isso é deliberadamente uma escolha do caller, não um silencioso "stress invisível".
+
+- **Padrão de uso muda para callers do `CMksSimulatedBroker`.** EA que cria posições com SL/TP **deve** chamar `PollAutoCloses` após cada `OnTick` para drenar a fila e atualizar seu journal/state. Esquecer de pollar não trava nada (broker funciona, posição fica `isOpen=false`), mas o EA fica desinformado dos auto-fechamentos — risco visível em `b.OpenPositionsCount() = 0 && journal não registrou`. Documentado no comentário do método.
+
+- **Métricas novas no `CMksStressMetrics`** (`latencyTotalMs`, `latencyMaxMs`) — `CMksStressLabReport` pode incluir na tabela comparativa (não obrigatório nesta ADR; entrega quando o report for revisitado).
+
+- **Testes novos:** `Test_CMksStressLabBroker` ganha `Test_SL_SpreadMultiplierComposesWithBaseline`, `Test_SL_SpreadMultiplierNoOpWithoutBaseline`, `Test_SL_LatencyDriftAdverseFixed`, `Test_SL_LatencyZeroDriftPreservesLegacy` — total 4 testes novos. `Test_CMksSimulatedBroker` ganha `Test_AutoTriggerSlBuy`, `Test_AutoTriggerTpSell`, `Test_AutoTriggerStaysOpenWhenNoHit`, `Test_AutoTriggerHalfSpreadBidProxy`, `Test_AutoTriggerDeterminism` — total 5 testes novos. Todos os testes pré-existentes permanecem passando (verificado por compile + revisão de assumptions).
+
+- **Teste antigo `Test_SL_SpreadMultiplierAddsSlip` foi removido e substituído por `Test_SL_SpreadMultiplierComposesWithBaseline`** — a assertion antiga (`spreadMultiplier=3.0 → +2 pts`) materializava a fórmula buggada. Substituição é semanticamente correta.
+
+- **Fase 7 do ROADMAP atualizada** — bloco "Limitações conhecidas — pré-requisito para a Fase 9" perde as três entradas. Critério de saída da Fase 7 fica completo.
+
+**Fronteiras:**
+
+- Não cobre **fila de eventos temporal completa** no `CMksSimulatedBroker` (ordens pendentes, expiração de limit/stop orders, time-in-force). v1 simula só ordens a mercado e auto-fecha por SL/TP de movimento de preço.
+
+- Não cobre **modelagem de gap intra-bar** no auto-trigger — gatilho dispara no tick que cruzar o nível, não no momento exato em que o preço passaria pelo nível. Em ticks muito espaçados (gap de fim-de-semana, news com pause de feed), close price será o `mid` do tick pós-gap, não o nível de SL. Modelagem de pior caso (close ao mid do tick que cruzou) é conservadora — operador interpreta como "spread elevado no momento do gap" e dimensiona SL com folga conforme. Refinamento futuro pode interpolar.
+
+- Não cobre **swap acumulado** no auto-close — `swap = 0.0` é mantido (limitação herdada da Fase 4, não desta ADR). Posições mantidas overnight no broker simulado não pagam carry; aceitável enquanto estratégia for intraday.
+
+- Não cobre **latency drift por símbolo** — `latencyDriftPointsPerMs` é parâmetro escalar do params. Símbolos com volatilidade muito diferente (XAU vs EUR/USD) podem exigir drifts diferentes; operador escolhe conforme o setup. Se padrão emergir de uso, refino futuro pode tabelar por símbolo.
+
+- Não cobre **rejeição de Send por margem insuficiente** simulada. Broker simulado não modela conta; isso é responsabilidade do `CMksAccountSnapshot` + `CMksRiskManager` no pipeline upstream.
+
+- Não cobre **modificação de SL/TP por trailing dentro do auto-trigger** — `Modify()` continua sendo o caminho. Trailing do `CMksTradeManager` chama `Modify` em ticks subsequentes; broker re-avalia o gatilho com SL/TP atualizados na próxima `OnTick`. Padrão correto, sem mudança.
+
+---
+
 ## 4. Decisões pendentes
 
 Nenhuma decisão arquitetural formal pendente neste momento. Decisões novas são registradas formalmente quando forem enfrentadas, não antes — decidir arquitetura no vazio produz decisões erradas.

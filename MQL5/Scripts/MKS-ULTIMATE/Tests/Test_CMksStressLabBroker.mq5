@@ -170,25 +170,100 @@ void Test_SL_NormalSlippageDeterministic()
 }
 
 //==================================================================
-// Spread multiplier
+// Spread multiplier compõe sobre baseline (ADR-027 §7.2)
 //==================================================================
 
-void Test_SL_SpreadMultiplierAddsSlip()
+void Test_SL_SpreadMultiplierComposesWithBaseline()
 {
    CMksRecordingBroker under;
    under.SetNextSendFillPrice(BASE_FILL);
    CMksFakeSymbol sym; sym.SetPoint(POINT_XAU);
 
-   // Sem slip base, so spread x3 = 2 pontos extras (3.0 - 1.0 = 2.0)
+   // Baseline=10pts (spread real do CostModel), mult=3.0 → spread efetivo
+   // ficou 30pts (+20pts extras), distribuídos como +10pts adversos por lado.
+   // Sem slip da distribuição. Fórmula: (3-1)*(10/2) = 10pts extras.
    CMksStressParams p;
-   p.slippageDist     = MKS_STRESS_DIST_FIXED;
-   p.slippageMean     = 0.0;
-   p.spreadMultiplier = 3.0;
+   p.slippageDist          = MKS_STRESS_DIST_FIXED;
+   p.slippageMean          = 0.0;
+   p.spreadMultiplier      = 3.0;
+   p.baselineSpreadPoints  = 10.0;
    CMksStressLabBroker stress(GetPointer(under), GetPointer(sym), p);
 
    MksExecutionResult r = stress.Send(MakeBuy());
-   double expected = BASE_FILL + 2.0 * POINT_XAU; // 0 slip + 2 do spread
-   MKS_ASSERT_NEAR_DOUBLE(expected, r.fillPrice, SL_TOL, "spread mult 3x = +2 pts");
+   double expected = BASE_FILL + 10.0 * POINT_XAU;
+   MKS_ASSERT_NEAR_DOUBLE(expected, r.fillPrice, SL_TOL,
+                          "spread mult 3x sobre baseline=10 = +10 pts adversos");
+}
+
+void Test_SL_SpreadMultiplierNoOpWithoutBaseline()
+{
+   // Mesmo com mult=10, sem baseline configurado, não há composição.
+   // Garante que comportamento legado (baseline=0) não dispara slip
+   // espúrio — mudança da fórmula nunca silenciosamente quebra setups
+   // antigos que não conhecem baselineSpreadPoints.
+   CMksRecordingBroker under;
+   under.SetNextSendFillPrice(BASE_FILL);
+   CMksFakeSymbol sym; sym.SetPoint(POINT_XAU);
+
+   CMksStressParams p;
+   p.slippageDist     = MKS_STRESS_DIST_FIXED;
+   p.slippageMean     = 0.0;
+   p.spreadMultiplier = 10.0;
+   // baselineSpreadPoints default = 0
+   CMksStressLabBroker stress(GetPointer(under), GetPointer(sym), p);
+
+   MksExecutionResult r = stress.Send(MakeBuy());
+   MKS_ASSERT_NEAR_DOUBLE(BASE_FILL, r.fillPrice, SL_TOL,
+                          "sem baseline, spreadMultiplier não afeta fill");
+}
+
+//==================================================================
+// Latency drift adverso (ADR-027 §7.1)
+//==================================================================
+
+void Test_SL_LatencyDriftAdverseFixed()
+{
+   // Latency 0 stdev → mean exato. 100ms × 0.01pts/ms = 1pt adverso.
+   CMksRecordingBroker under;
+   under.SetNextSendFillPrice(BASE_FILL);
+   CMksFakeSymbol sym; sym.SetPoint(POINT_XAU);
+
+   CMksStressParams p;
+   p.slippageDist           = MKS_STRESS_DIST_FIXED;
+   p.slippageMean           = 0.0;
+   p.latencyMeanMs          = 100.0;
+   p.latencyStdevMs         = 0.0;
+   p.latencyDriftPointsPerMs = 0.01;
+   CMksStressLabBroker stress(GetPointer(under), GetPointer(sym), p);
+
+   MksExecutionResult r = stress.Send(MakeBuy());
+   // Stdev=0: NextGaussian retorna mean exato → latency = 100ms → +1pt.
+   double expected = BASE_FILL + 1.0 * POINT_XAU;
+   MKS_ASSERT_NEAR_DOUBLE(expected, r.fillPrice, SL_TOL,
+                          "100ms × 0.01pts/ms = +1pt adverso no BUY");
+
+   CMksStressMetrics m = stress.Metrics();
+   MKS_ASSERT_NEAR_DOUBLE(100.0, m.latencyTotalMs, 1e-6, "latency contabilizada");
+   MKS_ASSERT_NEAR_DOUBLE(100.0, m.latencyMaxMs,   1e-6, "max latency");
+}
+
+void Test_SL_LatencyZeroDriftPreservesLegacy()
+{
+   // driftPerMs=0 → latency é sorteada mas não afeta o fill.
+   // Preserva semântica "informativa" antiga onde latency só era log.
+   CMksRecordingBroker under;
+   under.SetNextSendFillPrice(BASE_FILL);
+   CMksFakeSymbol sym; sym.SetPoint(POINT_XAU);
+
+   CMksStressParams p;
+   p.latencyMeanMs          = 500.0;
+   p.latencyStdevMs         = 100.0;
+   p.latencyDriftPointsPerMs = 0.0; // legado
+   CMksStressLabBroker stress(GetPointer(under), GetPointer(sym), p);
+
+   MksExecutionResult r = stress.Send(MakeBuy());
+   MKS_ASSERT_NEAR_DOUBLE(BASE_FILL, r.fillPrice, SL_TOL,
+                          "drift=0 preserva fill mesmo com latency alta");
 }
 
 //==================================================================
@@ -347,7 +422,11 @@ void OnStart()
    MKS_RUN(Test_SL_FixedSlippageSELL);
    MKS_RUN(Test_SL_NormalSlippageDeterministic);
 
-   MKS_RUN(Test_SL_SpreadMultiplierAddsSlip);
+   MKS_RUN(Test_SL_SpreadMultiplierComposesWithBaseline);
+   MKS_RUN(Test_SL_SpreadMultiplierNoOpWithoutBaseline);
+
+   MKS_RUN(Test_SL_LatencyDriftAdverseFixed);
+   MKS_RUN(Test_SL_LatencyZeroDriftPreservesLegacy);
 
    MKS_RUN(Test_SL_RequoteEsgota);
    MKS_RUN(Test_SL_RequoteSucessoNaPrimeira);
