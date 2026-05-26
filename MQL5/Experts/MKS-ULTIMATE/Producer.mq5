@@ -136,6 +136,14 @@ ulong                g_lastSeqLive = 0;
 uint                 g_lastTimerMs = 0;
 double               g_ticksPerSec = 0.0;
 
+// Janela incremental para CopyTicks no modo live. Mesmo padrão do
+// TickRecorder — usar a mesma API garante que Producer veja o feed
+// completo (não amostrado), permitindo paridade canônica ADR-024 §7c
+// entre live.mksbk e replay.mksbk via fc/b.
+// Inicializado no FinishInitAndGoLive com timeMsc do último tick
+// conhecido (anchor); a partir daí cada OnTick avança a janela.
+long                 g_lastSeenMsc = 0;
+
 //+------------------------------------------------------------------+
 //| Formata label de tamanho fixo: "3", "1.50".                       |
 //+------------------------------------------------------------------+
@@ -700,7 +708,20 @@ void FinishInitAndGoLive()
                        currentSize, TimeCurrent());
    }
 
-   g_logger.Info("Producer", "ready, processing live ticks", "");
+   // Anchor inicial para a janela de CopyTicks no modo live (paridade
+   // ADR-024). Mesmo padrão do TickRecorder.OnStart: pega o timeMsc do
+   // tick mais recente AGORA, e o primeiro OnTick processa só ticks
+   // com timeMsc estritamente maior. Sem o anchor, o primeiro
+   // CopyTicks(fromMsc=0) retornaria o cache inteiro do terminal —
+   // gerando bricks de fill silencioso fora do fluxo do
+   // InpHistoricalFillDays. Com fillDays>0, o fill já foi feito via
+   // CopyTicksRange; com fillDays=0, queremos começar do "agora".
+   MqlTick anchor;
+   if(SymbolInfoTick(g_symbol, anchor))
+      g_lastSeenMsc = anchor.time_msc;
+
+   g_logger.Info("Producer", "ready, processing live ticks",
+      StringFormat("\"anchorMsc\":%I64d", g_lastSeenMsc));
 
    // Reduz frequência do timer: live só precisa de update 1Hz para
    // ticks/sec, último brick, sync.
@@ -711,18 +732,51 @@ void FinishInitAndGoLive()
 }
 
 //+------------------------------------------------------------------+
+//| OnTick — usa CopyTicks(COPY_TICKS_ALL, lastSeenMsc, 0) em vez de   |
+//| SymbolInfoTick (que retornaria só o tick mais recente, perdendo   |
+//| ticks intermediários em bursts — comprovado empiricamente em      |
+//| 2026-05-26: Producer com SymbolInfoTick viu 16.615 ticks vs       |
+//| 34.083 que o TickRecorder gravou no mesmo período, gerando 248    |
+//| bricks vs 364 do replay sobre o .mkstick).                         |
+//|                                                                   |
+//| Com CopyTicks, Producer e TickRecorder veem o MESMO feed → mesmos |
+//| triggers → mesmos bricks → paridade canônica ADR-024 §7c via      |
+//| fc/b atingível em sessão sincronizada.                            |
+//|                                                                   |
+//| Dedup por timeMsc <= lastSeen (mesmo padrão TickRecorder).         |
+//| Filtro mínimo bid<=0 && ask<=0 (lixo estrutural de slot vazio).   |
+//+------------------------------------------------------------------+
 void OnTick()
 {
    if(g_streamHalted || g_builder == NULL) return;
-   // Durante fill histórico, ignorar ticks live (eles entram via OnTick
+   // Durante fill histórico, ignorar ticks live (eles entram aqui
    // depois que FinishInitAndGoLive transiciona para modo live).
    if(g_fillRunning) return;
 
-   MqlTick mt;
-   if(!SymbolInfoTick(g_symbol, mt)) return;
+   MqlTick ticks[];
+   long fromMsc = (g_lastSeenMsc > 0) ? g_lastSeenMsc : 0;
+   int n = CopyTicks(g_symbol, ticks, COPY_TICKS_ALL, fromMsc, 0);
+   if(n <= 0) return;
 
-   MksTick t = ToMksTick(mt);
-   IngestOne(t);
+   for(int i = 0; i < n; i++)
+   {
+      // Dedup: CopyTicks pode retornar o tick com timeMsc==fromMsc.
+      if(ticks[i].time_msc <= g_lastSeenMsc) continue;
+
+      // Filtro mínimo simétrico ao TickRecorder: tick com ambos
+      // bid/ask <=0 é lixo estrutural (slot vazio do CopyTicks).
+      // ADR-006 está no consumo do builder via IsValid(); aqui só
+      // descartamos lixo óbvio para avançar o anchor sem ingestar.
+      if(ticks[i].bid <= 0.0 && ticks[i].ask <= 0.0)
+      {
+         g_lastSeenMsc = ticks[i].time_msc;
+         continue;
+      }
+
+      MksTick t = ToMksTick(ticks[i]);
+      IngestOne(t);
+      g_lastSeenMsc = ticks[i].time_msc;
+   }
 }
 
 //+------------------------------------------------------------------+
