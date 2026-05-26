@@ -39,6 +39,8 @@
 #include <MKS-ULTIMATE/Core/Output/CMksCustomSymbolSink.mqh>
 #include <MKS-ULTIMATE/Core/Output/CMksMultiSink.mqh>
 #include <MKS-ULTIMATE/Core/Output/CMksProgressPanel.mqh>
+#include <MKS-ULTIMATE/Core/Output/CMksAuditLogSink.mqh>
+#include <MKS-ULTIMATE/Core/Data/CMksTickFileWriter.mqh>
 #include <MKS-ULTIMATE/Core/Log/CMksLogger.mqh>
 #include <MKS-ULTIMATE/Core/Symbol/CMksMt5Symbol.mqh>
 #include <MKS-ULTIMATE/Core/Account/CMksMt5Account.mqh>
@@ -84,6 +86,9 @@ input group "=== Custom Symbol ==="
 input bool   InpShowWicksInCS         = false; // Mostrar wicks de excursão no CS (ADR-022 §3)
 input bool   InpResetCustomSymbolBars = true;  // Wipe bars antigas no OnInit
 
+input group "=== Modo de Paridade Canônica (ADR-024) ==="
+input bool   InpParityRunMode         = false; // true = grava .mkstick paralelo + audit.tsv (1 EA p/ teste de paridade canônica). Não precisa de TickRecorder Service quando ativo.
+
 input group "=== Logging ==="
 input bool   InpPrintBricks           = false; // Verbose: imprime cada brick no journal
 input int    InpInvalidLogEvery       = 100;   // Rate-limit do log 103 (1 a cada N)
@@ -116,6 +121,14 @@ IAccount             *g_iAccount = NULL;
 CMksBrickWriterSink  *g_sink      = NULL;
 CMksCustomSymbolSink *g_csSink    = NULL;
 CMksMultiSink        *g_multiSink = NULL;
+
+// Modo de paridade canônica (InpParityRunMode=true): grava .mkstick
+// paralelo no mesmo loop do OnTick (anchor sincronizado por construção)
+// + audit log TSV para diff humano-legível complementar ao fc/b.
+CMksTickFileWriter   *g_tickWriter = NULL;  // .mkstick paralelo
+CMksAuditLogSink     *g_auditSink  = NULL;  // .audit.tsv (também adicionado ao multiSink)
+string                g_tickPath   = "";
+string                g_auditPath  = "";
 
 // Painel UX (ADR-022). Painel só existe em chart real (não em backtest).
 CMksProgressPanel    g_panel;
@@ -314,12 +327,31 @@ MksTick ToMksTick(const MqlTick &mt)
 void IngestOne(const MksTick &tick)
 {
    if(g_streamHalted) return;
+
+   // Modo paridade canônica: grava tick no .mkstick paralelo ANTES de
+   // alimentar o builder. Mesmo loop, mesma ordem — .mkstick reflete
+   // exatamente o que o builder vê. Replayer sobre esse .mkstick
+   // produz .mksbk idêntico por construção (paridade canônica).
+   if(g_tickWriter != NULL)
+   {
+      MksError tickErr;
+      g_tickWriter.WriteTick(tick, tickErr);
+      // Erro de gravação do .mkstick não bloqueia o builder — apenas
+      // perde a sincronização para este tick. Logado pra auditoria.
+      if(tickErr.HasError())
+         g_logger.Warn("Producer", "parity tickWriter.WriteTick failed",
+            StringFormat("\"seq\":%I64u,\"err\":\"%s\"",
+                         tick.seq, MksJsonEscape(tickErr.ToString())));
+   }
+
    MksError err;
    if(g_builder.IngestTick(tick, err)) return;
 
    if(err.code == MKS_ERR_RENKO_INVALID_TICK)
    {
       g_invalidSeen++;
+      if(g_auditSink != NULL)
+         g_auditSink.RecordInvalidTick(tick.seq, tick.bid, tick.ask);
       if(InpInvalidLogEvery > 0 && (g_invalidSeen % InpInvalidLogEvery == 0))
       {
          g_invalidLogged++;
@@ -332,6 +364,9 @@ void IngestOne(const MksTick &tick)
    else if(err.code == MKS_ERR_RENKO_THRESHOLD_LIMIT_EXCEEDED)
    {
       g_k102Seen++;
+      if(g_auditSink != NULL)
+         g_auditSink.RecordKExceeded(tick.seq, (tick.bid + tick.ask) / 2.0,
+                                      InpThresholdLimit + 1);
       g_logger.Warn("Producer", "threshold limit K exceeded",
          StringFormat("\"code\":102,\"err\":\"%s\"",
                       MksJsonEscape(err.ToString())));
@@ -339,6 +374,8 @@ void IngestOne(const MksTick &tick)
    else if(err.code == MKS_ERR_RENKO_TICK_STREAM_CORRUPT)
    {
       g_streamHalted = true;
+      if(g_auditSink != NULL)
+         g_auditSink.RecordStreamHalted(tick.seq, InpInvalidTickLimit);
       g_logger.Error("Producer", "tick stream corrupt, builder halted",
          StringFormat("\"code\":104,\"err\":\"%s\"",
                       MksJsonEscape(err.ToString())));
@@ -421,9 +458,11 @@ void Cleanup()
 {
    if(g_builder    != NULL) { delete g_builder;    g_builder    = NULL; }
    if(g_multiSink  != NULL) { delete g_multiSink;  g_multiSink  = NULL; }
+   if(g_auditSink  != NULL) { delete g_auditSink;  g_auditSink  = NULL; }
    if(g_csSink     != NULL) { delete g_csSink;     g_csSink     = NULL; }
    if(g_sink       != NULL) { delete g_sink;       g_sink       = NULL; }
    if(g_writer     != NULL) { delete g_writer;     g_writer     = NULL; }
+   if(g_tickWriter != NULL) { delete g_tickWriter; g_tickWriter = NULL; }
    if(g_sizer      != NULL) { delete g_sizer;      g_sizer      = NULL; }
    if(g_logger     != NULL) { delete g_logger;     g_logger     = NULL; }
    if(g_iSymbol    != NULL) { delete g_iSymbol;    g_iSymbol    = NULL; }
@@ -641,6 +680,56 @@ int OnInit()
    g_multiSink.Add(g_sink);
    g_multiSink.Add(g_csSink);
 
+   // Modo de paridade canônica (ADR-024): grava .mkstick paralelo no
+   // mesmo loop do OnTick (anchor sincronizado) + audit log TSV para
+   // diff humano-legível pós-execução vs Replayer. Não precisa de
+   // TickRecorder Service separado quando este modo está ativo.
+   if(InpParityRunMode)
+   {
+      // .mkstick paralelo — mesmo formato do TickRecorder Service,
+      // mesmo CMksTickFileWriter. Nome distingue: sufixo _parity para
+      // não confundir com captura contínua do Service.
+      g_tickPath = StringFormat("MKS-ULTIMATE\\Ticks\\%s_%s_parity.mkstick",
+                                 g_symbol, stamp);
+      g_tickWriter = new CMksTickFileWriter();
+      if(!g_tickWriter.Open(g_tickPath, err))
+      {
+         g_logger.Error("Producer", "parity tickWriter.Open failed",
+            StringFormat("\"path\":\"%s\",\"err\":\"%s\"",
+                         MksJsonEscape(g_tickPath), MksJsonEscape(err.ToString())));
+         Cleanup();
+         return INIT_FAILED;
+      }
+      if(!g_tickWriter.WriteHeader(g_broker, g_account, g_symbol, g_digits,
+                                    g_iSymbol.TickSize(), g_iSymbol.Point(),
+                                    g_iSymbol.ContractSize(), err))
+      {
+         g_logger.Error("Producer", "parity tickWriter.WriteHeader failed",
+            StringFormat("\"err\":\"%s\"", MksJsonEscape(err.ToString())));
+         Cleanup();
+         return INIT_FAILED;
+      }
+
+      // Audit log TSV — adicionado ao multiSink para receber OnBrickClose.
+      g_auditPath = StringFormat("MKS-ULTIMATE\\Logs\\Producer_audit_%s_%s.tsv",
+                                  g_symbol, stamp);
+      g_auditSink = new CMksAuditLogSink();
+      if(!g_auditSink.Open(g_auditPath))
+      {
+         g_logger.Error("Producer", "parity auditSink.Open failed",
+            StringFormat("\"path\":\"%s\"", MksJsonEscape(g_auditPath)));
+         Cleanup();
+         return INIT_FAILED;
+      }
+      g_auditSink.WriteHeader(g_symbol, g_broker, g_account, g_digits,
+                               sizerInitialSize, "classic");
+      g_multiSink.Add(g_auditSink);
+
+      g_logger.Info("Producer", "parity mode enabled",
+         StringFormat("\"mkstickPath\":\"%s\",\"auditPath\":\"%s\"",
+                      MksJsonEscape(g_tickPath), MksJsonEscape(g_auditPath)));
+   }
+
    g_builder = new CMksRenkoBuilder(geom, g_sizer, g_multiSink,
                                     InpInvalidTickLimit, InpThresholdLimit);
 
@@ -849,11 +938,25 @@ void OnDeinit(const int reason)
             StringFormat("\"err\":\"%s\"", MksJsonEscape(err.ToString())));
    }
 
+   // Modo paridade: fecha tickWriter (.mkstick) e auditSink. Ambos
+   // gravam o último estado consistente. tickWriter patcheia header
+   // com tickCount; auditSink escreve rodapé com total.
+   if(g_tickWriter != NULL)
+   {
+      MksError err;
+      if(!g_tickWriter.Close(err) && g_logger != NULL)
+         g_logger.Error("Producer", "parity tickWriter.Close failed",
+            StringFormat("\"err\":\"%s\"", MksJsonEscape(err.ToString())));
+   }
+   if(g_auditSink != NULL)
+      g_auditSink.Close();
+
    int totalBricks  = (g_sink   != NULL) ? g_sink.bricksWritten    : 0;
    int writeFails   = (g_sink   != NULL) ? g_sink.writeFailures    : 0;
    int csBars       = (g_csSink != NULL) ? g_csSink.barsPushed     : 0;
    int csFails      = (g_csSink != NULL) ? g_csSink.updateFailures : 0;
    long fileBricks  = (g_writer != NULL) ? g_writer.BrickCount()   : 0;
+   long parityTicks = (g_tickWriter != NULL) ? g_tickWriter.TickCount() : 0;
 
    if(g_logger != NULL)
    {
@@ -864,6 +967,8 @@ void OnDeinit(const int reason)
             "\"csName\":\"%s\",\"csBars\":%d,\"csUpdateFailures\":%d,"
             "\"histTicks\":%d,\"histBricks\":%d,"
             "\"err102\":%d,\"err103\":%d,\"err103Logged\":%d,\"streamHalted\":%s,"
+            "\"parityMode\":%s,\"parityMksTickPath\":\"%s\",\"parityTickCount\":%I64d,"
+            "\"parityAuditPath\":\"%s\","
             "\"mksbkPath\":\"%s\",\"logPath\":\"%s\"",
             reason, g_seq,
             totalBricks, fileBricks, writeFails,
@@ -871,6 +976,9 @@ void OnDeinit(const int reason)
             g_histLoaded, g_histBricks,
             g_k102Seen, g_invalidSeen, g_invalidLogged,
             (g_streamHalted ? "true" : "false"),
+            (InpParityRunMode ? "true" : "false"),
+            MksJsonEscape(g_tickPath), parityTicks,
+            MksJsonEscape(g_auditPath),
             MksJsonEscape(g_filePath), MksJsonEscape(g_logPath)));
       g_logger.Close();
    }
