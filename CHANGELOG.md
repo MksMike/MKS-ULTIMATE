@@ -6,6 +6,14 @@ O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/) e es
 
 ## [Não lançado]
 
+### Changed
+- `MQL5/Experts/MKS-ULTIMATE/ColorReversal.mq5` — **3 fixes para rodar em Strategy Tester** descobertos durante validação empírica de 2026-05-27:
+  - `g_isTesting = MQLInfoInteger(MQL_TESTER)` detectado em OnInit; quando true, **pula `CustomSymbolCreate` e CSSink** (MT5 retorna erro 4014 = `ERR_FUNCTION_NOT_ALLOWED` em tester — limitação documentada). CS é puramente visual, strategy recebe bricks via IRenkoSink direto, sem perda funcional.
+  - `EnsureCustomSymbolReady` reescrita conforme versão canônica do Producer: pré-check `SYMBOL_CUSTOM`, código de erro real `5304` (era buggado `4302`), setters completos de propriedades (`SYMBOL_DIGITS`, `SYMBOL_POINT`, `SYMBOL_TRADE_TICK_SIZE`, etc.).
+  - `g_mt5Broker.Init(err)` agora é chamado explicitamente após construtor (estava faltando — broker retornava `MKS_ERR_BROKER_NOT_INITIALIZED` em todas as Sends).
+  - `OnTradeTransaction(...)` adicionado ao EA roteando para `g_mt5Broker.OnTradeTransactionEvent` (fallback necessário para sincronização com MT5 trade events).
+- **Validação empírica Fase 9 em Strategy Tester (2026-05-27):** XAUUSDm, 2026-05-20 → 2026-05-26, 100% qualidade histórica, 1.112.064 ticks reais → 1.275 bricks → 617 flips → **617/617 Sends preenchidos (0 rejeições)** → 319 closes via strategy + 297 auto-trigger SL via `CMksMt5Broker` + `IPositionBook.IsOpen` → Net -16.26 USD (esperado: estratégia "reversão de cor pura sem filtros" não tem edge por design — ROADMAP §Fase 9 literal). Max DD 1.14%, Profit Factor 0.98, Sharpe -1.21 — confirma empiricamente que o core compõe, executa, gasta custos no equity (eixo 3 do V5-POSTMORTEM mitigado) e o Risk Manager protege a conta.
+
 ### Added
 - **Fase 9 MVP — primeiro EA end-to-end usando o core completo.**
   - `MQL5/Include/MKS-ULTIMATE/Strategy/CMksColorReversalStrategy.mqh` — estratégia minimalista que implementa `IRenkoSink`. Lógica: em cada flip de cor (BULL→BEAR ou inverso) fecha posição corrente (se houver) e abre nova posição na direção da nova cor. SL fixo em pontos (input), sem TP — saída só por flip seguinte ou SL hit (auto-trigger do broker). Auto-detach: consulta `IPositionBook.IsOpen(positionId)` no início de cada `OnBrickClose` antes de decidir; se broker fechou externamente (SL hit em live, auto-close do `CMksSimulatedBroker` em backtest), zera state interno sem chamar `Close` fantasma. Métricas agregadas (bricksSeen, flipsDetected, sendsAttempted/Filled/Rejected, closesAttempted/Filled/Rejected, autoDetected) via getter `Metrics()`. Determinística: estado interno sem RNG, mesma sequência de bricks + mesmo broker → mesma sequência de Send/Close.
