@@ -383,11 +383,18 @@ O builder atual não distingue: trata os dois casos como corrupção.
 - **`InpHistoricalFillDays = 0`** elimina o cenário 1 estruturalmente: builder começa do zero, `m_lastClose` = primeiro tick live, nunca há `lastClose` stale. **Esta é a configuração correta para sessões de paridade canônica (ADR-024) e para qualquer operação onde o objetivo é capturar live + replay determinístico.**
 - **Dimensionar K para cobrir o gap esperado:** se for usado `InpHistoricalFillDays > 0`, `K` precisa ser dimensionado de modo que `K · (1-PO) · S` cubra o **maior gap razoável** entre fim-do-fill e tick-live. Heurística para XAU: 3× o ATR diário típico em USD (≈ 100 USD), dividido por `(1-PO) · S`. Com S=1 e PO=0 (classic), `K ≥ 100`. Com S=3, `K ≥ 33`.
 
-**Refino arquitetural pendente (registrado como follow-up):**
+**Refino arquitetural — soft recovery implementado (2026-05-26):**
 
-O builder pode ganhar **recovery inteligente** que distingue os dois casos via padrão observado: se há **N rejeições consecutivas** com mids dentro de **variância baixa entre si**, conclui-se gap legítimo (não corrupção de 1 tick isolado), e o builder reanchora `m_lastClose = mid` com warning explícito. Isso preserva a proteção da §regra 4 contra corrupção isolada (1 tick rejeitado não dispara recovery), mas evita o travamento permanente do cenário de gap estrutural. A implementação concreta — qual N, qual variância, qual janela — é decisão da próxima ADR que abrir esta porta. Por ora a regra 4 permanece literalmente como está, e a mitigação é operacional (`fillDays=0` ou K dimensionado).
+O builder ganhou **recovery inteligente** que distingue os dois casos via padrão observado, conforme a heurística desta nota:
 
-A ADR-011 não é alterada; esta nota registra a categoria de causa que a premissa da §regra 4 não cobriu e a mitigação operacional verificada.
+- **Parâmetro:** `kRecoverAfter = 5` no construtor de `CMksRenkoBuilder` (default; 0 desabilita o recovery e preserva o comportamento legado).
+- **Detecção:** após `kRecoverAfter` rejeições K consecutivas com mids agrupados (variância ≤ `S`), o builder reconhece gap legítimo.
+- **Ação:** reanchora `m_lastClose = mid`, reseta forming extremes, marca `m_hasFirstBrick = false` (próximo movimento define a direção como se fosse o primeiro brick). Retorna `false` com novo código `MKS_ERR_RENKO_RECOVERED_FROM_GAP = 105`.
+- **Reset:** qualquer tick aceito (com ou sem brick emitido) zera o contador — exige sequência **consecutiva** de rejeições com mids agrupados.
+
+Isso preserva a proteção da §regra 4 contra corrupção isolada (1 tick rejeitado não dispara recovery; o run quebra no próximo tick legítimo perto do `lastClose` antigo) e evita o travamento permanente do cenário de gap estrutural. Producer e Replayer logam o código 105 distinto do 102 (audit e summary registram contagens separadas).
+
+A ADR-011 não é alterada; esta nota registra a categoria de causa que a premissa da §regra 4 não cobriu, a mitigação operacional verificada (`fillDays=0`, dimensionar K) e o soft recovery agora implementado como rede de proteção complementar.
 
 ---
 

@@ -24,6 +24,7 @@ enum ENUM_MKS_ERROR_CODE
    MKS_ERR_RENKO_THRESHOLD_LIMIT_EXCEEDED = 102, // cruzamento acima do limiar K (ADR-011)
    MKS_ERR_RENKO_INVALID_TICK = 103,        // tick reprovado por IsValid() (ADR-006)
    MKS_ERR_RENKO_TICK_STREAM_CORRUPT = 104, // L ticks inválidos consecutivos (ADR-006)
+   MKS_ERR_RENKO_RECOVERED_FROM_GAP = 105,  // N rejeições K consecutivas com mids agrupados — reanchorou m_lastClose (ADR-011 nota 2026-05-26)
 
    //--- Broker: faixa 200–299 — ver ADR-009, ADR-017 ---
    MKS_ERR_BROKER_TIMEOUT = 200,           // DEAL_ADD não chegou no timeout configurado

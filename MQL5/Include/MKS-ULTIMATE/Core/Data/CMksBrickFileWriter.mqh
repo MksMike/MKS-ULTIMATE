@@ -212,6 +212,47 @@ public:
       return true;
    }
 
+   // Checkpoint: patcheia brickCount/timeMscFirst/timeMscLast no header SEM
+   // fechar o handle, depois faz seek de volta para o final do arquivo
+   // e força FileFlush. Simétrico a CMksTickFileWriter::Checkpoint. Permite
+   // que um crash do Producer deixe o .mksbk parcialmente válido — leitor
+   // (CMksBrickFileReader) lê exatamente os bricks acumulados até o último
+   // Checkpoint. createdAtMsc NÃO é gravado aqui (só faz sentido em Close).
+   bool Checkpoint(MksError &err)
+   {
+      if(m_handle == INVALID_HANDLE || m_closed)
+      {
+         MKS_SET_ERROR(err, MKS_ERR_DATA_STATE_INVALID,
+                       "Checkpoint em writer fechado ou não aberto", "");
+         return false;
+      }
+      if(!m_headerWritten)
+      {
+         MKS_SET_ERROR(err, MKS_ERR_DATA_STATE_INVALID,
+                       "Checkpoint sem WriteHeader prévio", "");
+         return false;
+      }
+
+      ulong endPos = FileTell(m_handle);
+
+      FileSeek(m_handle, MKS_BRICKFILE_OFF_BRICK_COUNT, SEEK_SET);
+      FileWriteLong(m_handle, m_brickCount);
+      FileWriteLong(m_handle, m_timeMscFirst);
+      FileWriteLong(m_handle, m_timeMscLast);
+
+      FileSeek(m_handle, (long)endPos, SEEK_SET);
+      FileFlush(m_handle);
+      return true;
+   }
+
+   // Força flush dos bytes pendentes para disco sem mexer no header.
+   // Cheap; pode ser chamado periodicamente.
+   void Flush()
+   {
+      if(m_handle != INVALID_HANDLE)
+         FileFlush(m_handle);
+   }
+
    // createdAtMscOverride < 0 => usa TimeCurrent (produção). Valor explícito
    // permite golden file test reproduzível byte-a-byte.
    bool Close(MksError &err, long createdAtMscOverride = -1)

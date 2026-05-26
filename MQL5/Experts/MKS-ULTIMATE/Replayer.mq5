@@ -56,7 +56,7 @@ input string InpTickFolder    = "";        // multi: pasta com .mkstick (vazia =
 input string InpSymbolPrefix  = "";        // multi: prefixo de nome (ex: XAUUSDm)
 
 input group "=== Brick (classic, ADR-026) ==="
-input double InpBrickSizePts        = 3.0; // mesmo valor usado pelo Producer
+input double InpBrickSize        = 3.0; // mesmo valor usado pelo Producer
 input int    InpInvalidTickLimit    = 10;  // L (ADR-006)
 input int    InpThresholdLimit      = 20;  // K (ADR-011)
 
@@ -97,6 +97,7 @@ bool    g_halted        = false;
 long    g_ticksConsumed = 0;
 long    g_ticksInvalid  = 0;
 long    g_ticksK102     = 0;
+long    g_ticksK105     = 0; // recoveries de gap estrutural (ADR-011 nota)
 ulong   g_startMs       = 0;
 bool    g_isMultiMode   = false;
 
@@ -282,7 +283,7 @@ int OnInit()
                    (g_isMultiMode ? "multi" : "single"),
                    MksJsonEscape(firstPath),
                    (symbolSelected ? "true" : "false"),
-                   InpBrickSizePts, InpInvalidTickLimit, InpThresholdLimit));
+                   InpBrickSize, InpInvalidTickLimit, InpThresholdLimit));
 
    // 6. Cria source apropriado.
    if(g_isMultiMode)
@@ -326,7 +327,7 @@ int OnInit()
 
    // 8. Sizer + geometria classic (ADR-026 — Producer e Replayer ambos
    //    classic; estratégia opera sobre brick.close real).
-   g_sizer = new CMksFixedBrickSizer(InpBrickSizePts);
+   g_sizer = new CMksFixedBrickSizer(InpBrickSize);
    if(!g_sizer.Validate(err))
    {
       g_logger.Error("Replayer", "sizer invalid",
@@ -365,7 +366,7 @@ int OnInit()
       return INIT_FAILED;
    }
    if(!g_writer.WriteHeader(g_sourceBroker, g_sourceAccount, g_sourceSymbol,
-                             g_sourceDigits, geom, InpBrickSizePts, err))
+                             g_sourceDigits, geom, InpBrickSize, err))
    {
       g_logger.Error("Replayer", "writer.WriteHeader failed",
          StringFormat("\"err\":\"%s\"", MksJsonEscape(err.ToString())));
@@ -404,7 +405,7 @@ int OnInit()
       }
       // Header com mesmos campos do audit do Producer — diff direto.
       g_auditSink.WriteHeader(g_sourceSymbol, g_sourceBroker, g_sourceAccount,
-                               g_sourceDigits, InpBrickSizePts, "classic");
+                               g_sourceDigits, InpBrickSize, "classic");
       g_multiSink = new CMksMultiSink();
       g_multiSink.Add(g_sink);
       g_multiSink.Add(g_auditSink);
@@ -485,6 +486,15 @@ bool ProcessBatch()
                g_auditSink.RecordKExceeded(t.seq, (t.bid + t.ask) / 2.0,
                                             InpThresholdLimit + 1);
          }
+         else if(err.code == MKS_ERR_RENKO_RECOVERED_FROM_GAP)
+         {
+            g_ticksK105++;
+            if(g_auditSink != NULL)
+               g_auditSink.RecordKExceeded(t.seq, (t.bid + t.ask) / 2.0, -105);
+            g_logger.Warn("Replayer", "gap structural — builder reanchored",
+               StringFormat("\"code\":105,\"err\":\"%s\"",
+                            MksJsonEscape(err.ToString())));
+         }
          else if(err.code == MKS_ERR_RENKO_TICK_STREAM_CORRUPT)
          {
             if(g_auditSink != NULL)
@@ -531,14 +541,14 @@ void FinishReplay()
    {
       g_logger.Info("Replayer", "replay summary",
          StringFormat("\"eof\":%s,\"halted\":%s,\"ticksConsumed\":%I64d,"
-                      "\"ticksInvalid\":%I64d,\"ticksK102\":%I64d,"
+                      "\"ticksInvalid\":%I64d,\"ticksK102\":%I64d,\"ticksK105Recovered\":%I64d,"
                       "\"bricksWritten\":%I64d,\"elapsedMs\":%I64u,"
                       "\"ticksPerSec\":%.0f,\"outputPath\":\"%s\","
                       "\"auditPath\":\"%s\","
                       "\"logPath\":\"%s\"",
                       (g_eof ? "true" : "false"),
                       (g_halted ? "true" : "false"),
-                      g_ticksConsumed, g_ticksInvalid, g_ticksK102,
+                      g_ticksConsumed, g_ticksInvalid, g_ticksK102, g_ticksK105,
                       fileBricks, elapsedMs, ticksPerSec,
                       MksJsonEscape(g_outputPath),
                       MksJsonEscape(g_auditPath),
