@@ -106,6 +106,7 @@ ulong    g_seq            = 0;
 int      g_invalidLogged  = 0;
 int      g_invalidSeen    = 0;
 int      g_k102Seen       = 0;
+int      g_k105Recovered  = 0; // recoveries de gap estrutural (ADR-011 nota)
 bool     g_streamHalted   = false;
 int      g_histLoaded     = 0;
 int      g_histBricks     = 0;
@@ -133,6 +134,12 @@ string                g_auditPath  = "";
 // Painel UX (ADR-022). Painel só existe em chart real (não em backtest).
 CMksProgressPanel    g_panel;
 bool                 g_isTesting = false;
+
+// Periodicidade do Checkpoint do .mksbk durante live (OnTimer 1Hz × este
+// contador). 60s é compromisso entre crash-tolerance (perda máxima de 1
+// minuto de bricks no header) e overhead de seek+flush.
+const int            kBrickCheckpointEverySec = 60;
+int                  g_brickCheckpointTick = 0;
 
 // Estado do fill histórico em chunks (refactor OnInit -> OnTimer):
 // CopyTicksRange retorna tudo de uma vez, mas o loop de IngestOne é
@@ -370,6 +377,17 @@ void IngestOne(const MksTick &tick)
       g_logger.Warn("Producer", "threshold limit K exceeded",
          StringFormat("\"code\":102,\"err\":\"%s\"",
                       MksJsonEscape(err.ToString())));
+   }
+   else if(err.code == MKS_ERR_RENKO_RECOVERED_FROM_GAP)
+   {
+      g_k105Recovered++;
+      // Audit recebe nota distinta — útil para diff Producer vs Replayer
+      // confirmar que ambos reanchoraram no mesmo tick.
+      if(g_auditSink != NULL)
+         g_auditSink.RecordKExceeded(tick.seq, (tick.bid + tick.ask) / 2.0, -105);
+      g_logger.Warn("Producer", "gap structural detected — builder reanchored",
+         StringFormat("\"code\":105,\"recoveries\":%d,\"err\":\"%s\"",
+                      g_k105Recovered, MksJsonEscape(err.ToString())));
    }
    else if(err.code == MKS_ERR_RENKO_TICK_STREAM_CORRUPT)
    {
@@ -922,6 +940,25 @@ void OnTimer()
       }
       g_panel.UpdateLive(bricksTotal, writerCount, lastInfo, g_ticksPerSec);
    }
+
+   // Checkpoint periódico do .mksbk: patcheia brickCount/timeMscFirst/Last
+   // no header + FileFlush. Permite que um crash do terminal deixe o
+   // arquivo parcialmente válido (leitor enxerga até o último checkpoint).
+   // Também faz Flush no .mkstick paralelo (modo paridade), simétrico.
+   g_brickCheckpointTick++;
+   if(g_brickCheckpointTick >= kBrickCheckpointEverySec)
+   {
+      g_brickCheckpointTick = 0;
+      if(g_writer != NULL)
+      {
+         MksError err;
+         if(!g_writer.Checkpoint(err) && g_logger != NULL)
+            g_logger.Warn("Producer", "brick writer Checkpoint failed",
+               StringFormat("\"err\":\"%s\"", MksJsonEscape(err.ToString())));
+      }
+      if(g_tickWriter != NULL)
+         g_tickWriter.Flush();
+   }
 }
 
 //+------------------------------------------------------------------+
@@ -966,7 +1003,7 @@ void OnDeinit(const int reason)
             "\"bricksTotal\":%d,\"writerCount\":%I64d,\"writeFailures\":%d,"
             "\"csName\":\"%s\",\"csBars\":%d,\"csUpdateFailures\":%d,"
             "\"histTicks\":%d,\"histBricks\":%d,"
-            "\"err102\":%d,\"err103\":%d,\"err103Logged\":%d,\"streamHalted\":%s,"
+            "\"err102\":%d,\"err103\":%d,\"err103Logged\":%d,\"err105Recovered\":%d,\"streamHalted\":%s,"
             "\"parityMode\":%s,\"parityMksTickPath\":\"%s\",\"parityTickCount\":%I64d,"
             "\"parityAuditPath\":\"%s\","
             "\"mksbkPath\":\"%s\",\"logPath\":\"%s\"",
@@ -974,7 +1011,7 @@ void OnDeinit(const int reason)
             totalBricks, fileBricks, writeFails,
             MksJsonEscape(g_csName), csBars, csFails,
             g_histLoaded, g_histBricks,
-            g_k102Seen, g_invalidSeen, g_invalidLogged,
+            g_k102Seen, g_invalidSeen, g_invalidLogged, g_k105Recovered,
             (g_streamHalted ? "true" : "false"),
             (InpParityRunMode ? "true" : "false"),
             MksJsonEscape(g_tickPath), parityTicks,

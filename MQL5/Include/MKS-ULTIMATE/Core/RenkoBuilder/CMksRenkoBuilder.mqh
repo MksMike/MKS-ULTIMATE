@@ -57,6 +57,14 @@ private:
    double                m_lastMid;       // último mid observado (ADR-021 §5)
    bool                  m_emitForming;   // dispara OnBrickForming a cada tick (ADR-021)
 
+   // Soft recovery de gap estrutural (ADR-011 nota 2026-05-26): N rejeições
+   // K consecutivas com mids agrupados disparam reanchor de m_lastClose.
+   // Distingue gap legítimo (mids agrupados longe de lastClose) de spike
+   // isolado (1 tick outlier seguido de mids perto de lastClose).
+   int                   m_kRecoverAfter;       // 0 = desabilitado; N = reanchor após N rejeições
+   int                   m_kExceededRun;        // contador de rejeições consecutivas
+   double                m_kFirstMid;           // primeiro mid rejeitado da janela atual
+
    // Próximo limiar de continuação na direção `dir`:
    //   base + sign · (1 - PO) · S
    // Em classic (PO=0), o limiar fica a S do close anterior; em median
@@ -76,6 +84,46 @@ private:
    {
       double sign = (dir == MKS_BRICK_BULL) ? -1.0 : 1.0;
       return base + sign * (1.0 - m_geometry.pro) * size * m_geometry.revSizeRatio;
+   }
+
+   // Soft recovery: decide se deve reanchorar lastClose após M>K e
+   // preenche err. Retorna true se recuperou (caller deve emitir warning
+   // 105 e seguir vivo), false se foi rejeição 102 padrão.
+   bool HandleKExceeded(int M, double mid, ulong seq, double size, MksError &err)
+   {
+      m_kExceededRun++;
+      if(m_kExceededRun == 1)
+         m_kFirstMid = mid;
+
+      // Reanchor só se: recovery habilitado, atingiu N consecutivas, e
+      // mids estão agrupados (variância ≤ size — gap legítimo, não spike).
+      bool gapDetected =
+         (m_kRecoverAfter > 0)
+         && (m_kExceededRun >= m_kRecoverAfter)
+         && (MathAbs(mid - m_kFirstMid) <= size);
+
+      if(gapDetected)
+      {
+         // Reanchora como se fosse o primeiro tick após init: próximo
+         // movimento define direção via primeiro brick (sem reversão).
+         m_lastClose = mid;
+         m_formingHigh = mid;
+         m_formingLow = mid;
+         m_hasFirstBrick = false;
+         m_kExceededRun = 0;
+         MKS_SET_ERROR(err, MKS_ERR_RENKO_RECOVERED_FROM_GAP,
+                       "gap estrutural detectado — reanchor de m_lastClose",
+                       StringFormat("run=%d M=%d K=%d seq=%I64u mid=%.5f",
+                                    m_kRecoverAfter, M, m_thresholdLimit,
+                                    seq, mid));
+         return true;
+      }
+
+      MKS_SET_ERROR(err, MKS_ERR_RENKO_THRESHOLD_LIMIT_EXCEEDED,
+                    "cruzamento acima do limiar K — não emitido",
+                    StringFormat("M=%d K=%d seq=%I64u mid=%.5f run=%d",
+                                 M, m_thresholdLimit, seq, mid, m_kExceededRun));
+      return false;
    }
 
    void EmitBrick(double open, double close, ENUM_MKS_BRICK_DIR dir,
@@ -104,11 +152,16 @@ public:
    // L = 10: tolera glitch transiente sem mascarar feed sustentadamente quebrado (ADR-006 §5).
    // K = 20: tolera spikes plausíveis de XAUUSD em baixa liquidez; corta cruzamentos de
    //         magnitude impossível em um único tick (ADR-011 §4).
+   // kRecoverAfter = 5: após 5 rejeições K consecutivas com mids agrupados
+   //         (variância ≤ S), reconhece gap legítimo e reanchora m_lastClose.
+   //         0 desabilita (comportamento legado, builder pode travar em gap
+   //         maior que K·(1-PO)·S). Ver ADR-011 nota 2026-05-26.
    CMksRenkoBuilder(const MksRenkoGeometry &geometry,
                     IBrickSizer *sizer,
                     IRenkoSink  *sink,
                     int invalidLimit = 10,
-                    int thresholdLimit = 20)
+                    int thresholdLimit = 20,
+                    int kRecoverAfter = 5)
    {
       m_geometry = geometry;
       m_sizer = sizer;
@@ -125,6 +178,9 @@ public:
       m_formingLow = 0.0;
       m_lastMid = 0.0;
       m_emitForming = true;
+      m_kRecoverAfter = kRecoverAfter;
+      m_kExceededRun = 0;
+      m_kFirstMid = 0.0;
    }
 
    // Liga/desliga emissão de OnBrickForming a cada tick (ADR-021). Usado
@@ -236,10 +292,7 @@ public:
             walkClose = contThr;
             if(M > m_thresholdLimit) // ADR-011 §4
             {
-               MKS_SET_ERROR(err, MKS_ERR_RENKO_THRESHOLD_LIMIT_EXCEEDED,
-                             "cruzamento acima do limiar K — não emitido",
-                             StringFormat("M=%d K=%d seq=%I64u mid=%.5f",
-                                          M, m_thresholdLimit, tick.seq, mid));
+               HandleKExceeded(M, mid, tick.seq, size, err);
                return false;
             }
          }
@@ -282,14 +335,17 @@ public:
 
             if(M > m_thresholdLimit) // ADR-011 §4
             {
-               MKS_SET_ERROR(err, MKS_ERR_RENKO_THRESHOLD_LIMIT_EXCEEDED,
-                             "cruzamento acima do limiar K — não emitido",
-                             StringFormat("M=%d K=%d seq=%I64u mid=%.5f",
-                                          M, m_thresholdLimit, tick.seq, mid));
+               HandleKExceeded(M, mid, tick.seq, size, err);
                return false;
             }
          }
       }
+
+      // Reset do run de K-exceeded em qualquer tick aceito (com ou sem
+      // brick emitido). Quebra a sequência de rejeições — gap legítimo
+      // exige N consecutivas com mids agrupados, intercaladas com
+      // sucesso resetam o estado.
+      m_kExceededRun = 0;
 
       if(M >= 1)
       {
