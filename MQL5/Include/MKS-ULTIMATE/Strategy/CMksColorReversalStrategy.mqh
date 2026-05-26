@@ -1,0 +1,310 @@
+//+------------------------------------------------------------------+
+//| @file           : CMksColorReversalStrategy.mqh
+//| @project        : MKS-ULTIMATE
+//| @module         : Strategy
+//| @responsibility : Estratégia minimalista da Fase 9 — "reversão de
+//|                   cor pura". Implementa IRenkoSink. Em cada flip
+//|                   de direção de brick (BULL→BEAR ou inverso): fecha
+//|                   posição corrente (se houver) e abre nova posição
+//|                   na direção da nova cor. SL fixo em pontos. Sem TP
+//|                   (saída só por flip seguinte ou SL hit). Magic
+//|                   próprio para coexistir com outras estratégias.
+//|                   Auto-detach: consulta IPositionBook a cada brick
+//|                   antes de decidir; se posição "atual" sumiu do
+//|                   broker, zera estado interno.
+//|                   ROADMAP Fase 9. Estratégia deliberadamente simples
+//|                   — alvo é exercitar todas as peças do core, não ser
+//|                   lucrativa.
+//| @depends_on     : Core/Interfaces/IRenkoSink.mqh,
+//|                   Core/Interfaces/IBroker.mqh,
+//|                   Core/Interfaces/IPositionSizer.mqh,
+//|                   Core/Interfaces/IPositionBook.mqh,
+//|                   Core/Interfaces/ISymbol.mqh,
+//|                   Core/Interfaces/ILogger.mqh,
+//|                   Core/Types/Brick.mqh, Core/Types/FormingBrick.mqh,
+//|                   Core/Types/OrderRequest.mqh,
+//|                   Core/Types/ExecutionResult.mqh
+//| @install_path   : MQL5/Include/MKS-ULTIMATE/Strategy/CMksColorReversalStrategy.mqh
+//+------------------------------------------------------------------+
+#ifndef MKS_ULTIMATE_STRATEGY_CMKSCOLORREVERSALSTRATEGY_MQH
+#define MKS_ULTIMATE_STRATEGY_CMKSCOLORREVERSALSTRATEGY_MQH
+
+#include <MKS-ULTIMATE/Core/Interfaces/IRenkoSink.mqh>
+#include <MKS-ULTIMATE/Core/Interfaces/IBroker.mqh>
+#include <MKS-ULTIMATE/Core/Interfaces/IPositionSizer.mqh>
+#include <MKS-ULTIMATE/Core/Interfaces/IPositionBook.mqh>
+#include <MKS-ULTIMATE/Core/Interfaces/ISymbol.mqh>
+#include <MKS-ULTIMATE/Core/Interfaces/ILogger.mqh>
+#include <MKS-ULTIMATE/Core/Types/Brick.mqh>
+#include <MKS-ULTIMATE/Core/Types/FormingBrick.mqh>
+#include <MKS-ULTIMATE/Core/Types/OrderRequest.mqh>
+#include <MKS-ULTIMATE/Core/Types/ExecutionResult.mqh>
+
+// Métricas agregadas para auditoria de execução. Acessíveis via getter.
+struct CMksColorReversalMetrics
+{
+   long bricksSeen;             // total de OnBrickClose recebidos
+   long flipsDetected;          // mudanças de direção brick→brick
+   long sendsAttempted;         // tentativas de abrir posição
+   long sendsFilled;            // abertas com sucesso (broker retornou FILLED)
+   long sendsRejected;          // rejeitadas (risk gate ou broker)
+   long closesAttempted;        // tentativas de fechar posição existente
+   long closesFilled;
+   long closesRejected;
+   long autoDetected;           // detecções de auto-close externo (book)
+
+   CMksColorReversalMetrics()
+   {
+      bricksSeen      = 0;
+      flipsDetected   = 0;
+      sendsAttempted  = 0;
+      sendsFilled     = 0;
+      sendsRejected   = 0;
+      closesAttempted = 0;
+      closesFilled    = 0;
+      closesRejected  = 0;
+      autoDetected    = 0;
+   }
+};
+
+// CMksColorReversalStrategy — IRenkoSink que toma decisões em cada brick.
+//
+// Lógica em OnBrickClose:
+//   1. Se book != NULL e currentPositionId != 0 e !book.IsOpen(currentId):
+//      detecta auto-close externo (SL hit do broker, manual close, etc).
+//      Zera currentPositionId. Métrica autoDetected++.
+//   2. Se !hasLastBrick: registra direção e retorna (sem ação).
+//   3. Se brick.direction == lastBrickDir: sem flip. Atualiza lastBrickDir
+//      (idempotente) e retorna.
+//   4. FLIP detectado:
+//      a. Se currentPositionId != 0: broker.Close(currentId, fullLots).
+//         Sucesso ou falha, currentPositionId é zerado (Phase 9 simplista:
+//         falha de close é responsabilidade do risk operacional, não
+//         da estratégia bloquear nova entrada).
+//      b. Calcula lots via sizer.ComputeLots(slPoints).
+//      c. side = (brick.direction == BULL) ? BUY : SELL.
+//      d. request com slPoints fixo, tpPoints=0, comment="ColorReversal".
+//      e. broker.Send(request). Se FILLED: registra novo positionId.
+//   5. Atualiza lastBrickDir.
+//
+// Determinismo: estratégia tem estado interno mas não usa RNG. Mesma
+// sequência de bricks + mesmo broker → mesma sequência de Send/Close.
+// Paridade entre backtest e live é prerrogativa do composition root
+// (mesmo broker mock, mesmo símbolo, mesmo clock). Estratégia em si
+// é função pura do stream de bricks.
+class CMksColorReversalStrategy : public IRenkoSink
+{
+private:
+   IBroker        *m_broker;
+   IPositionSizer *m_sizer;
+   IPositionBook  *m_book;     // opcional — habilita auto-detach
+   ISymbol        *m_symbol;
+   ILogger        *m_logger;
+   double          m_slPoints;
+   long            m_magic;
+
+   // Estado da estratégia
+   bool                  m_hasLastBrick;
+   ENUM_MKS_BRICK_DIR    m_lastBrickDir;
+   ulong                 m_currentPositionId;
+   ENUM_MKS_ORDER_SIDE   m_currentSide;
+   double                m_currentLots;
+
+   // Métricas
+   CMksColorReversalMetrics m_metrics;
+
+   void LogInfo(const string &msg, const string &ctx)
+   {
+      if(m_logger == NULL) return;
+      m_logger.Log(MKS_LOG_INFO, "ColorReversal", msg, ctx);
+   }
+
+   void LogWarn(const string &msg, const string &ctx)
+   {
+      if(m_logger == NULL) return;
+      m_logger.Log(MKS_LOG_WARN, "ColorReversal", msg, ctx);
+   }
+
+   // Detecta auto-close externo via book. Se nossa state diz "tenho
+   // posição X" mas book diz "X não está aberta", reconhece que o
+   // broker fechou externamente (SL hit, manual close, etc) e zera
+   // o vínculo interno.
+   void CheckAutoCloseExternal()
+   {
+      if(m_book == NULL) return;
+      if(m_currentPositionId == 0) return;
+      if(m_book.IsOpen(m_currentPositionId)) return;
+
+      ulong closedId = m_currentPositionId;
+      m_currentPositionId = 0;
+      m_currentLots       = 0.0;
+      m_metrics.autoDetected++;
+      LogInfo("auto-close externo detectado",
+              StringFormat("\"pid\":%I64u", closedId));
+   }
+
+   // Fecha posição corrente, se houver. Best-effort: limpa state
+   // interno mesmo se Close falhar (Fase 9 simplista). Retorna true
+   // se houve close bem-sucedido, false caso contrário.
+   bool CloseCurrentIfAny()
+   {
+      if(m_currentPositionId == 0) return false;
+      m_metrics.closesAttempted++;
+      MksExecutionResult r = m_broker.Close(m_currentPositionId, m_currentLots);
+      bool ok = (r.status == MKS_EXEC_FILLED);
+      if(ok)
+      {
+         m_metrics.closesFilled++;
+         LogInfo("posição fechada (flip)",
+                 StringFormat("\"pid\":%I64u,\"price\":%.5f,\"lots\":%.4f",
+                              m_currentPositionId, r.fillPrice, r.filledLots));
+      }
+      else
+      {
+         m_metrics.closesRejected++;
+         LogWarn("Close falhou em flip — limpando state internamente",
+                 StringFormat("\"pid\":%I64u,\"status\":%d,\"retcode\":%d",
+                              m_currentPositionId, (int)r.status, r.brokerRetcode));
+      }
+      m_currentPositionId = 0;
+      m_currentLots       = 0.0;
+      return ok;
+   }
+
+   // Abre nova posição na direção do brick recém-flippado. Side é
+   // direto da cor: BULL → BUY, BEAR → SELL.
+   void OpenNewInDirection(ENUM_MKS_BRICK_DIR brickDir, const MksBrick &triggerBrick)
+   {
+      if(m_broker == NULL || m_sizer == NULL || m_symbol == NULL) return;
+
+      double lots = 0.0;
+      MksError sizerErr;
+      if(!m_sizer.ComputeLots(m_slPoints, lots, sizerErr))
+      {
+         LogWarn("sizer falhou — sem entrada",
+                 StringFormat("\"err\":\"%s\"", sizerErr.ToString()));
+         return;
+      }
+      if(lots <= 0.0)
+      {
+         LogWarn("sizer retornou lots <= 0 — sem entrada",
+                 StringFormat("\"lots\":%.6f", lots));
+         return;
+      }
+
+      MksOrderRequest req;
+      req.side     = (brickDir == MKS_BRICK_BULL) ? MKS_ORDER_BUY : MKS_ORDER_SELL;
+      req.lots     = lots;
+      req.slPoints = m_slPoints;
+      req.tpPoints = 0.0;  // sem TP por design
+      req.comment  = "ColorReversal";
+
+      m_metrics.sendsAttempted++;
+      MksExecutionResult r = m_broker.Send(req);
+      if(r.status == MKS_EXEC_FILLED)
+      {
+         m_metrics.sendsFilled++;
+         m_currentPositionId = r.positionId;
+         m_currentSide       = req.side;
+         m_currentLots       = r.filledLots;
+         LogInfo("posição aberta (flip)",
+                 StringFormat("\"pid\":%I64u,\"side\":%s,\"price\":%.5f,\"lots\":%.4f,"
+                              "\"slPts\":%.2f,\"triggerBrickId\":%I64u",
+                              r.positionId,
+                              (req.side == MKS_ORDER_BUY ? "BUY" : "SELL"),
+                              r.fillPrice, r.filledLots, m_slPoints,
+                              triggerBrick.triggerTickId));
+      }
+      else
+      {
+         m_metrics.sendsRejected++;
+         LogWarn("Send rejeitada",
+                 StringFormat("\"status\":%d,\"retcode\":%d", (int)r.status, r.brokerRetcode));
+      }
+   }
+
+public:
+   // broker, sizer e symbol obrigatórios. book/logger opcionais (book
+   // habilita auto-detach; logger habilita audit). slPoints = distância
+   // do SL em pontos do símbolo. magic identifica trades desta estratégia.
+   CMksColorReversalStrategy(IBroker        *broker,
+                             IPositionSizer *sizer,
+                             ISymbol        *symbol,
+                             double          slPoints,
+                             long            magic,
+                             ILogger        *logger = NULL,
+                             IPositionBook  *book   = NULL)
+   {
+      m_broker   = broker;
+      m_sizer    = sizer;
+      m_book     = book;
+      m_symbol   = symbol;
+      m_logger   = logger;
+      m_slPoints = slPoints;
+      m_magic    = magic;
+
+      m_hasLastBrick      = false;
+      m_lastBrickDir      = MKS_BRICK_BULL; // inerte até hasLastBrick
+      m_currentPositionId = 0;
+      m_currentSide       = MKS_ORDER_BUY;
+      m_currentLots       = 0.0;
+   }
+
+   //--- IRenkoSink overrides ---------------------------------------+
+
+   virtual void OnBrickClose(const MksBrick &brick) override
+   {
+      m_metrics.bricksSeen++;
+
+      // 1. Auto-detach externo (SL hit, manual close, etc).
+      CheckAutoCloseExternal();
+
+      // 2. Primeiro brick: só registra direção.
+      if(!m_hasLastBrick)
+      {
+         m_lastBrickDir = brick.direction;
+         m_hasLastBrick = true;
+         return;
+      }
+
+      // 3. Sem flip → sem ação.
+      if(brick.direction == m_lastBrickDir)
+      {
+         m_lastBrickDir = brick.direction; // idempotente
+         return;
+      }
+
+      // 4. FLIP. Fecha + abre na nova direção.
+      m_metrics.flipsDetected++;
+      CloseCurrentIfAny();
+      OpenNewInDirection(brick.direction, brick);
+
+      // 5. Atualiza última direção observada.
+      m_lastBrickDir = brick.direction;
+   }
+
+   // Não usa bar parcial nesta versão. ADR-021 permite usar; estratégias
+   // futuras com filtros de excursão podem implementar.
+   virtual void OnBrickForming(const MksFormingBrick &fb) override { }
+
+   //--- Inspeção / state público (testes + logging) ----------------+
+
+   bool                  HasOpenPosition() const { return m_currentPositionId != 0; }
+   ulong                 CurrentPositionId() const { return m_currentPositionId; }
+   ENUM_MKS_ORDER_SIDE   CurrentSide()       const { return m_currentSide; }
+   double                CurrentLots()       const { return m_currentLots; }
+   bool                  HasLastBrick()      const { return m_hasLastBrick; }
+   ENUM_MKS_BRICK_DIR    LastBrickDir()      const { return m_lastBrickDir; }
+
+   CMksColorReversalMetrics Metrics() const { return m_metrics; }
+
+   double SlPoints() const { return m_slPoints; }
+   long   Magic()    const { return m_magic; }
+
+   void ResetMetrics()
+   {
+      m_metrics = CMksColorReversalMetrics();
+   }
+};
+
+#endif // MKS_ULTIMATE_STRATEGY_CMKSCOLORREVERSALSTRATEGY_MQH
