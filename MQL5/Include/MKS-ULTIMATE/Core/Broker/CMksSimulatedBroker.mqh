@@ -22,9 +22,12 @@
 
 // Posição mantida internamente pelo broker simulado.
 // SL e TP armazenados em PREÇO ABSOLUTO (não em pontos).
-// Auto-close de SL/TP NÃO é responsabilidade deste broker em v1 —
-// Trade Manager futuro monitora condições e chama Close quando
-// apropriado. SimBroker apenas executa.
+// ADR-027 §7.3: auto-close de SL/TP agora é executado pelo broker no
+// próximo OnTick que tocar o gatilho. Evento enfileirado em
+// m_autoCloseEvents — caller polleva via PollAutoCloses para sincronizar
+// journal/estado. Detecção usa bid/ask proxy via CostModel half-spread;
+// close fill price inclui slippage do CostModel (slippage de SL hit
+// realista).
 struct MksSimPosition
 {
    ulong  id;
@@ -53,6 +56,37 @@ struct MksSimPosition
    }
 };
 
+// Evento emitido pelo broker quando SL ou TP de uma posição é gatilhado
+// pelo movimento de preço (ADR-027 §7.3). Caller drena via PollAutoCloses
+// no fim de cada OnTick para atualizar journal/estado próprio.
+struct MksSimAutoCloseEvent
+{
+   ulong  positionId;
+   ENUM_MKS_ORDER_SIDE side;     // lado da POSIÇÃO original (não do close)
+   double lots;
+   double openPrice;
+   double closePrice;
+   double commissionClose;
+   long   openTimeMsc;
+   long   closeTimeMsc;
+   ulong  dealCloseId;
+   bool   hitSl;                  // true = SL; false = TP
+
+   MksSimAutoCloseEvent()
+   {
+      positionId = 0;
+      side = MKS_ORDER_BUY;
+      lots = 0.0;
+      openPrice = 0.0;
+      closePrice = 0.0;
+      commissionClose = 0.0;
+      openTimeMsc = 0;
+      closeTimeMsc = 0;
+      dealCloseId = 0;
+      hitSl = false;
+   }
+};
+
 // Broker simulado para backtest. Assume HEDGING — cada Send abre nova
 // posição com ticket único. Netting fica para evolução futura.
 //
@@ -75,6 +109,12 @@ private:
    double              m_lastMid;
    long                m_lastTickTimeMsc;
    bool                m_hasMid;
+
+   // Fila de auto-closes pendentes (ADR-027 §7.3). Crescem em OnTick
+   // quando SL/TP gatilham; drena via PollAutoCloses. Contador
+   // monotônico m_autoCloseTotal preserva visibilidade pós-drain.
+   MksSimAutoCloseEvent m_autoCloseEvents[];
+   long                 m_autoCloseTotal;
 
    int FindPositionIndex(ulong positionId) const
    {
@@ -107,6 +147,78 @@ private:
       return r;
    }
 
+   // Detecta SL/TP gatilhados pelo m_lastMid corrente. Para cada posição
+   // aberta com SL ou TP setado, computa bid/ask proxy via half-spread
+   // do CostModel; se cruzou o nível, fecha a posição usando o CostModel
+   // (inclui slippage de SL hit — close fill realista pode ser pior que
+   // o nível). SL tem precedência sobre TP num mesmo tick (worst-case).
+   void CheckSlTpTriggers()
+   {
+      if(m_symbol == NULL || m_costModel == NULL || !m_hasMid) return;
+
+      double point      = m_symbol.Point();
+      double halfSpread = (m_costModel.SpreadPoints() / 2.0) * point;
+      double bidProxy   = m_lastMid - halfSpread;
+      double askProxy   = m_lastMid + halfSpread;
+
+      int n = ArraySize(m_positions);
+      for(int i = 0; i < n; i++)
+      {
+         if(!m_positions[i].isOpen) continue;
+         if(m_positions[i].sl == 0.0 && m_positions[i].tp == 0.0) continue;
+
+         bool   hitSl   = false;
+         bool   hitTp   = false;
+         double sl      = m_positions[i].sl;
+         double tp      = m_positions[i].tp;
+         ENUM_MKS_ORDER_SIDE side = m_positions[i].side;
+
+         if(side == MKS_ORDER_BUY)
+         {
+            // BUY fecha vendendo — gatilho referência o bid.
+            if(sl > 0.0 && bidProxy <= sl) hitSl = true;
+            if(tp > 0.0 && bidProxy >= tp) hitTp = true;
+         }
+         else
+         {
+            // SELL fecha comprando — gatilho referência o ask.
+            if(sl > 0.0 && askProxy >= sl) hitSl = true;
+            if(tp > 0.0 && askProxy <= tp) hitTp = true;
+         }
+
+         if(!hitSl && !hitTp) continue;
+
+         // Fecha pelo CostModel — close price inclui spread real + slip
+         // (slippage de SL hit é realista: pode fechar pior que SL).
+         ENUM_MKS_ORDER_SIDE opposite =
+            (side == MKS_ORDER_BUY) ? MKS_ORDER_SELL : MKS_ORDER_BUY;
+         double closePrice = m_costModel.FillPriceFor(opposite, m_lastMid, point);
+         double lots       = m_positions[i].lots;
+         double commission = m_costModel.Commission(lots);
+
+         MksSimAutoCloseEvent ev;
+         ev.positionId       = m_positions[i].id;
+         ev.side             = side;
+         ev.lots             = lots;
+         ev.openPrice        = m_positions[i].openPrice;
+         ev.closePrice       = closePrice;
+         ev.commissionClose  = commission;
+         ev.openTimeMsc      = m_positions[i].openTimeMsc;
+         ev.closeTimeMsc     = m_lastTickTimeMsc;
+         ev.dealCloseId      = m_nextDealId++;
+         ev.hitSl            = hitSl; // SL tem precedência se ambos
+
+         int q = ArraySize(m_autoCloseEvents);
+         ArrayResize(m_autoCloseEvents, q + 1);
+         m_autoCloseEvents[q] = ev;
+         m_autoCloseTotal++;
+
+         // Marca posição como fechada.
+         m_positions[i].isOpen = false;
+         m_positions[i].lots   = 0.0;
+      }
+   }
+
 public:
    CMksSimulatedBroker(ISymbol *symbol, CMksCostModel *costModel)
    {
@@ -117,17 +229,22 @@ public:
       m_lastMid          = 0.0;
       m_lastTickTimeMsc  = 0;
       m_hasMid           = false;
+      m_autoCloseTotal   = 0;
       ArrayResize(m_positions, 0);
+      ArrayResize(m_autoCloseEvents, 0);
    }
 
-   // Atualiza preço corrente do broker. Caller (EA/script) chama a cada
-   // tick antes de Send/Close para garantir que o broker conheça o mid.
+   // Atualiza preço corrente do broker e dispara auto-close de SL/TP
+   // gatilhados pelo movimento (ADR-027 §7.3). Caller (EA/script) chama
+   // a cada tick antes de Send/Close para garantir que o broker conheça
+   // o mid; eventos resultantes ficam na fila até PollAutoCloses.
    void OnTick(const MksTick &tick)
    {
       if(!tick.IsValid()) return;
       m_lastMid         = (tick.bid + tick.ask) / 2.0;
       m_lastTickTimeMsc = tick.timeMsc;
       m_hasMid          = true;
+      CheckSlTpTriggers();
    }
 
    MksExecutionResult Send(const MksOrderRequest &request) override
@@ -271,6 +388,22 @@ public:
 
    double LastMid() const { return m_lastMid; }
    bool   HasMid()  const { return m_hasMid; }
+
+   // Drena a fila de eventos de auto-close (SL/TP gatilhados em OnTick).
+   // Caller copia os eventos para sua estrutura e zera a fila — chamado
+   // após cada OnTick para sincronizar journal/estado próprio. Contagem
+   // monotônica total acessível via AutoCloseTotal mesmo após drain.
+   int PollAutoCloses(MksSimAutoCloseEvent &out[])
+   {
+      int n = ArraySize(m_autoCloseEvents);
+      ArrayResize(out, n);
+      for(int i = 0; i < n; i++) out[i] = m_autoCloseEvents[i];
+      ArrayResize(m_autoCloseEvents, 0);
+      return n;
+   }
+
+   int  PendingAutoCloses() const { return ArraySize(m_autoCloseEvents); }
+   long AutoCloseTotal()    const { return m_autoCloseTotal; }
 };
 
 #endif // MKS_ULTIMATE_CORE_BROKER_CMKSSIMULATEDBROKER_MQH

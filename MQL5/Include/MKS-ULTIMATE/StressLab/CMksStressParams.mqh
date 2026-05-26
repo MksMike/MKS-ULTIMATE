@@ -28,10 +28,15 @@ enum ENUM_MKS_STRESS_DIST
 // e nao tocar em nada equivale a "broker simulado sem stress" — o wrapper
 // se comporta como passthrough.
 //
-// SPREAD MULTIPLIER:
+// SPREAD MULTIPLIER + BASELINE:
 //   spreadMultiplier = 1.0 = spread do broker subjacente intacto.
 //   = 2.0 = spread dobrado. Usado para simular abertura de mercado, news,
 //     volatilidade elevada.
+//   baselineSpreadPoints = spread "normal" do CostModel subjacente em pontos.
+//   O StressLab compõe assim: extraHalfSpread = (mult - 1) * (baseline / 2)
+//   somado como slip adicional adverso por lado. Resultado equivale a
+//   "spread real ficou mult× maior" — não a "1 ponto extra por unidade
+//   acima de 1.0", que era a fórmula original incorreta (ADR-027).
 //
 // SLIPPAGE:
 //   slippageMean    : pontos medios de slippage no fill (positivo = contra
@@ -51,18 +56,25 @@ enum ENUM_MKS_STRESS_DIST
 //                     internas — apos atingir maxRequotes, vira REJECTED.
 //   maxRequotes     : tetos de tentativas em sequencia.
 //
-// LATENCIA:
-//   latencyMeanMs   : latencia media (informativa, nao bloqueia em backtest).
-//                     Gravada no log/metricas para auditoria de impacto.
-//   latencyStdevMs  : desvio padrao em ms.
+// LATENCIA + DRIFT:
+//   latencyMeanMs   : latencia media (ms) sorteada por Send via Gaussiana.
+//   latencyStdevMs  : desvio padrao em ms. Clampa em zero (sem latencia
+//                     negativa).
+//   latencyDriftPointsPerMs : pontos de slip adverso adicionais por ms de
+//                     latencia. Modela "preco se moveu enquanto a ordem
+//                     viajava". slipExtra = sampledLatencyMs * driftPerMs.
+//                     0.0 = latencia nao afeta fill (modo "informativo"
+//                     antigo, mantido por compatibilidade).
+//                     Heurística XAU/Exness: ~0.01 pts/ms (100ms → 1 ponto).
 //
 // SEED:
 //   rngSeed : semente do CMksRandom interno. Mude para explorar
 //             cenarios diferentes do mesmo nivel; mantenha para reproduzir.
 struct CMksStressParams
 {
-   // Spread
+   // Spread — multiplier compõe sobre baseline (ADR-027)
    double spreadMultiplier;
+   double baselineSpreadPoints;   // spread "normal" do CostModel subjacente
 
    // Slippage
    double               slippageMean;
@@ -76,25 +88,28 @@ struct CMksStressParams
    double requoteProb;
    int    maxRequotes;
 
-   // Latencia (informativa em v1)
+   // Latencia (ADR-027 — agora aplicada ao fill via driftPointsPerMs)
    double latencyMeanMs;
    double latencyStdevMs;
+   double latencyDriftPointsPerMs;
 
    // RNG
    uint   rngSeed;
 
    CMksStressParams()
    {
-      spreadMultiplier = 1.0;
-      slippageMean     = 0.0;
-      slippageStdev    = 0.0;
-      slippageDist     = MKS_STRESS_DIST_FIXED;
-      rejectionProb    = 0.0;
-      requoteProb      = 0.0;
-      maxRequotes      = 3;
-      latencyMeanMs    = 0.0;
-      latencyStdevMs   = 0.0;
-      rngSeed          = 42;
+      spreadMultiplier        = 1.0;
+      baselineSpreadPoints    = 0.0;
+      slippageMean            = 0.0;
+      slippageStdev           = 0.0;
+      slippageDist            = MKS_STRESS_DIST_FIXED;
+      rejectionProb           = 0.0;
+      requoteProb             = 0.0;
+      maxRequotes             = 3;
+      latencyMeanMs           = 0.0;
+      latencyStdevMs          = 0.0;
+      latencyDriftPointsPerMs = 0.0;
+      rngSeed                 = 42;
    }
 };
 
@@ -118,6 +133,9 @@ CMksStressParams MksStressNone()
 }
 
 // Broker bom em condicao normal de mercado.
+// baselineSpreadPoints e latencyDriftPointsPerMs ficam em 0 nos presets —
+// caller seta conforme o CostModel real do broker subjacente (depende do
+// símbolo: XAU pode ter spread=10 pts típico, EUR/USD=8 pts, etc.).
 CMksStressParams MksStressLight()
 {
    CMksStressParams p;

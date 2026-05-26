@@ -42,6 +42,8 @@ struct CMksStressMetrics
    long   requoteEvents;      // numero total de requotes (pode ser >1 por Send)
    double slippageTotalPoints;// soma absoluta de slippage aplicado em pontos
    double slippageMaxPoints;  // pior slippage individual
+   double latencyTotalMs;     // soma de latencias sorteadas (ADR-027)
+   double latencyMaxMs;       // pior latencia individual
 
    CMksStressMetrics()
    {
@@ -52,6 +54,8 @@ struct CMksStressMetrics
       requoteEvents        = 0;
       slippageTotalPoints  = 0.0;
       slippageMaxPoints    = 0.0;
+      latencyTotalMs       = 0.0;
+      latencyMaxMs         = 0.0;
    }
 };
 
@@ -66,11 +70,15 @@ struct CMksStressMetrics
 //      b. se result.IsFilled() ou status irrecuperavel: sai do loop
 //      c. se requoteProb sorteia: tenta de novo, metrica.requoteEvents++
 //      d. se atingir maxRequotes sem fill: retorna REJECTED com motivo requote
-//   3. Pos-fill: aplica slippage sobre fillPrice — adverso ao lado da ordem.
-//      BUY: fillPrice += slippage * point  (paga mais caro)
-//      SELL: fillPrice -= slippage * point (recebe menos)
-//   4. Aplica spreadMultiplier no calculo de slippage adverso (proxy de
-//      mid-half-spread modelado por simetria com CMksCostModel).
+//   3. Pos-fill: aplica slippage agregado sobre fillPrice — adverso ao lado.
+//      slipTotal = sampledSlippage + extraHalfSpread + slipFromLatency
+//        - sampledSlippage   : SampleSlippage() conforme distribuicao
+//        - extraHalfSpread   : (mult - 1) * (baselineSpreadPoints / 2)
+//                              compõe sobre o spread real do CostModel (ADR-027 §7.2)
+//        - slipFromLatency   : sampledLatencyMs * latencyDriftPointsPerMs
+//                              modela "preco se moveu durante a latencia" (ADR-027 §7.1)
+//      BUY: fillPrice += slipTotal * point  (paga mais caro)
+//      SELL: fillPrice -= slipTotal * point (recebe menos)
 //
 // Close e Modify sao PASSTHROUGH em v1 — stress se aplica a abertura.
 // Pode evoluir em slice futuro para tambem estressar fechamento se for
@@ -98,18 +106,39 @@ private:
       return (v < 0.0) ? 0.0 : v;
    }
 
+   // Sorteia latencia em ms via Gaussiana, clampa em zero (latencia
+   // negativa nao faz sentido fisico). Mean=Stdev=0 retorna 0 sem
+   // tocar o RNG — preserva determinismo de testes que nao usam latencia.
+   double SampleLatencyMs()
+   {
+      if(m_params.latencyMeanMs <= 0.0 && m_params.latencyStdevMs <= 0.0)
+         return 0.0;
+      double v = m_rng.NextGaussian(m_params.latencyMeanMs, m_params.latencyStdevMs);
+      return (v < 0.0) ? 0.0 : v;
+   }
+
    void ApplySlippageToFill(const MksOrderRequest &req, MksExecutionResult &res)
    {
       if(!res.IsFilled()) return;
       if(m_symbol == NULL) return;
 
-      double slipPoints = SampleSlippage();
-      // Spread multiplier aplica como fator adicional — modela o caminho
-      // "mid + half_spread*mult + slip". Como ja temos slip em pontos,
-      // somamos um adicional proporcional ao multiplicador alem de 1.0.
+      double slipFromDist = SampleSlippage();
+
+      // Spread multiplier compõe sobre o spread baseline do CostModel.
+      // (mult - 1) * (baseline / 2) = pontos extras adversos por lado
+      // — equivalente a "spread real ficou mult× maior" (ADR-027 §7.2).
+      double extraHalfSpread = 0.0;
       double spreadExcess = (m_params.spreadMultiplier - 1.0);
-      if(spreadExcess > 0.0)
-         slipPoints += spreadExcess; // 1 ponto extra por unidade acima de 1.0x
+      if(spreadExcess > 0.0 && m_params.baselineSpreadPoints > 0.0)
+         extraHalfSpread = spreadExcess * (m_params.baselineSpreadPoints / 2.0);
+
+      // Latencia: modela "preço se moveu enquanto a ordem viajava".
+      // sampledLatencyMs × driftPerMs = pontos extras adversos
+      // (ADR-027 §7.1).
+      double latencyMs = SampleLatencyMs();
+      double slipFromLatency = latencyMs * m_params.latencyDriftPointsPerMs;
+
+      double slipPoints = slipFromDist + extraHalfSpread + slipFromLatency;
 
       double point = m_symbol.Point();
       double priceDelta = slipPoints * point;
@@ -122,6 +151,9 @@ private:
       m_metrics.slippageTotalPoints += slipPoints;
       if(slipPoints > m_metrics.slippageMaxPoints)
          m_metrics.slippageMaxPoints = slipPoints;
+      m_metrics.latencyTotalMs += latencyMs;
+      if(latencyMs > m_metrics.latencyMaxMs)
+         m_metrics.latencyMaxMs = latencyMs;
    }
 
 public:
@@ -226,6 +258,8 @@ public:
       m_metrics.requoteEvents        = 0;
       m_metrics.slippageTotalPoints  = 0.0;
       m_metrics.slippageMaxPoints    = 0.0;
+      m_metrics.latencyTotalMs       = 0.0;
+      m_metrics.latencyMaxMs         = 0.0;
    }
 };
 

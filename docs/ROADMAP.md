@@ -241,28 +241,26 @@ Este documento define **o que construir e em que ordem**. Cada fase tem entregá
 
 ## Fase 7 — StressLab
 
-**Status:** Concluída — com limitações materiais documentadas (ver "Limitações conhecidas" abaixo)
+**Status:** Concluída
 
 **Nota arquitetural:** O `CStressLabEngine.mqh` previsto não foi materializado. A arquitetura final dispensou um "engine" separado em favor de composição direta — o EA monta `CMksSimulatedBroker` → `CMksStressLabBroker` (wrapper) e roda a estratégia. Métricas agregadas em `CMksStressLabReport` capturadas por execução. Trade-off: simplicidade arquitetural vs. ausência de orquestração automatizada multi-nível (operador roda N corridas manualmente e agrega).
 
 **Entregáveis (concluídos):**
 - `StressLab/CMksRandom.mqh` — RNG seedável (LCG Numerical Recipes), substituto canônico para `MathRand` (ADR-024 §6). Suporta uniform, gaussiana (Box-Muller), bernoulli.
-- `StressLab/CMksStressParams.mqh` — 5 presets escalonados: `MksStressNone()`, `MksStressLight()`, `MksStressMedium()`, `MksStressHigh()`, `MksStressNightmare()`.
+- `StressLab/CMksStressParams.mqh` — 5 presets escalonados: `MksStressNone()`, `MksStressLight()`, `MksStressMedium()`, `MksStressHigh()`, `MksStressNightmare()`. Inclui `baselineSpreadPoints` e `latencyDriftPointsPerMs` (ADR-027).
 - `StressLab/CMksStressLabBroker.mqh` — wrapper de `IBroker` que injeta:
   - **Rejeição pré-execução** (probabilística via `rejectionProb`).
   - **Loop de requote** (até `maxRequotes` tentativas com `requoteProb`).
   - **Slippage adverso** ao fill price (distribuição `FIXED` ou `NORMAL`, com clamp em zero — "stress só piora").
+  - **Spread composto** sobre `baselineSpreadPoints` do CostModel — `spreadMultiplier=10` realmente equivale a "spread 10× maior" (ADR-027 §7.2).
+  - **Latência adversa ao fill** via `latencyDriftPointsPerMs` — modela "preço se moveu durante a viagem da ordem" (ADR-027 §7.1).
+- `Core/Broker/CMksSimulatedBroker.mqh` — broker simulado com **auto-trigger de SL/TP** em `OnTick` (ADR-027 §7.3). Fila `MksSimAutoCloseEvent` drenada via `PollAutoCloses` pelo caller. Slippage de SL hit modelado realisticamente (close pode ser pior que o nível).
 - `StressLab/CMksStressLabReport.mqh` — snapshot agregado de uma corrida (métricas do StressLabBroker + do `CMksTradeJournal`); `MksStressLabPrintComparison` produz tabela ASCII comparativa entre níveis com marcador de degradação.
-- Cobertura de testes: `Test_CMksRandom.mq5`, `Test_CMksStressLabBroker.mq5`, `Test_CMksStressLabReport.mq5`.
+- Cobertura de testes: `Test_CMksRandom.mq5`, `Test_CMksStressLabBroker.mq5` (4 testes novos pós-ADR-027), `Test_CMksSimulatedBroker.mq5` (5 testes novos pós-ADR-027), `Test_CMksStressLabReport.mq5`.
 
-**Critério de saída:** atendido — pipeline `estratégia → stress leve/médio/alto → relatório comparativo` é operacionalmente executável; cada parâmetro está documentado em `CMksStressParams.mqh`.
+**Critério de saída:** atendido — pipeline `estratégia → stress leve/médio/alto → relatório comparativo` é operacionalmente executável; cada parâmetro está documentado em `CMksStressParams.mqh`. Três bloqueadores da auditoria 2026-05-25 (latência não aplicada, spread mal composto, SL/TP sem auto-trigger) foram resolvidos pela ADR-027.
 
-**Limitações conhecidas (auditoria 2026-05-25) — pré-requisito para a Fase 9:**
-- **Latência declarada como "informativa em v1" e NÃO aplicada ao fill price.** `latencyMeanMs`/`latencyStdevMs` são sorteados mas nunca afetam o preço de execução. Em live, latência alta significa que o mid se moveu entre `Send` e fill — o StressLab não modela isso. Estratégias de scalping vão parecer impecáveis sob `MksStressNightmare` e quebrar em live. Recriação sutil do eixo 3 do V5-POSTMORTEM (custo modelado, preço de fill não tocado). Resolver antes da Fase 9.
-- **`spreadMultiplier` mal composto com `CMksCostModel`.** O multiplicador é tratado como "+(mult−1) pontos extras de slippage", não como fator que multiplica o `spreadPoints` do CostModel subjacente. `MksStressNightmare` (`spreadMultiplier=10`) adiciona apenas 9 pontos extras em vez de 10x do half-spread real. Resolver antes da Fase 9.
-- **`CMksSimulatedBroker` não dispara SL/TP automaticamente** (limitação herdada da Fase 4, não da Fase 7) — SL/TP são armazenados na posição mas nunca causam fechamento. Sem auto-close no broker simulado, o "stress test" não captura o evento mais frequente em live (stop hit). Resolver antes da Fase 9.
-
-**Por que importa:** Essa fase é o que separa este framework de qualquer outro. Backtests "bonitos" passam; backtests que sobrevivem ao StressLab são confiáveis — **desde que o StressLab estresse o que precisa estressar**. Hoje, três pontos críticos não são estressados; correção é pré-requisito da Fase 9.
+**Por que importa:** Essa fase é o que separa este framework de qualquer outro. Backtests "bonitos" passam; backtests que sobrevivem ao StressLab são confiáveis — **desde que o StressLab estresse o que precisa estressar**. Pós-ADR-027, os três eixos críticos (latência → drift no fill; spread → multiplicação composta; SL hit → auto-close com slippage) são exercitados de fato.
 
 ---
 

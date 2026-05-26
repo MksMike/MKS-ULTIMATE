@@ -310,6 +310,158 @@ void Test_Determinism()
 }
 
 //+------------------------------------------------------------------+
+//| 13. Auto-trigger SL — BUY (ADR-027 §7.3)                          |
+//+------------------------------------------------------------------+
+void Test_AutoTriggerSlBuy()
+{
+   CMksFakeSymbol sym;
+   CMksCostModel cm; // sem custos: bidProxy = mid
+   CMksSimulatedBroker b(GetPointer(sym), GetPointer(cm));
+   b.OnTick(MakeTick(2000.0, 2000.0, 1000));
+
+   // BUY @ 2000, SL 10 pts abaixo (1990), TP 20 pts acima (2020).
+   MksExecutionResult open = b.Send(MakeRequest(MKS_ORDER_BUY, 0.1, 10.0, 20.0));
+   MKS_ASSERT_EQ_INT(1, b.OpenPositionsCount(), "1 aberta após Send");
+
+   // Tick que NÃO toca SL — mid > sl=1990. Posição segue aberta.
+   b.OnTick(MakeTick(1995.0, 1995.0, 2000));
+   MKS_ASSERT_EQ_INT(1, b.OpenPositionsCount(), "ainda aberta acima do SL");
+   MKS_ASSERT_EQ_LONG(0, b.AutoCloseTotal(), "nenhum auto-close");
+
+   // Tick que toca SL — bidProxy=1989.0 <= sl=1990. Auto-close.
+   b.OnTick(MakeTick(1989.0, 1989.0, 3000));
+   MKS_ASSERT_EQ_INT(0, b.OpenPositionsCount(), "posição fechada por SL");
+   MKS_ASSERT_EQ_LONG(1, b.AutoCloseTotal(), "1 auto-close registrado");
+
+   MksSimAutoCloseEvent events[];
+   int n = b.PollAutoCloses(events);
+   MKS_ASSERT_EQ_INT(1, n, "PollAutoCloses retorna 1 evento");
+   MKS_ASSERT_EQ_ULONG(open.positionId, events[0].positionId, "positionId correto");
+   MKS_ASSERT_TRUE(events[0].hitSl, "evento marca SL hit");
+   MKS_ASSERT_EQ_INT((int)MKS_ORDER_BUY, (int)events[0].side, "side preservado");
+   MKS_ASSERT_EQ_LONG(3000, events[0].closeTimeMsc, "closeTimeMsc do tick que disparou");
+   // Sem custos, close price = mid = 1989.0
+   MKS_ASSERT_NEAR_DOUBLE(1989.0, events[0].closePrice, 1e-9, "close @ mid sem custos");
+
+   // Drenou — segunda chamada deve retornar 0.
+   int n2 = b.PollAutoCloses(events);
+   MKS_ASSERT_EQ_INT(0, n2, "fila drenada");
+   // Total monotônico preservado.
+   MKS_ASSERT_EQ_LONG(1, b.AutoCloseTotal(), "total persiste após drain");
+}
+
+//+------------------------------------------------------------------+
+//| 14. Auto-trigger TP — SELL                                        |
+//+------------------------------------------------------------------+
+void Test_AutoTriggerTpSell()
+{
+   CMksFakeSymbol sym;
+   CMksCostModel cm;
+   CMksSimulatedBroker b(GetPointer(sym), GetPointer(cm));
+   b.OnTick(MakeTick(2000.0, 2000.0, 1000));
+
+   // SELL @ 2000, SL 10 pts acima (2010), TP 20 pts abaixo (1980).
+   MksExecutionResult open = b.Send(MakeRequest(MKS_ORDER_SELL, 0.1, 10.0, 20.0));
+
+   // Tick com mid 1980 — askProxy=1980 <= tp=1980. TP hit.
+   b.OnTick(MakeTick(1980.0, 1980.0, 4000));
+   MKS_ASSERT_EQ_INT(0, b.OpenPositionsCount(), "fechada por TP");
+
+   MksSimAutoCloseEvent events[];
+   b.PollAutoCloses(events);
+   MKS_ASSERT_EQ_INT(1, ArraySize(events), "1 evento");
+   MKS_ASSERT_FALSE(events[0].hitSl, "TP hit, não SL");
+   MKS_ASSERT_EQ_INT((int)MKS_ORDER_SELL, (int)events[0].side, "side SELL");
+}
+
+//+------------------------------------------------------------------+
+//| 15. Sem auto-trigger quando preço fica longe dos níveis            |
+//+------------------------------------------------------------------+
+void Test_AutoTriggerStaysOpenWhenNoHit()
+{
+   CMksFakeSymbol sym;
+   CMksCostModel cm;
+   CMksSimulatedBroker b(GetPointer(sym), GetPointer(cm));
+   b.OnTick(MakeTick(2000.0, 2000.0, 1000));
+
+   b.Send(MakeRequest(MKS_ORDER_BUY, 0.1, 50.0, 50.0)); // SL 1950, TP 2050
+
+   // 10 ticks oscilando em ±25 pts — nenhum atinge níveis.
+   double mids[] = {2010, 1995, 2020, 1990, 2005, 1985, 2015, 1992, 2008, 2003};
+   for(int i = 0; i < 10; i++)
+      b.OnTick(MakeTick(mids[i], mids[i], 2000 + i * 100));
+
+   MKS_ASSERT_EQ_INT(1, b.OpenPositionsCount(), "ainda aberta após 10 ticks");
+   MKS_ASSERT_EQ_LONG(0, b.AutoCloseTotal(), "zero auto-closes");
+}
+
+//+------------------------------------------------------------------+
+//| 16. SL hit considera half-spread do CostModel (bid proxy)         |
+//+------------------------------------------------------------------+
+void Test_AutoTriggerHalfSpreadBidProxy()
+{
+   CMksFakeSymbol sym;
+   // Spread=10pts. halfSpread=5pts. bidProxy = mid - 5pts.
+   CMksCostModel cm(10.0, 0.0, 0.0);
+   CMksSimulatedBroker b(GetPointer(sym), GetPointer(cm));
+   b.OnTick(MakeTick(2000.0, 2000.0, 1000));
+
+   // BUY: fill = 2000 + halfSpread = 2005. SL relativo: slPoints=10 →
+   // sl absoluto = 2005 - 10 = 1995.
+   MksExecutionResult open = b.Send(MakeRequest(MKS_ORDER_BUY, 0.1, 10.0, 0.0));
+   MksSimPosition p;
+   b.TryGetPosition(open.positionId, p);
+   MKS_ASSERT_NEAR_DOUBLE(1995.0, p.sl, 1e-9, "SL absoluto = fill - slPoints");
+
+   // mid=2001 → bidProxy = 2001 - 5 = 1996 > sl=1995. Não dispara ainda.
+   b.OnTick(MakeTick(2001.0, 2001.0, 2000));
+   MKS_ASSERT_EQ_INT(1, b.OpenPositionsCount(), "bidProxy acima do SL");
+
+   // mid=2000 → bidProxy = 1995. Toca exatamente — dispara (<=).
+   b.OnTick(MakeTick(2000.0, 2000.0, 3000));
+   MKS_ASSERT_EQ_INT(0, b.OpenPositionsCount(), "bidProxy tocou SL");
+}
+
+//+------------------------------------------------------------------+
+//| 17. Determinismo do auto-trigger — mesma sequência, mesmo resultado|
+//+------------------------------------------------------------------+
+void Test_AutoTriggerDeterminism()
+{
+   CMksFakeSymbol sym;
+   CMksCostModel cm(2.0, 1.0, 0.0);
+   CMksSimulatedBroker b1(GetPointer(sym), GetPointer(cm));
+   CMksSimulatedBroker b2(GetPointer(sym), GetPointer(cm));
+
+   b1.OnTick(MakeTick(2000.0, 2000.0, 1000));
+   b2.OnTick(MakeTick(2000.0, 2000.0, 1000));
+
+   b1.Send(MakeRequest(MKS_ORDER_BUY, 0.1, 10.0, 20.0));
+   b2.Send(MakeRequest(MKS_ORDER_BUY, 0.1, 10.0, 20.0));
+
+   double mids[] = {1995, 1991, 1989, 1985};
+   long   times[] = {2000, 3000, 4000, 5000};
+   for(int i = 0; i < 4; i++)
+   {
+      b1.OnTick(MakeTick(mids[i], mids[i], times[i]));
+      b2.OnTick(MakeTick(mids[i], mids[i], times[i]));
+   }
+
+   MKS_ASSERT_EQ_LONG(b1.AutoCloseTotal(), b2.AutoCloseTotal(), "totais iguais");
+
+   MksSimAutoCloseEvent e1[], e2[];
+   b1.PollAutoCloses(e1);
+   b2.PollAutoCloses(e2);
+   MKS_ASSERT_EQ_INT(ArraySize(e1), ArraySize(e2), "drenas iguais");
+   if(ArraySize(e1) > 0)
+   {
+      MKS_ASSERT_NEAR_DOUBLE(e1[0].closePrice, e2[0].closePrice, 1e-9,
+                             "closePrice idêntico");
+      MKS_ASSERT_EQ_LONG(e1[0].closeTimeMsc, e2[0].closeTimeMsc,
+                         "closeTimeMsc idêntico");
+   }
+}
+
+//+------------------------------------------------------------------+
 void OnStart()
 {
    Print("=== Test_CMksSimulatedBroker ===");
@@ -326,6 +478,12 @@ void OnStart()
    MKS_RUN(Test_Modify);
    MKS_RUN(Test_MultipleSendsHedging);
    MKS_RUN(Test_Determinism);
+
+   MKS_RUN(Test_AutoTriggerSlBuy);
+   MKS_RUN(Test_AutoTriggerTpSell);
+   MKS_RUN(Test_AutoTriggerStaysOpenWhenNoHit);
+   MKS_RUN(Test_AutoTriggerHalfSpreadBidProxy);
+   MKS_RUN(Test_AutoTriggerDeterminism);
 
    g_mksTestRunner.Summary();
 }
