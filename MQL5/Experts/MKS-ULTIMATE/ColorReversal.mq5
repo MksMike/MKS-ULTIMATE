@@ -120,6 +120,7 @@ string                g_logPath        = "";
 string                g_auditPath      = "";
 bool                  g_streamHalted   = false;
 long                  g_lastSeenMsc    = 0;
+bool                  g_isTesting      = false;  // MQL_TESTER detection (ADR-022 §UX precedent)
 
 ISymbol              *g_iSymbol  = NULL;
 IAccount             *g_iAccount = NULL;
@@ -202,20 +203,56 @@ string MksJsonEscape(const string &s)
    return out;
 }
 
-bool EnsureCustomSymbolReady(const string &csName, ISymbol *base, MksError &err)
+// Versão idêntica à do Producer.mq5 (battle-tested em tester + live).
+// 5304 = código MT5 real para "símbolo já existe" (race entre verificação
+// e criação); 4302 que eu usei antes era de outro contexto e silenciava
+// o caso wrong, causando OnInit failure em tester quando o CS persistia
+// entre runs. Setters de SYMBOL_DIGITS/POINT/TICK_SIZE/etc são necessários
+// — sem eles, MT5 não conhece a ficha técnica do custom symbol e
+// SymbolSelect pode falhar downstream.
+bool EnsureCustomSymbolReady(const string &cs, ISymbol *src, MksError &err)
 {
-   if(!CustomSymbolCreate(csName, "MKS-ULTIMATE", base.Name()))
+   if(src == NULL)
    {
-      int e = GetLastError();
-      if(e != 4302)  // ERR_OBJECT_ALREADY_EXISTS — OK, já existe
+      MKS_SET_ERROR(err, MKS_ERR_CORE_INVALID_ARGUMENT,
+                    "EnsureCustomSymbolReady: ISymbol nulo", cs);
+      return false;
+   }
+   string srcName = src.Name();
+   bool exists = (SymbolInfoInteger(cs, SYMBOL_CUSTOM) == 1);
+   if(!exists)
+   {
+      if(!CustomSymbolCreate(cs, "MKS-ULTIMATE", srcName))
       {
-         MKS_SET_ERROR(err, MKS_ERR_DATA_FILE_IO,
-                       "CustomSymbolCreate falhou",
-                       StringFormat("name=%s lastErr=%d", csName, e));
-         return false;
+         int lastErr = GetLastError();
+         if(lastErr != 5304) // 5304 = símbolo já existe (race)
+         {
+            MKS_SET_ERROR(err, MKS_ERR_DATA_FILE_IO,
+                          "CustomSymbolCreate falhou",
+                          StringFormat("cs=%s src=%s lastErr=%d",
+                                       cs, srcName, lastErr));
+            return false;
+         }
       }
    }
-   SymbolSelect(csName, true);
+
+   CustomSymbolSetInteger(cs, SYMBOL_DIGITS,        src.Digits());
+   CustomSymbolSetInteger(cs, SYMBOL_CHART_MODE,    (long)SYMBOL_CHART_MODE_BID);
+   CustomSymbolSetDouble (cs, SYMBOL_POINT,                src.Point());
+   CustomSymbolSetDouble (cs, SYMBOL_TRADE_TICK_SIZE,      src.TickSize());
+   CustomSymbolSetDouble (cs, SYMBOL_TRADE_TICK_VALUE,     src.TickValue());
+   CustomSymbolSetDouble (cs, SYMBOL_TRADE_CONTRACT_SIZE,  src.ContractSize());
+   CustomSymbolSetString (cs, SYMBOL_CURRENCY_BASE,   src.BaseCurrency());
+   CustomSymbolSetString (cs, SYMBOL_CURRENCY_PROFIT, src.ProfitCurrency());
+   CustomSymbolSetString (cs, SYMBOL_CURRENCY_MARGIN, src.MarginCurrency());
+
+   if(!SymbolSelect(cs, true))
+   {
+      MKS_SET_ERROR(err, MKS_ERR_DATA_FILE_IO,
+                    "SymbolSelect falhou — CS não entrou no Market Watch",
+                    StringFormat("cs=%s lastErr=%d", cs, GetLastError()));
+      return false;
+   }
    return true;
 }
 
@@ -253,6 +290,12 @@ int OnInit()
    g_digits  = (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS);
    g_broker  = AccountInfoString(ACCOUNT_COMPANY);
    g_account = AccountInfoInteger(ACCOUNT_LOGIN);
+
+   // MT5 proíbe CustomSymbolCreate em Strategy Tester (erro 4014 —
+   // ERR_FUNCTION_NOT_ALLOWED, limitação documentada). CS é puramente
+   // visualização; estratégia recebe bricks via IRenkoSink direto.
+   // Em tester, pula criação do CS e remoção do csSink do multiSink.
+   g_isTesting = (bool)MQLInfoInteger(MQL_TESTER);
 
    datetime sessionStart = TimeCurrent();
    g_logPath   = BuildLogPath(g_symbol, sessionStart);
@@ -331,17 +374,26 @@ int OnInit()
    g_logger.Info("ColorReversal", "mksbk opened",
       StringFormat("\"path\":\"%s\"", MksJsonEscape(g_filePath)));
 
-   //--- 5. Custom Symbol ------------------------------------------+
-   g_csName = BuildCustomSymbolName(g_symbol, InpBrickSize);
-   if(!EnsureCustomSymbolReady(g_csName, g_iSymbol, err))
+   //--- 5. Custom Symbol (skip em Strategy Tester) -----------------+
+   if(g_isTesting)
    {
-      g_logger.Error("ColorReversal", "EnsureCustomSymbolReady failed",
-         StringFormat("\"err\":\"%s\"", MksJsonEscape(err.ToString())));
-      Cleanup();
-      return INIT_FAILED;
+      g_logger.Info("ColorReversal", "tester mode — skipping Custom Symbol",
+                    "\"reason\":\"CustomSymbolCreate forbidden in Strategy Tester (MT5 err 4014)\"");
+      g_csName = "";  // sem CS
    }
-   if(InpResetCustomSymbolBars)
-      CustomRatesDelete(g_csName, 0, LONG_MAX);
+   else
+   {
+      g_csName = BuildCustomSymbolName(g_symbol, InpBrickSize);
+      if(!EnsureCustomSymbolReady(g_csName, g_iSymbol, err))
+      {
+         g_logger.Error("ColorReversal", "EnsureCustomSymbolReady failed",
+            StringFormat("\"err\":\"%s\"", MksJsonEscape(err.ToString())));
+         Cleanup();
+         return INIT_FAILED;
+      }
+      if(InpResetCustomSymbolBars)
+         CustomRatesDelete(g_csName, 0, LONG_MAX);
+   }
    g_nextBarTime = AlignDownToM1(TimeCurrent());
 
    //--- 6. Sinks ---------------------------------------------------+
@@ -350,15 +402,19 @@ int OnInit()
    g_brickSink.printBricks = InpPrintBricks;
    g_brickSink.digits      = g_digits;
 
-   g_csSink = new CMksCustomSymbolSink();
-   g_csSink.csName       = g_csName;
-   g_csSink.nextBarTime  = g_nextBarTime;
-   g_csSink.brickSizePts = InpBrickSize;
-   g_csSink.showWicks    = InpShowWicksInCS;
-
    g_multiSink = new CMksMultiSink();
    g_multiSink.Add(g_brickSink);
-   g_multiSink.Add(g_csSink);
+
+   // CSSink só faz sentido fora do tester (CS proibido lá).
+   if(!g_isTesting)
+   {
+      g_csSink = new CMksCustomSymbolSink();
+      g_csSink.csName       = g_csName;
+      g_csSink.nextBarTime  = g_nextBarTime;
+      g_csSink.brickSizePts = InpBrickSize;
+      g_csSink.showWicks    = InpShowWicksInCS;
+      g_multiSink.Add(g_csSink);
+   }
 
    if(InpAlsoWriteAudit)
    {
@@ -440,6 +496,13 @@ int OnInit()
 
    //--- 11. Broker live + gate ------------------------------------+
    g_mt5Broker = new CMksMt5Broker(g_iSymbol, g_iAccount, (int)InpMagicNumber);
+   if(!g_mt5Broker.Init(err))
+   {
+      g_logger.Error("ColorReversal", "mt5Broker.Init failed",
+         StringFormat("\"err\":\"%s\"", MksJsonEscape(err.ToString())));
+      Cleanup();
+      return INIT_FAILED;
+   }
    g_gatedBroker = new CMksRiskGatedBroker(g_mt5Broker, g_risk);
 
    //--- 12. Strategy ----------------------------------------------+
@@ -549,6 +612,18 @@ void OnTick()
       IngestOne(t);
       g_lastSeenMsc = mt.time_msc;
    }
+}
+
+//+------------------------------------------------------------------+
+//| Roteamento de OnTradeTransaction para o broker (fallback caso o   |
+//| caminho síncrono OrderSend não preencha tudo na ida).              |
+//+------------------------------------------------------------------+
+void OnTradeTransaction(const MqlTradeTransaction &trans,
+                        const MqlTradeRequest &request,
+                        const MqlTradeResult &result)
+{
+   if(g_mt5Broker != NULL)
+      g_mt5Broker.OnTradeTransactionEvent(trans, request, result);
 }
 
 //+------------------------------------------------------------------+
