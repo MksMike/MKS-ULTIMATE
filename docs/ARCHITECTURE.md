@@ -2110,6 +2110,16 @@ Introduz-se uma **camada de visualização por chart objects**, puro output, inj
 - **Não cobre multi-posição visual complexa** — `ColorReversal` é max 1 posição. Estratégias multi-posição futuras podem exigir gestão de objetos mais rica; quando surgir, ADR de extensão.
 - **Não cobre persistência dos objetos entre restarts** — `Clear()` no deinit remove tudo; reabrir o EA redesenha a partir dali, não recupera histórico visual. Histórico fiel está no `.mksbk` + audit.
 
+**Nota de esclarecimento — modos de view e largura-igual no tester (2026-05-27):**
+
+Validação visual no Strategy Tester revelou um limite estrutural. O `CMksChartPainter` ganhou `ENUM_MKS_RENKO_VIEW`:
+- **OVERLAY** (default): caixas renko proporcionais ao tempo sobre os candles M1.
+- **CLEAN**: candles escondidos (cores = fundo + `ChartRedraw`), só as caixas renko.
+
+A primeira tentativa de CLEAN desenhava bricks de **largura igual em slots sintéticos** (base + N×60s) para reproduzir a forma renko clássica. **Falhou**: o chart do tester é o símbolo real com tempo real; como há menos bricks que minutos no período, os slots sintéticos ficam empacotados no início do período, **fora da janela visível** que o tester mostra (final). Resultado observado: tela com candles escondidos + caixas fora da tela.
+
+**Decisão:** renko de **largura-igual verdadeira exige remapear o tempo**, o que só é coerente num símbolo próprio — o **Custom Symbol (live)**, que já faz exatamente isso (1 bar por brick). Num chart de tempo real do tester, as caixas são desenhadas em **tempo real** (proporcionais ao tempo, alinhadas à janela visível); CLEAN apenas esconde os candles. A largura-igual no tester fica como possível trabalho futuro via **indicador canvas dedicado** (a alternativa (f) da ADR-020, Nível 3) que renderize renko ignorando o eixo de tempo do chart — não é alcançável com chart objects ancorados em tempo.
+
 ---
 
 ## 4. Decisões pendentes

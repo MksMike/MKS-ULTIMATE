@@ -5,12 +5,16 @@
 //| @responsibility : Camada de visualização por chart objects (ADR-028).
 //|                   Implementa ITradeVisualizer: setas de entrada/saída
 //|                   + linha conectora colorida por P&L. Opcionalmente
-//|                   desenha retângulos de brick (tester, sem CS) em dois
-//|                   modos (ADR-028 + feedback 2026-05-27):
-//|                     OVERLAY: retângulos proporcionais ao tempo sobre
-//|                              os candles M1 (default).
-//|                     CLEAN  : esconde os candles + bricks de LARGURA
-//|                              IGUAL em slots sintéticos (renko clássico).
+//|                   desenha retângulos de brick (tester, sem CS).
+//|                   Dois modos de view (feedback empírico 2026-05-27):
+//|                     OVERLAY: caixas renko sobre os candles M1.
+//|                     CLEAN  : candles escondidos (cor=fundo + redraw),
+//|                              só as caixas renko.
+//|                   Ambos no TEMPO REAL — caixas alinham com a janela
+//|                   visível do tester. (Largura-igual verdadeira só no
+//|                   CS do live, que é símbolo renko próprio; num chart
+//|                   de tempo real do tester remapear tempo joga as
+//|                   caixas pra fora da tela — ver nota ADR-028.)
 //|                   PURO OUTPUT — nunca lê chart/CS, nunca alimenta
 //|                   decisão. No-op em backtest não-visual.
 //|                   CMksBrickPainterSink: adaptador IRenkoSink → painter.
@@ -31,20 +35,13 @@
 // Custom Symbol nativo — este modo não se aplica.
 enum ENUM_MKS_RENKO_VIEW
 {
-   MKS_RENKO_VIEW_OVERLAY = 0,  // retângulos proporcionais ao tempo sobre candles
-   MKS_RENKO_VIEW_CLEAN   = 1   // largura igual em slots sintéticos + candles escondidos
+   MKS_RENKO_VIEW_OVERLAY = 0,  // caixas renko sobre os candles M1
+   MKS_RENKO_VIEW_CLEAN   = 1   // candles escondidos, só as caixas renko
 };
 
-// Desenha marcadores de trade (e opcionalmente bricks) como chart objects.
-//
-// Coordenada X dos objetos:
-//   OVERLAY: tempo real (closeTimeMsc/1000) — alinha com os candles.
-//   CLEAN  : slot sintético (base + N×60s) — largura igual, candles
-//            escondidos; X não alinha com candles mas eles estão invisíveis.
-// Marcadores de trade ancoram no MESMO X do brick que os disparou: o
-// painter (via CMksBrickPainterSink) processa o brick ANTES da estratégia
-// chamar MarkEntry/MarkExit no mesmo OnBrickClose, então m_lastDisplayTime
-// é o X correto. No live (sem desenho de bricks), cai pro tempo real e o
+// Desenha marcadores de trade (e opcionalmente bricks) como chart objects,
+// ancorados no TEMPO REAL (closeTimeMsc/1000) — alinha com a janela
+// visível do chart. Marcadores idem. No live (sem desenho de bricks), o
 // MT5 encaixa o marcador na barra do CS via timeline híbrida (ADR-023).
 class CMksChartPainter : public ITradeVisualizer
 {
@@ -55,7 +52,6 @@ private:
    bool   m_enabled;          // false em backtest não-visual
    bool   m_drawBricks;       // true no tester (sem CS); false no live
    ENUM_MKS_RENKO_VIEW m_viewMode;
-   int    m_slotWidthSec;     // largura do slot sintético no modo CLEAN
 
    color  m_colorBuy;
    color  m_colorSell;
@@ -66,25 +62,14 @@ private:
 
    long   m_brickCount;
 
-   // OVERLAY: x-span = brick anterior → atual (tempo real).
+   // x-span do retângulo = brick anterior → atual (tempo real).
    datetime m_lastBrickTime;
    bool     m_hasLastBrick;
-
-   // CLEAN: slots sintéticos largura-igual.
-   datetime m_baseSlotTime;
-   long     m_slotIndex;
    bool     m_candlesHidden;
 
-   // Mapeamento do último brick processado → X de exibição (p/ marcadores).
-   long     m_lastCloseTimeMsc;
-   datetime m_lastDisplayTime;
-   bool     m_hasDisplay;
-
    // Rastreio de entradas por positionId (arrays paralelos — MQL5 sem map).
-   // Guarda o X de exibição JÁ MAPEADO (não o timeMsc cru) para a linha
-   // conectora ligar o slot/tempo correto da entrada ao da saída.
    ulong              m_entId[];
-   datetime           m_entDisp[];
+   datetime           m_entTime[];     // tempo real da entrada (p/ linha conectora)
    double             m_entPrice[];
    ENUM_MKS_ORDER_SIDE m_entSide[];
 
@@ -96,41 +81,32 @@ private:
       return -1;
    }
 
-   // X de exibição de um trade. Se o timeMsc bate com o último brick
-   // processado pelo painter, usa o X daquele brick (slot no CLEAN, tempo
-   // real no OVERLAY). Senão (live sem desenho de bricks), tempo real.
-   datetime MarkerX(long timeMsc) const
-   {
-      if(m_drawBricks && m_hasDisplay && timeMsc == m_lastCloseTimeMsc)
-         return m_lastDisplayTime;
-      return (datetime)(timeMsc / 1000);
-   }
-
    void HideCandlesOnce()
    {
       if(m_candlesHidden) return;
       color bg = (color)ChartGetInteger(m_chartId, CHART_COLOR_BACKGROUND);
-      ChartSetInteger(m_chartId, CHART_COLOR_CHART_UP,   bg);
-      ChartSetInteger(m_chartId, CHART_COLOR_CHART_DOWN, bg);
+      ChartSetInteger(m_chartId, CHART_COLOR_CHART_UP,    bg);
+      ChartSetInteger(m_chartId, CHART_COLOR_CHART_DOWN,  bg);
       ChartSetInteger(m_chartId, CHART_COLOR_CANDLE_BULL, bg);
       ChartSetInteger(m_chartId, CHART_COLOR_CANDLE_BEAR, bg);
-      ChartSetInteger(m_chartId, CHART_COLOR_CHART_LINE, bg);
+      ChartSetInteger(m_chartId, CHART_COLOR_CHART_LINE,  bg);
+      ChartRedraw(m_chartId);   // sem redraw a mudança de cor não aparece no tester
       m_candlesHidden = true;
    }
 
-   void RecordEntry(ulong positionId, datetime dispTime, double price, ENUM_MKS_ORDER_SIDE side)
+   void RecordEntry(ulong positionId, datetime t, double price, ENUM_MKS_ORDER_SIDE side)
    {
       int idx = FindEntry(positionId);
       if(idx < 0)
       {
          idx = ArraySize(m_entId);
          ArrayResize(m_entId,    idx + 1);
-         ArrayResize(m_entDisp,  idx + 1);
+         ArrayResize(m_entTime,  idx + 1);
          ArrayResize(m_entPrice, idx + 1);
          ArrayResize(m_entSide,  idx + 1);
       }
       m_entId[idx]    = positionId;
-      m_entDisp[idx]  = dispTime;
+      m_entTime[idx]  = t;
       m_entPrice[idx] = price;
       m_entSide[idx]  = side;
    }
@@ -140,11 +116,11 @@ private:
       int last = ArraySize(m_entId) - 1;
       if(idx < 0 || last < 0) return;
       m_entId[idx]    = m_entId[last];
-      m_entDisp[idx]  = m_entDisp[last];
+      m_entTime[idx]  = m_entTime[last];
       m_entPrice[idx] = m_entPrice[last];
       m_entSide[idx]  = m_entSide[last];
       ArrayResize(m_entId,    last);
-      ArrayResize(m_entDisp,  last);
+      ArrayResize(m_entTime,  last);
       ArrayResize(m_entPrice, last);
       ArrayResize(m_entSide,  last);
    }
@@ -176,7 +152,6 @@ public:
       m_drawBricks   = drawBricks;
       m_enabled      = enabled;
       m_viewMode     = viewMode;
-      m_slotWidthSec = 60;
 
       m_colorBuy       = clrDodgerBlue;
       m_colorSell      = clrOrangeRed;
@@ -185,17 +160,12 @@ public:
       m_colorBrickBull = clrSeaGreen;
       m_colorBrickBear = clrIndianRed;
 
-      m_brickCount       = 0;
-      m_lastBrickTime    = 0;
-      m_hasLastBrick     = false;
-      m_baseSlotTime     = 0;
-      m_slotIndex        = 0;
-      m_candlesHidden    = false;
-      m_lastCloseTimeMsc = 0;
-      m_lastDisplayTime  = 0;
-      m_hasDisplay       = false;
+      m_brickCount    = 0;
+      m_lastBrickTime = 0;
+      m_hasLastBrick  = false;
+      m_candlesHidden = false;
       ArrayResize(m_entId, 0);
-      ArrayResize(m_entDisp, 0);
+      ArrayResize(m_entTime, 0);
       ArrayResize(m_entPrice, 0);
       ArrayResize(m_entSide, 0);
    }
@@ -205,19 +175,19 @@ public:
    virtual void MarkEntry(long timeMsc, ENUM_MKS_ORDER_SIDE side,
                           double price, ulong positionId) override
    {
-      datetime x = MarkerX(timeMsc);
-      RecordEntry(positionId, x, price, side); // registra mesmo se !enabled
+      datetime t = (datetime)(timeMsc / 1000);
+      RecordEntry(positionId, t, price, side); // registra mesmo se !enabled
       if(!m_enabled) return;
       int    code = (side == MKS_ORDER_BUY) ? 233 : 234; // 233 up, 234 down
       color  clr  = (side == MKS_ORDER_BUY) ? m_colorBuy : m_colorSell;
       string name = m_prefix + "E_" + (string)positionId;
-      CreateArrow(name, x, price, code, clr);
+      CreateArrow(name, t, price, code, clr);
    }
 
    virtual void MarkExit(long timeMsc, double price, ulong positionId) override
    {
       int idx = FindEntry(positionId);
-      datetime x = MarkerX(timeMsc);
+      datetime t = (datetime)(timeMsc / 1000);
 
       if(m_enabled)
       {
@@ -231,7 +201,7 @@ public:
 
             string cname = m_prefix + "C_" + (string)positionId;
             if(ObjectCreate(m_chartId, cname, OBJ_TREND, 0,
-                            m_entDisp[idx], m_entPrice[idx], x, price))
+                            m_entTime[idx], m_entPrice[idx], t, price))
             {
                ObjectSetInteger(m_chartId, cname, OBJPROP_COLOR, exitClr);
                ObjectSetInteger(m_chartId, cname, OBJPROP_WIDTH, 1);
@@ -241,7 +211,7 @@ public:
             }
          }
          string name = m_prefix + "X_" + (string)positionId;
-         CreateArrow(name, x, price, 251, exitClr); // 251 = x
+         CreateArrow(name, t, price, 251, exitClr); // 251 = x
       }
 
       if(idx >= 0) RemoveEntry(idx);
@@ -252,38 +222,20 @@ public:
    void DrawBrick(const MksBrick &brick)
    {
       if(!m_enabled || !m_drawBricks) return;
+      if(m_viewMode == MKS_RENKO_VIEW_CLEAN) HideCandlesOnce();
 
       datetime realTime = (datetime)(brick.closeTimeMsc / 1000);
-      datetime x1, x2;
+      if(!m_hasLastBrick)
+      {
+         // Primeiro brick: sem span anterior. Só registra estado.
+         m_lastBrickTime = realTime;
+         m_hasLastBrick  = true;
+         return;
+      }
 
-      if(m_viewMode == MKS_RENKO_VIEW_CLEAN)
-      {
-         HideCandlesOnce();
-         if(m_slotIndex == 0)
-            m_baseSlotTime = (datetime)((long)realTime - ((long)realTime % 60));
-         x1 = (datetime)((long)m_baseSlotTime + m_slotIndex * m_slotWidthSec);
-         x2 = (datetime)((long)x1 + m_slotWidthSec);
-         m_lastDisplayTime = (datetime)((long)x1 + m_slotWidthSec / 2); // centro p/ marcador
-         m_slotIndex++;
-      }
-      else // OVERLAY
-      {
-         if(!m_hasLastBrick)
-         {
-            // Primeiro brick: sem span anterior. Só registra estado.
-            m_lastBrickTime    = realTime;
-            m_hasLastBrick     = true;
-            m_lastCloseTimeMsc = brick.closeTimeMsc;
-            m_lastDisplayTime  = realTime;
-            m_hasDisplay       = true;
-            return;
-         }
-         x1 = m_lastBrickTime;
-         x2 = realTime;
-         if((long)x2 <= (long)x1) x2 = (datetime)((long)x1 + 1); // guard p/ bricks no mesmo segundo
-         m_lastDisplayTime = realTime;
-         m_lastBrickTime   = realTime;
-      }
+      datetime x1 = m_lastBrickTime;
+      datetime x2 = realTime;
+      if((long)x2 <= (long)x1) x2 = (datetime)((long)x1 + 1); // bricks no mesmo segundo
 
       string name = m_prefix + "B_" + (string)m_brickCount;
       color clr = brick.IsBull() ? m_colorBrickBull : m_colorBrickBear;
@@ -295,14 +247,16 @@ public:
          ObjectSetInteger(m_chartId, name, OBJPROP_SELECTABLE, false);
          m_brickCount++;
       }
-      m_lastCloseTimeMsc = brick.closeTimeMsc;
-      m_hasDisplay       = true;
+      m_lastBrickTime = realTime;
    }
 
-   // Remove todos os objetos desta camada (prefixo MKSCR_VIZ_).
+   // Remove todos os objetos desta camada (prefixo MKSCR_VIZ_) e restaura
+   // o redraw. Não restaura as cores dos candles (sessão transiente no
+   // tester; no live o painter atua no chart do CS, não no base).
    void Clear()
    {
       ObjectsDeleteAll(m_chartId, m_prefix);
+      ChartRedraw(m_chartId);
    }
 
    //--- Inspeção (testes/diagnóstico) ---
@@ -314,9 +268,7 @@ public:
 
 // Adaptador IRenkoSink → CMksChartPainter. MQL5 não tem herança múltipla,
 // então o painter não pode ser ITradeVisualizer E IRenkoSink ao mesmo
-// tempo. Este sink encaminha OnBrickClose ao painter.DrawBrick. Adicionado
-// ao multiSink ANTES da estratégia (para que m_lastDisplayTime esteja
-// correto quando a estratégia chamar MarkEntry/MarkExit no mesmo brick).
+// tempo. Este sink encaminha OnBrickClose ao painter.DrawBrick.
 class CMksBrickPainterSink : public IRenkoSink
 {
 private:
