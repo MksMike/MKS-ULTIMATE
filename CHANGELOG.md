@@ -7,6 +7,20 @@ O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/) e es
 ## [Não lançado]
 
 ### Added
+- **Visualização de trades (ADR-028) — camada de chart objects.**
+  - `docs/ARCHITECTURE.md` §3 — **ADR-028** (camada de visualização de trades: chart objects, canal de eventos, paridade preservada). Materializa a alternativa (f) da ADR-020 ("indicador renko canvas / OBJECT_RECTANGLE", adiada). Marcadores de entrada/saída + linha P&L desenhados como chart objects — único mecanismo que funciona idêntico em tester (CS proibido lá) e live. Documenta a garantia de paridade testável (viz ON vs OFF → `.mksbk` byte-a-byte idêntico) e 5 alternativas rejeitadas.
+  - `docs/ARCHITECTURE.md` §3 — **ADR-023 promovida de Proposta para Aceita** (critério de produto acionado pela ADR-028: "agradável para usuário final", marcadores ancorados em tempo). Timeline híbrida real+bump agora vale.
+  - `MQL5/Include/MKS-ULTIMATE/Core/Interfaces/ITradeVisualizer.mqh` — interface nova. `MarkEntry(timeMsc, side, price, positionId)` + `MarkExit(timeMsc, price, positionId)`. Puro output; injeção opcional; NULL = sem viz, zero mudança de comportamento.
+  - `MQL5/Include/MKS-ULTIMATE/Core/Output/CMksChartPainter.mqh` — implementa `ITradeVisualizer`. Setas de entrada (233 up/BUY, 234 down/SELL) + saída (251 x, cor por P&L) + linha conectora `OBJ_TREND` colorida por lucro/prejuízo. Opcionalmente retângulos de brick (`OBJ_RECTANGLE`) no tester. Prefixo `MKSCR_VIZ_` + `Clear()`. No-op em backtest não-visual. Inclui `CMksBrickPainterSink` (adaptador IRenkoSink→painter, já que MQL5 não tem herança múltipla).
+  - `MQL5/Include/MKS-ULTIMATE/Core/Testing/Mocks/CMksRecordingVisualizer.mqh` — mock que conta MarkEntry/MarkExit para testes.
+  - `MQL5/Scripts/MKS-ULTIMATE/Tests/Test_CMksColorReversalStrategy.mq5` — 2 testes novos: `Test_CR_VisualizerReceivesEntryAndExit` (eventos disparam, ancorados no closeTimeMsc do brick) e `Test_CR_VisualizerParityOnVsOff` (mesma sequência com viz NULL vs mock → Sends/Closes/estado idênticos — paridade ADR-028 §7).
+
+### Changed
+- `MQL5/Include/MKS-ULTIMATE/Core/Output/CMksCustomSymbolSink.mqh` — **timeline híbrida real+bump (ADR-023)**. `OnBrickClose` usa `brickTime = max(closeTimeMsc/1000, nextBarTime)` em vez de `+60s` cego. Eixo X do CS vira aproximadamente-real (granularidade de segundos em mercado calmo, bump em frenético). Novo campo `lastBarTime` (âncora p/ marcadores). Bricks ficam distribuídos no tempo real.
+- `MQL5/Include/MKS-ULTIMATE/Strategy/CMksColorReversalStrategy.mqh` — ganha 8º parâmetro opcional `ITradeVisualizer *visualizer = NULL`. Chama `MarkEntry` após Send filled, `MarkExit` após Close filled ou auto-close externo detectado. Sem visualizer = comportamento idêntico (paridade).
+- `MQL5/Experts/MKS-ULTIMATE/ColorReversal.mq5` — input novo `InpShowTradeMarkers` (default true). Composition root localiza o chart do CS no live (`FindChartIdBySymbol`), cria `CMksChartPainter` (drawBricks=tester), injeta na strategy. `nextBarTime` inicia em 0 (ADR-023 §1). `painter.Clear()` no OnInit (start limpo). `g_nextBarTime=0`.
+
+### Added
 - `MQL5/Include/MKS-ULTIMATE/Core/Output/CMksAuditLogSink.mqh` — método `Flush()` (FileFlush sem fechar handle). Permite inspeção do audit TSV mid-sessão (`wc -l`, `tail`) numa demo live de horas sem destacar o EA.
 - `MQL5/Experts/MKS-ULTIMATE/ColorReversal.mq5` — **checkpoint de observabilidade a cada 60s** no OnTick (wall-clock via `GetTickCount`, fora do tester). Patcheia header do `.mksbk` via `g_writer.Checkpoint()` + `g_auditSink.Flush()`. Motivação concreta (2026-05-27): na primeira demo live bem-sucedida, os números só ficaram visíveis quando a sessão fechou (deinitReason 5) — sem flush periódico, monitorar uma demo de horas era cegueira. Agora `.mksbk` e audit TSV crescem observáveis em tempo real. Mesmo padrão do Producer.
 

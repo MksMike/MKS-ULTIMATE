@@ -24,15 +24,20 @@
 // este sink ser anexado ao builder — esta classe não cria nem
 // configura o CS (responsabilidade do composition root no EA).
 //
-// Tempo da bar (ADR-020 regra 4): índice ordenador monotônico, não
-// tempo real do brick. CustomRatesUpdate sobrescreve bars com mesmo
-// time, então cada brick precisa de um time único; +60s por brick
-// resolve estruturalmente.
+// Tempo da bar (ADR-023, timeline híbrida real+bump — substitui ADR-020
+// regra 4): cada brick fechado usa o MAIOR entre o tempo real do tick
+// disparador (closeTimeMsc/1000) e o último slot+60s. Em mercado calmo,
+// o tempo real vence → granularidade de segundos aparece naturalmente.
+// Em mercado frenético (vários bricks/min), o bump +60s garante slot
+// único (CustomRatesUpdate sobrescreve bars com mesmo time). Resultado:
+// bricks distribuídos no tempo real, marcadores de trade (ADR-028)
+// ancoram na barra correta.
 class CMksCustomSymbolSink : public IRenkoSink
 {
 public:
    string   csName;
    datetime nextBarTime;
+   datetime lastBarTime;   // ADR-028: slot atribuído ao último brick fechado (âncora p/ marcadores)
    double   brickSizePts;  // ADR-022 regra 8: tamanho VISUAL full do brick
    int      barsPushed;
    int      updateFailures;
@@ -43,6 +48,7 @@ public:
    {
       csName         = "";
       nextBarTime    = 0;
+      lastBarTime    = 0;
       brickSizePts   = 0.0;
       barsPushed     = 0;
       updateFailures = 0;
@@ -53,7 +59,14 @@ public:
    {
       if(StringLen(csName) == 0) return;
       MqlRates rates[1];
-      rates[0].time = nextBarTime;
+
+      // ADR-023 timeline híbrida real+bump. closeTimeMsc é o tempo real
+      // do tick que disparou o brick. Usa real se maior que o último
+      // slot+60s; senão bump. Guarda o slot escolhido em lastBarTime —
+      // o painter (ADR-028) ancora marcadores nesse tempo.
+      datetime realTime  = (datetime)(brick.closeTimeMsc / 1000);
+      datetime brickTime = (realTime > nextBarTime) ? realTime : nextBarTime;
+      rates[0].time = brickTime;
 
       // ADR-022 regra 8: bricks no CS têm tamanho VISUAL full (=
       // brickSizePts), independentemente de PO/PRO. close visual =
@@ -95,7 +108,8 @@ public:
       {
          barsPushed++;
       }
-      nextBarTime = (datetime)((long)nextBarTime + 60);
+      lastBarTime = brickTime;                                  // ADR-028: âncora p/ marcadores
+      nextBarTime = (datetime)((long)brickTime + 60);           // próximo slot mínimo
    }
 
    // ADR-021: a cada tick, atualiza a bar PARCIAL no slot atual de

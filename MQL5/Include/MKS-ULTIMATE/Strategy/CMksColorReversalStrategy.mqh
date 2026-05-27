@@ -33,6 +33,7 @@
 #include <MKS-ULTIMATE/Core/Interfaces/IBroker.mqh>
 #include <MKS-ULTIMATE/Core/Interfaces/IPositionSizer.mqh>
 #include <MKS-ULTIMATE/Core/Interfaces/IPositionBook.mqh>
+#include <MKS-ULTIMATE/Core/Interfaces/ITradeVisualizer.mqh>
 #include <MKS-ULTIMATE/Core/Interfaces/ISymbol.mqh>
 #include <MKS-ULTIMATE/Core/Interfaces/ILogger.mqh>
 #include <MKS-ULTIMATE/Core/Types/Brick.mqh>
@@ -95,13 +96,14 @@ struct CMksColorReversalMetrics
 class CMksColorReversalStrategy : public IRenkoSink
 {
 private:
-   IBroker        *m_broker;
-   IPositionSizer *m_sizer;
-   IPositionBook  *m_book;     // opcional — habilita auto-detach
-   ISymbol        *m_symbol;
-   ILogger        *m_logger;
-   double          m_slPoints;
-   long            m_magic;
+   IBroker          *m_broker;
+   IPositionSizer   *m_sizer;
+   IPositionBook    *m_book;        // opcional — habilita auto-detach
+   ITradeVisualizer *m_visualizer;  // opcional — desenha entradas/saídas (ADR-028)
+   ISymbol          *m_symbol;
+   ILogger          *m_logger;
+   double            m_slPoints;
+   long              m_magic;
 
    // Estado da estratégia
    bool                  m_hasLastBrick;
@@ -128,14 +130,18 @@ private:
    // Detecta auto-close externo via book. Se nossa state diz "tenho
    // posição X" mas book diz "X não está aberta", reconhece que o
    // broker fechou externamente (SL hit, manual close, etc) e zera
-   // o vínculo interno.
-   void CheckAutoCloseExternal()
+   // o vínculo interno. Marca a saída na visualização no tempo do brick
+   // que detectou o fechamento (aproximação — preço exato do SL não é
+   // conhecido aqui; usa triggerPrice do brick).
+   void CheckAutoCloseExternal(const MksBrick &brick)
    {
       if(m_book == NULL) return;
       if(m_currentPositionId == 0) return;
       if(m_book.IsOpen(m_currentPositionId)) return;
 
       ulong closedId = m_currentPositionId;
+      if(m_visualizer != NULL)
+         m_visualizer.MarkExit(brick.closeTimeMsc, brick.triggerPrice, closedId);
       m_currentPositionId = 0;
       m_currentLots       = 0.0;
       m_metrics.autoDetected++;
@@ -145,16 +151,20 @@ private:
 
    // Fecha posição corrente, se houver. Best-effort: limpa state
    // interno mesmo se Close falhar (Fase 9 simplista). Retorna true
-   // se houve close bem-sucedido, false caso contrário.
-   bool CloseCurrentIfAny()
+   // se houve close bem-sucedido, false caso contrário. Marca a saída
+   // na visualização no tempo do brick do flip.
+   bool CloseCurrentIfAny(const MksBrick &brick)
    {
       if(m_currentPositionId == 0) return false;
       m_metrics.closesAttempted++;
+      ulong closingId = m_currentPositionId;
       MksExecutionResult r = m_broker.Close(m_currentPositionId, m_currentLots);
       bool ok = (r.status == MKS_EXEC_FILLED);
       if(ok)
       {
          m_metrics.closesFilled++;
+         if(m_visualizer != NULL)
+            m_visualizer.MarkExit(brick.closeTimeMsc, r.fillPrice, closingId);
          LogInfo("posição fechada (flip)",
                  StringFormat("\"pid\":%I64u,\"price\":%.5f,\"lots\":%.4f",
                               m_currentPositionId, r.fillPrice, r.filledLots));
@@ -207,6 +217,9 @@ private:
          m_currentPositionId = r.positionId;
          m_currentSide       = req.side;
          m_currentLots       = r.filledLots;
+         if(m_visualizer != NULL)
+            m_visualizer.MarkEntry(triggerBrick.closeTimeMsc, req.side,
+                                    r.fillPrice, r.positionId);
          LogInfo("posição aberta (flip)",
                  StringFormat("\"pid\":%I64u,\"side\":%s,\"price\":%.5f,\"lots\":%.4f,"
                               "\"slPts\":%.2f,\"triggerBrickId\":%I64u",
@@ -227,21 +240,23 @@ public:
    // broker, sizer e symbol obrigatórios. book/logger opcionais (book
    // habilita auto-detach; logger habilita audit). slPoints = distância
    // do SL em pontos do símbolo. magic identifica trades desta estratégia.
-   CMksColorReversalStrategy(IBroker        *broker,
-                             IPositionSizer *sizer,
-                             ISymbol        *symbol,
-                             double          slPoints,
-                             long            magic,
-                             ILogger        *logger = NULL,
-                             IPositionBook  *book   = NULL)
+   CMksColorReversalStrategy(IBroker          *broker,
+                             IPositionSizer   *sizer,
+                             ISymbol          *symbol,
+                             double            slPoints,
+                             long              magic,
+                             ILogger          *logger     = NULL,
+                             IPositionBook    *book       = NULL,
+                             ITradeVisualizer *visualizer = NULL)
    {
-      m_broker   = broker;
-      m_sizer    = sizer;
-      m_book     = book;
-      m_symbol   = symbol;
-      m_logger   = logger;
-      m_slPoints = slPoints;
-      m_magic    = magic;
+      m_broker     = broker;
+      m_sizer      = sizer;
+      m_book       = book;
+      m_visualizer = visualizer;
+      m_symbol     = symbol;
+      m_logger     = logger;
+      m_slPoints   = slPoints;
+      m_magic      = magic;
 
       m_hasLastBrick      = false;
       m_lastBrickDir      = MKS_BRICK_BULL; // inerte até hasLastBrick
@@ -257,7 +272,7 @@ public:
       m_metrics.bricksSeen++;
 
       // 1. Auto-detach externo (SL hit, manual close, etc).
-      CheckAutoCloseExternal();
+      CheckAutoCloseExternal(brick);
 
       // 2. Primeiro brick: só registra direção.
       if(!m_hasLastBrick)
@@ -276,7 +291,7 @@ public:
 
       // 4. FLIP. Fecha + abre na nova direção.
       m_metrics.flipsDetected++;
-      CloseCurrentIfAny();
+      CloseCurrentIfAny(brick);
       OpenNewInDirection(brick.direction, brick);
 
       // 5. Atualiza última direção observada.

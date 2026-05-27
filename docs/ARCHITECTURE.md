@@ -1538,9 +1538,12 @@ O Producer ganha configurabilidade rica via inputs nativos do MQL5 (popup ao arr
 
 ### ADR-023: Timeline híbrida no Custom Symbol (real + bump)
 
-**Data:** 2026-05-22
-**Status:** Proposta (implementação adiada para fase de produto — ver §Implementação)
-**Relação com ADR-020:** Substituirá parcialmente regra 4 quando implementada. ADR-020 permanece Aceita; ADR-023 estende.
+**Data:** 2026-05-22 (promovida a Aceita em 2026-05-27)
+**Status:** Aceita
+**Relação com ADR-020:** Substitui parcialmente a regra 4. ADR-020 permanece Aceita; ADR-023 estende.
+**Relação com ADR-028:** Pré-requisito — marcadores de trade (ADR-028) ancoram em `closeTimeMsc` real; sem a timeline híbrida, o MT5 encaixaria os marcadores em barras de tempo fictício, no lugar errado do chart.
+
+> **Nota de promoção (2026-05-27):** ADR-023 foi escrita como Proposta com critério explícito de promoção: *"decisão de produtizar o framework / primeira demo para terceiro / timestamps fake são deal-breaker visual."* O requisito de visualização de trades da Fase 9 (ADR-028 — "agradável para usuário final", marcadores ancorados em tempo) **aciona esse critério**. A ADR-023 é promovida a Aceita e implementada junto com a Fase A da ADR-028. As 4 regras abaixo passam a valer; o §Implementação ("adiada") fica historicamente registrado mas superado por esta nota.
 
 **Contexto:**
 ADR-020 regra 4 fixou que o timestamp das bars do Custom Symbol é **fictício M1 monotônico** (`nextBarTime += 60s` por brick, independente do tempo real). Essa decisão resolve estruturalmente o problema de `CustomRatesUpdate` sobrescrever bars com mesmo `time` — cada brick precisa de slot único, então +60s garante separação visual em chart M1.
@@ -2027,6 +2030,85 @@ Três correções em um único ciclo, cada uma vinculada à sua sub-cláusula:
 - Não cobre **rejeição de Send por margem insuficiente** simulada. Broker simulado não modela conta; isso é responsabilidade do `CMksAccountSnapshot` + `CMksRiskManager` no pipeline upstream.
 
 - Não cobre **modificação de SL/TP por trailing dentro do auto-trigger** — `Modify()` continua sendo o caminho. Trailing do `CMksTradeManager` chama `Modify` em ticks subsequentes; broker re-avalia o gatilho com SL/TP atualizados na próxima `OnTick`. Padrão correto, sem mudança.
+
+---
+
+### ADR-028: Camada de visualização de trades — chart objects, canal de eventos, paridade preservada
+
+**Data:** 2026-05-27
+**Status:** Aceita
+**Relação com ADR-020:** Materializa a alternativa (f) ("indicador renko próprio / canvas / OBJECT_RECTANGLE", adiada como "Nível 3 opcional"). Não altera nenhuma das 9 regras da ADR-020 — estende com uma camada de anotação.
+**Relação com ADR-023:** Depende da timeline híbrida (promovida nesta mesma data) para ancorar marcadores em tempo aproximadamente real.
+**Relação com REGRAS §1.9:** Reforça — visualização é borda/output, injetada opcionalmente, fora do caminho de decisão.
+
+**Contexto:**
+
+A Fase 9 entregou o primeiro EA end-to-end (`ColorReversal`). O dono levantou requisito de produto: a estratégia precisa **mostrar visualmente onde entra e sai de posições**, em tempo real, tanto em **demo live** quanto em **backtest (Strategy Tester)**, para validação visual e para tornar o framework "agradável para usuário final".
+
+Três fatos do projeto restringem a solução:
+
+1. **ADR-020 §1** proíbe código de lógica **ler** o Custom Symbol. Mas desenhar marcadores é **escrita/anotação**, não leitura — desde que os marcadores venham do conhecimento próprio da estratégia (ela sabe onde entrou via suas próprias decisões), e não de uma releitura do CS. Não há violação.
+
+2. **O Strategy Tester do MT5 proíbe `CustomSymbolCreate`** (erro 4014, confirmado empiricamente em 2026-05-27). Logo, **a visualização via CS é tecnicamente impossível no tester**. O único mecanismo que funciona idêntico em tester e live é **chart objects** (`ObjectCreate` — setas, retângulos, linhas) desenhados no chart que o EA habita.
+
+3. **O eixo X do CS é tempo fictício** (ADR-020 §4), suavizado para aproximadamente-real pela timeline híbrida (ADR-023). Marcadores devem ser ancorados em **tempo** (`brick.closeTimeMsc`), e o MT5 os encaixa na barra mais próxima — que, com timeline híbrida, é a barra do brick correto.
+
+**Decisão:**
+
+Introduz-se uma **camada de visualização por chart objects**, puro output, injetada opcionalmente. Sete cláusulas:
+
+1. **`ITradeVisualizer` — nova interface** (`Core/Interfaces/`). Contrato mínimo de dois métodos chamados pela estratégia ao abrir/fechar posição:
+   ```
+   virtual void MarkEntry(long timeMsc, ENUM_MKS_ORDER_SIDE side, double price, ulong positionId) = 0;
+   virtual void MarkExit (long timeMsc, double price, ulong positionId) = 0;
+   ```
+   `timeMsc` é o `closeTimeMsc` do brick que disparou o trade — a estratégia já o tem no `MksBrick`. A visualização ancora o objeto nesse tempo; o MT5 encaixa na barra mais próxima.
+
+2. **`CMksChartPainter` — implementação concreta** (`Core/Output/`). Implementa `ITradeVisualizer` **e** `IRenkoSink`. Desenha:
+   - **Setas de entrada** (`OBJ_ARROW_BUY` / `OBJ_ARROW_SELL`) no tempo+preço da entrada.
+   - **Setas de saída** (`OBJ_ARROW_CHECK` ou seta neutra) no tempo+preço da saída.
+   - **Linha conectora** entrada→saída (`OBJ_TREND`) colorida por P&L (verde lucro / vermelho prejuízo). O painter rastreia entradas por `positionId` (mapa interno time/price/side), computa P&L no exit.
+   - **Retângulos de brick** (`OBJ_RECTANGLE`) — **apenas quando `drawBricks=true`** (tester, onde não há CS para mostrar os bricks). No live, `drawBricks=false`: os bricks já aparecem como caixinhas do CS; o painter só sobrepõe marcadores.
+
+3. **Injeção opcional, exatamente como `IPositionBook`.** `CMksColorReversalStrategy` ganha parâmetro opcional `ITradeVisualizer *visualizer = NULL` no construtor. `NULL` = sem visualização, zero overhead, **zero mudança de comportamento**. A estratégia chama `m_visualizer.MarkEntry/MarkExit` somente se `!= NULL`, do seu próprio fluxo de decisão — nunca lê chart ou CS.
+
+4. **Alvo de desenho configurável.** `CMksChartPainter` recebe `chartId` no construtor. Live: o composition root localiza o chart do CS (`ChartFirst`/`ChartNext` + `ChartSymbol() == csName`) e passa esse `chartId`; se não achar (operador não abriu o chart do CS), faz fallback para `ChartID()` (chart do EA) com log de aviso. Tester: usa `ChartID()` (chart visual do tester).
+
+5. **Modo não-visual = no-op.** O painter detecta `MQLInfoInteger(MQL_TESTER) && !MQLInfoInteger(MQL_VISUAL_MODE)` (backtest rápido sem render) e **pula todo `ObjectCreate`** — backtest de otimização não paga custo de desenho. Em visual mode e em live, desenha.
+
+6. **Prefixo de objeto + cleanup no INÍCIO (não no fim).** Todos os objetos levam prefixo `MKSCR_VIZ_`. `painter.Clear()` (`ObjectsDeleteAll(chartId, "MKSCR_VIZ_")`) é chamado no **OnInit** (start limpo, remove marcadores de uma sessão anterior), **não no OnDeinit**. Razão: no Strategy Tester o operador revisa o chart visual DEPOIS do backtest terminar — limpar no deinit apagaria exatamente os marcadores que ele quer ver. No live, persistir entre re-attaches é aceitável; o clean-start no próximo OnInit evita acúmulo. Histórico fiel sempre está no `.mksbk` + audit.
+
+7. **Garantia de paridade — testável e obrigatória.** A visualização é **observador passivo**. Invariante vinculante: **um backtest com visualização ligada e outro com visualização desligada DEVEM produzir `.mksbk` byte-a-byte idêntico** (`verify-parity.ps1` exit 0). Se divergir um byte, a visualização vazou para a decisão — bug bloqueante de merge. Esta é a prova mecânica de que ligar/desligar marcador não altera nenhum tick, brick, flip ou trade.
+
+**Alternativas consideradas:**
+
+- **(a) Marcadores via `CustomTicksAdd`/séries no CS.** Rejeitada. Não funciona no tester (sem CS); e séries no CS são para bricks, não para anotações pontuais.
+
+- **(b) Indicador customizado separado que lê posições via `PositionSelect`.** Rejeitada. Indicador lendo posições recria leitura de estado fora do composition root, e não funciona no tester da forma desejada. Além disso, acoplaria visualização ao estado MT5 real em vez do conhecimento da estratégia — em replay/backtest sintético não baterá.
+
+- **(c) Estratégia desenha direto (sem `CMksChartPainter`).** Rejeitada. `ObjectCreate` dentro da lógica de estratégia, mesmo sendo "escrita", polui o código de decisão com responsabilidade de borda e dificulta o teste unitário da estratégia (que hoje roda com mocks sem chart). A injeção de `ITradeVisualizer` mantém a estratégia limpa e testável (mock `NULL` ou mock contador).
+
+- **(d) Desenhar bricks como objetos também no live (não usar CS).** Rejeitada para esta entrega. O CS já entrega caixinhas renko limpas no live (ADR-020/021); duplicar via objetos sobreporia render. `drawBricks` fica `false` no live por isso. Pode ser reconsiderado se o operador quiser um chart único sem depender do CS.
+
+- **(e) P&L exato (com custos) no connector em vez de sinal preço.** Adiada. Cor por sinal de preço (`exit vs entry` conforme side) é proxy barato e suficiente para validação visual. P&L com custos exige consultar fills/comissão — agrega no futuro se necessário.
+
+**Consequências:**
+
+- **`Core/Interfaces/ITradeVisualizer.mqh`** — novo arquivo, 2 métodos virtuais puros.
+- **`Core/Output/CMksChartPainter.mqh`** — novo arquivo. Implementa `ITradeVisualizer` + `IRenkoSink`. Gestão de objetos com prefixo, cleanup, modo no-op em backtest rápido.
+- **`CMksColorReversalStrategy`** — ganha 7º parâmetro opcional `ITradeVisualizer *visualizer = NULL`. Chama `MarkEntry` após Send filled e `MarkExit` após Close filled (ou ao detectar auto-close externo via book). Sem visualizer = comportamento idêntico ao atual.
+- **`ColorReversal.mq5`** — composition root instancia `CMksChartPainter`, localiza o chart do CS no live, adiciona o `CMksBrickPainterSink` ao `multiSink` (para receber bricks no tester) e injeta o painter na strategy. `OnInit` chama `painter.Clear()` (start limpo); `OnDeinit` NÃO limpa (preserva marcadores para revisão).
+- **Mock de teste** `CMksRecordingVisualizer` (`Core/Testing/Mocks/`) — conta MarkEntry/MarkExit para os testes da strategy verificarem que os eventos disparam, sem tocar a API de chart.
+- **Teste de paridade** — `Test_CMksColorReversalStrategy` ganha caso que roda a mesma sequência de bricks com visualizer `NULL` e com mock, afirmando que as decisões de trade (Sends/Closes no broker) são idênticas. A paridade `.mksbk` ON/OFF é validada empiricamente no Strategy Tester via `verify-parity.ps1`.
+- **CHANGELOG + CHECKPOINT** registram ADR-028.
+
+**Fronteiras:**
+
+- **Não cobre indicadores no tester.** Os 5 indicadores (`docs/INDICATORS.md`) rodam sobre o CS via `iCustom` no live; no tester (sem CS) não funcionam. Recalculá-los in-EA e desenhar como objetos é entrega futura (2ª fase de visualização) — fora do escopo desta ADR, que é marcadores de trade.
+- **Não cobre P&L com custos no connector** (alternativa e — cor por sinal de preço por ora).
+- **Não cobre desenho de bricks como objetos no live** (alternativa d — CS cobre isso).
+- **Não cobre multi-posição visual complexa** — `ColorReversal` é max 1 posição. Estratégias multi-posição futuras podem exigir gestão de objetos mais rica; quando surgir, ADR de extensão.
+- **Não cobre persistência dos objetos entre restarts** — `Clear()` no deinit remove tudo; reabrir o EA redesenha a partir dali, não recupera histórico visual. Histórico fiel está no `.mksbk` + audit.
 
 ---
 

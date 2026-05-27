@@ -24,6 +24,7 @@
 #include <MKS-ULTIMATE/Core/Testing/Mocks/CMksRecordingBroker.mqh>
 #include <MKS-ULTIMATE/Core/Testing/Mocks/CMksFakeSymbol.mqh>
 #include <MKS-ULTIMATE/Core/Testing/Mocks/CMksFakePositionBook.mqh>
+#include <MKS-ULTIMATE/Core/Testing/Mocks/CMksRecordingVisualizer.mqh>
 #include <MKS-ULTIMATE/Core/Types/Brick.mqh>
 
 #define CR_TOL 1e-9
@@ -321,6 +322,77 @@ void Test_CR_ResetMetricsZeroesCounters()
    MKS_ASSERT_EQ_LONG(0, strat.Metrics().sendsFilled, "sends zerado");
 }
 
+//==================================================================
+// Visualização (ADR-028) — eventos disparam + paridade ON vs OFF
+//==================================================================
+
+void Test_CR_VisualizerReceivesEntryAndExit()
+{
+   CMksRecordingBroker br;
+   CMksFakeSymbol sym;
+   CMksRecordingVisualizer viz;
+   CMksFixedLotSizer sizer(GetPointer(sym), FIXED_LOTS);
+   CMksColorReversalStrategy strat(GetPointer(br), GetPointer(sizer),
+                                    GetPointer(sym), SL_POINTS, MAGIC,
+                                    NULL, NULL, GetPointer(viz));
+
+   strat.OnBrickClose(MakeBrick(MKS_BRICK_BULL, 2000.0, 2003.0, 10, 1000));
+   strat.OnBrickClose(MakeBrick(MKS_BRICK_BEAR, 2003.0, 2000.0, 20, 2000)); // flip → entry SELL
+   strat.OnBrickClose(MakeBrick(MKS_BRICK_BULL, 2000.0, 2003.0, 30, 3000)); // flip → exit + entry BUY
+
+   MKS_ASSERT_EQ_INT(2, viz.EntryCount(), "2 entradas marcadas (2 flips)");
+   MKS_ASSERT_EQ_INT(1, viz.ExitCount(),  "1 saída marcada (fechou 1a no 2o flip)");
+   MKS_ASSERT_EQ_INT((int)MKS_ORDER_BUY, (int)viz.LastEntrySide(), "última entrada BUY");
+   MKS_ASSERT_EQ_LONG(3000, viz.LastEntryTimeMsc(), "entry ancorada no closeTimeMsc do brick");
+}
+
+void Test_CR_VisualizerParityOnVsOff()
+{
+   // Mesma sequência de bricks com visualizer NULL e com mock. As
+   // DECISÕES (Sends/Closes no broker) devem ser idênticas — visualização
+   // é observador passivo (ADR-028 §7). Prova de paridade em nível de teste.
+   ENUM_MKS_BRICK_DIR dirs[] = {MKS_BRICK_BULL, MKS_BRICK_BEAR, MKS_BRICK_BULL,
+                                MKS_BRICK_BEAR, MKS_BRICK_BEAR, MKS_BRICK_BULL};
+   double opens[]  = {2000, 2003, 2000, 2003, 2000, 1997};
+   double closes[] = {2003, 2000, 2003, 2000, 1997, 2000};
+
+   // Run A — sem visualizer
+   CMksRecordingBroker brA;
+   CMksFakeSymbol symA;
+   CMksFixedLotSizer sizerA(GetPointer(symA), FIXED_LOTS);
+   CMksColorReversalStrategy stratA(GetPointer(brA), GetPointer(sizerA),
+                                     GetPointer(symA), SL_POINTS, MAGIC);
+
+   // Run B — com visualizer
+   CMksRecordingBroker brB;
+   CMksFakeSymbol symB;
+   CMksRecordingVisualizer viz;
+   CMksFixedLotSizer sizerB(GetPointer(symB), FIXED_LOTS);
+   CMksColorReversalStrategy stratB(GetPointer(brB), GetPointer(sizerB),
+                                     GetPointer(symB), SL_POINTS, MAGIC,
+                                     NULL, NULL, GetPointer(viz));
+
+   for(int i = 0; i < 6; i++)
+   {
+      MksBrick b = MakeBrick(dirs[i], opens[i], closes[i], (ulong)(i + 1), (i + 1) * 1000);
+      stratA.OnBrickClose(b);
+      stratB.OnBrickClose(b);
+   }
+
+   // Decisões idênticas: mesmo nº de Sends e Closes no broker.
+   MKS_ASSERT_EQ_INT(brA.SendCount(), brB.SendCount(),
+                     "Sends idênticos com/sem visualizer");
+   MKS_ASSERT_EQ_INT(brA.CloseCount(), brB.CloseCount(),
+                     "Closes idênticos com/sem visualizer");
+   // Estado final idêntico.
+   MKS_ASSERT_EQ_INT((int)stratA.CurrentSide(), (int)stratB.CurrentSide(),
+                     "side final idêntico");
+   MKS_ASSERT_EQ_LONG(stratA.Metrics().flipsDetected, stratB.Metrics().flipsDetected,
+                      "flips idênticos");
+   MKS_ASSERT_EQ_LONG(stratA.Metrics().sendsFilled, stratB.Metrics().sendsFilled,
+                      "sendsFilled idênticos");
+}
+
 //+------------------------------------------------------------------+
 void OnStart()
 {
@@ -339,6 +411,9 @@ void OnStart()
 
    MKS_RUN(Test_CR_SendRejectedNoStateCorruption);
    MKS_RUN(Test_CR_ResetMetricsZeroesCounters);
+
+   MKS_RUN(Test_CR_VisualizerReceivesEntryAndExit);
+   MKS_RUN(Test_CR_VisualizerParityOnVsOff);
 
    g_mksTestRunner.Summary();
 }

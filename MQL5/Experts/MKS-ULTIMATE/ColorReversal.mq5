@@ -45,6 +45,7 @@
 #include <MKS-ULTIMATE/Core/Data/CMksBrickWriterSink.mqh>
 #include <MKS-ULTIMATE/Core/Output/CMksCustomSymbolSink.mqh>
 #include <MKS-ULTIMATE/Core/Output/CMksAuditLogSink.mqh>
+#include <MKS-ULTIMATE/Core/Output/CMksChartPainter.mqh>
 #include <MKS-ULTIMATE/Core/Output/CMksMultiSink.mqh>
 #include <MKS-ULTIMATE/Core/Broker/CMksMt5Broker.mqh>
 #include <MKS-ULTIMATE/Core/Risk/CMksRiskManager.mqh>
@@ -102,6 +103,9 @@ input group "=== Custom Symbol ==="
 input bool   InpResetCustomSymbolBars = true;
 input bool   InpShowWicksInCS         = false;
 
+input group "=== Visualização (ADR-028) ==="
+input bool   InpShowTradeMarkers      = true;  // setas de entrada/saída + linha P&L no chart
+
 input group "=== Logging ==="
 input bool   InpPrintBricks         = false;
 input bool   InpLogToFile           = true;
@@ -138,6 +142,8 @@ CMksBrickFileWriter  *g_writer      = NULL;
 CMksBrickWriterSink  *g_brickSink   = NULL;
 CMksCustomSymbolSink *g_csSink      = NULL;
 CMksAuditLogSink     *g_auditSink   = NULL;
+CMksChartPainter     *g_painter     = NULL;  // ADR-028 visualização
+CMksBrickPainterSink *g_brickPainterSink = NULL; // adaptador IRenkoSink -> painter (tester)
 CMksMultiSink        *g_multiSink   = NULL;
 CMksRenkoBuilder     *g_builder     = NULL;
 CMksLogger           *g_logger      = NULL;
@@ -192,6 +198,20 @@ string BuildCustomSymbolName(const string &symbol, double size)
 datetime AlignDownToM1(datetime t)
 {
    return t - (t % 60);
+}
+
+// Localiza o chartId de um chart aberto cujo símbolo == csName. Usado no
+// live para desenhar marcadores (ADR-028) sobre as caixinhas renko do CS.
+// Retorna -1 se nenhum chart do CS estiver aberto (operador não abriu).
+long FindChartIdBySymbol(const string &symbolName)
+{
+   long cid = ChartFirst();
+   while(cid >= 0)
+   {
+      if(ChartSymbol(cid) == symbolName) return cid;
+      cid = ChartNext(cid);
+   }
+   return -1;
 }
 
 string MksJsonEscape(const string &s)
@@ -268,7 +288,9 @@ bool EnsureCustomSymbolReady(const string &cs, ISymbol *src, MksError &err)
 //+------------------------------------------------------------------+
 void Cleanup()
 {
-   if(g_strategy    != NULL) { delete g_strategy;    g_strategy    = NULL; }
+   if(g_strategy        != NULL) { delete g_strategy;        g_strategy        = NULL; }
+   if(g_brickPainterSink != NULL){ delete g_brickPainterSink; g_brickPainterSink = NULL; }
+   if(g_painter         != NULL) { delete g_painter;         g_painter         = NULL; }
    if(g_gatedBroker != NULL) { delete g_gatedBroker; g_gatedBroker = NULL; }
    if(g_mt5Broker   != NULL) { delete g_mt5Broker;   g_mt5Broker   = NULL; }
    if(g_lotSizer    != NULL) { delete g_lotSizer;    g_lotSizer    = NULL; }
@@ -422,7 +444,11 @@ int OnInit()
       if(InpResetCustomSymbolBars)
          CustomRatesDelete(g_csName, 0, LONG_MAX);
    }
-   g_nextBarTime = AlignDownToM1(TimeCurrent());
+   // ADR-023 §1: nextBarTime inicia em 0 (epoch) — o primeiro brick decide
+   // o slot de partida via timeline híbrida (realTime vence). Garante que
+   // os bricks fiquem distribuídos no tempo real e que os marcadores de
+   // trade (ADR-028) ancorem na barra correta.
+   g_nextBarTime = 0;
 
    //--- 6. Sinks ---------------------------------------------------+
    g_brickSink = new CMksBrickWriterSink();
@@ -533,10 +559,45 @@ int OnInit()
    }
    g_gatedBroker = new CMksRiskGatedBroker(g_mt5Broker, g_risk);
 
+   //--- 11.5 Visualização (ADR-028) -------------------------------+
+   // Marcadores de trade como chart objects. No live desenha no chart do
+   // CS (caixinhas renko); no tester desenha no chart visual + retângulos
+   // de brick (não há CS). No-op em backtest não-visual (otimização).
+   if(InpShowTradeMarkers)
+   {
+      bool vizEnabled = (!g_isTesting) || (bool)MQLInfoInteger(MQL_VISUAL_MODE);
+      long vizChartId = ChartID();
+      if(!g_isTesting)
+      {
+         long csChart = FindChartIdBySymbol(g_csName);
+         if(csChart >= 0)
+            vizChartId = csChart;
+         else
+            g_logger.Warn("ColorReversal",
+               "chart do CS não encontrado — marcadores no chart do EA",
+               StringFormat("\"cs\":\"%s\"", MksJsonEscape(g_csName)));
+      }
+      bool drawBricks = g_isTesting; // no live o CS já mostra os bricks
+      g_painter = new CMksChartPainter(vizChartId, g_digits, drawBricks, vizEnabled);
+      g_painter.Clear(); // start limpo — remove marcadores de sessão anterior (ADR-028 §6)
+      if(drawBricks)
+      {
+         g_brickPainterSink = new CMksBrickPainterSink(g_painter);
+         g_multiSink.Add(g_brickPainterSink);
+      }
+      g_logger.Info("ColorReversal", "visualização habilitada",
+         StringFormat("\"chartId\":%I64d,\"drawBricks\":%s,\"enabled\":%s",
+                      vizChartId, (drawBricks ? "true" : "false"),
+                      (vizEnabled ? "true" : "false")));
+   }
+
    //--- 12. Strategy ----------------------------------------------+
+   // g_painter é NULL se InpShowTradeMarkers=false → estratégia roda sem
+   // visualização, comportamento idêntico (paridade — ADR-028 §7).
    g_strategy = new CMksColorReversalStrategy(g_gatedBroker, g_lotSizer,
                                                g_iSymbol, InpSlPoints,
-                                               InpMagicNumber, g_logger, g_book);
+                                               InpMagicNumber, g_logger, g_book,
+                                               g_painter);
    // Strategy é IRenkoSink → vai no multiSink junto com writer/CS/audit.
    g_multiSink.Add(g_strategy);
 
