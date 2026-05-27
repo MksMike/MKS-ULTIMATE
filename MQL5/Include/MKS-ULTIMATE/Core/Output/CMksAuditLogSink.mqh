@@ -143,6 +143,15 @@ public:
                               tickSeq, invalidLimit));
    }
 
+   // Força flush dos bytes pendentes para disco sem fechar o handle.
+   // Permite inspeção do audit TSV mid-sessão (wc -l, tail) numa demo
+   // live de horas, sem precisar destacar o EA. Cheap; chamável
+   // periodicamente pelo composition root.
+   void Flush()
+   {
+      if(m_handle != INVALID_HANDLE) FileFlush(m_handle);
+   }
+
    // Fecha o arquivo. Escreve rodapé com contagem total.
    void Close()
    {

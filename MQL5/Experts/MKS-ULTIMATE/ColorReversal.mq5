@@ -122,6 +122,13 @@ bool                  g_streamHalted   = false;
 long                  g_lastSeenMsc    = 0;
 bool                  g_isTesting      = false;  // MQL_TESTER detection (ADR-022 §UX precedent)
 
+// Checkpoint periódico de observabilidade: a cada 60s de wall-clock,
+// patcheia header do .mksbk + flush do audit TSV, para inspeção
+// mid-sessão (wc -l, tail) sem destacar o EA. Em tester pula (sessão
+// fecha rápido; OnDeinit já faz flush final).
+const uint            kCheckpointEveryMs = 60000;
+uint                  g_lastCheckpointMs = 0;
+
 ISymbol              *g_iSymbol  = NULL;
 IAccount             *g_iAccount = NULL;
 IClock               *g_iClock   = NULL;
@@ -547,6 +554,8 @@ int OnInit()
                       anchor.time_msc, anchor.bid, anchor.ask));
    }
 
+   g_lastCheckpointMs = GetTickCount(); // primeiro checkpoint 60s após init
+
    g_logger.Info("ColorReversal", "OnInit done — ready for ticks",
       StringFormat("\"cs\":\"%s\",\"csReset\":%s",
                    MksJsonEscape(g_csName),
@@ -632,6 +641,26 @@ void OnTick()
       MksTick t = ToMksTick(mt);
       IngestOne(t);
       g_lastSeenMsc = mt.time_msc;
+   }
+
+   // Checkpoint de observabilidade a cada 60s (só fora do tester — no
+   // tester a sessão fecha rápido e o OnDeinit faz flush final). Patcheia
+   // header do .mksbk + flush do audit TSV para inspeção mid-sessão.
+   if(!g_isTesting)
+   {
+      uint nowMs = GetTickCount();
+      if(nowMs - g_lastCheckpointMs >= kCheckpointEveryMs)
+      {
+         g_lastCheckpointMs = nowMs;
+         if(g_writer != NULL)
+         {
+            MksError ckErr;
+            if(!g_writer.Checkpoint(ckErr) && g_logger != NULL)
+               g_logger.Warn("ColorReversal", "writer Checkpoint failed",
+                  StringFormat("\"err\":\"%s\"", MksJsonEscape(ckErr.ToString())));
+         }
+         if(g_auditSink != NULL) g_auditSink.Flush();
+      }
    }
 }
 

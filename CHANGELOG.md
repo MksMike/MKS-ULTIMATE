@@ -6,6 +6,10 @@ O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/) e es
 
 ## [Não lançado]
 
+### Added
+- `MQL5/Include/MKS-ULTIMATE/Core/Output/CMksAuditLogSink.mqh` — método `Flush()` (FileFlush sem fechar handle). Permite inspeção do audit TSV mid-sessão (`wc -l`, `tail`) numa demo live de horas sem destacar o EA.
+- `MQL5/Experts/MKS-ULTIMATE/ColorReversal.mq5` — **checkpoint de observabilidade a cada 60s** no OnTick (wall-clock via `GetTickCount`, fora do tester). Patcheia header do `.mksbk` via `g_writer.Checkpoint()` + `g_auditSink.Flush()`. Motivação concreta (2026-05-27): na primeira demo live bem-sucedida, os números só ficaram visíveis quando a sessão fechou (deinitReason 5) — sem flush periódico, monitorar uma demo de horas era cegueira. Agora `.mksbk` e audit TSV crescem observáveis em tempo real. Mesmo padrão do Producer.
+
 ### Changed
 - `MQL5/Experts/MKS-ULTIMATE/ColorReversal.mq5` — **guard de Custom Symbol no OnInit** (descoberto em 2026-05-27: demo live rodou a noite inteira sem abrir ordem). Causa-raiz: o EA estava anexado ao gráfico de um Custom Symbol de visualização (`XAUUSDm.MKS_3`/`.MKS_1`, criado pelo Producer), que é container ESTÁTICO de bricks históricos e não recebe feed de ticks ao vivo → `CopyTicks` retornava 0 para sempre → `ticks:0` em todas as sessões → zero bricks, zero flips, zero ordens. Fix: fora do tester, OnInit recusa com `INIT_PARAMETERS_INCORRECT` + log ERROR + Print explícito se `SymbolInfoInteger(symbol, SYMBOL_CUSTOM)` é true. Mensagem instrui a anexar no símbolo REAL do broker (XAUUSDm sem sufixo `.MKS_*`). Erro de categoria fácil de cometer (o gráfico do CS *parece* os bricks da estratégia), agora blindado estruturalmente.
 - `MQL5/Experts/MKS-ULTIMATE/ColorReversal.mq5` — **3 fixes para rodar em Strategy Tester** descobertos durante validação empírica de 2026-05-27:
