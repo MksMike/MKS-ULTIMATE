@@ -314,6 +314,27 @@ int OnInit()
    }
    g_logger.WriteHeader(g_broker, g_account, g_symbol, g_digits,
                         "ColorReversal", (long)sessionStart * 1000);
+
+   // GUARD: a estratégia consome ticks AO VIVO do símbolo do broker via
+   // CopyTicks e constrói os próprios bricks. Um Custom Symbol (ex.:
+   // XAUUSDm.MKS_3, criado pelo Producer para visualização) é container
+   // ESTÁTICO de bricks históricos — não recebe feed live. Anexar o EA
+   // no gráfico de um CS faz CopyTicks retornar 0 para sempre: zero
+   // bricks, zero flips, zero ordens (sintoma observado em 2026-05-27 —
+   // noite inteira sem ordem). Fora do tester, recusar símbolo custom
+   // explicitamente para nunca mais desperdiçar uma sessão em silêncio.
+   if(!g_isTesting && (bool)SymbolInfoInteger(g_symbol, SYMBOL_CUSTOM))
+   {
+      g_logger.Error("ColorReversal",
+         "símbolo é Custom Symbol — anexe o EA no gráfico do símbolo REAL do broker",
+         StringFormat("\"symbol\":\"%s\",\"hint\":\"use XAUUSDm (sem sufixo .MKS_*), não o CS de visualização\"",
+                      MksJsonEscape(g_symbol)));
+      Print("ColorReversal: ERRO — símbolo '", g_symbol,
+            "' é um Custom Symbol (sem feed live). Anexe o EA no gráfico do símbolo REAL do broker (ex.: XAUUSDm).");
+      Cleanup();
+      return INIT_PARAMETERS_INCORRECT;
+   }
+
    g_logger.Info("ColorReversal", "starting",
       StringFormat("\"magic\":%I64d,\"S\":%.4f,\"slPts\":%.2f,\"lotMode\":\"%s\","
                    "\"fixedLots\":%.4f,\"riskPct\":%.4f,"
