@@ -111,6 +111,8 @@ private:
    ulong                 m_currentPositionId;
    ENUM_MKS_ORDER_SIDE   m_currentSide;
    double                m_currentLots;
+   bool                  m_warmup;   // true durante fill histórico — rastreia
+                                     // direção mas NÃO opera (sem Send/Close)
 
    // Métricas
    CMksColorReversalMetrics m_metrics;
@@ -263,7 +265,17 @@ public:
       m_currentPositionId = 0;
       m_currentSide       = MKS_ORDER_BUY;
       m_currentLots       = 0.0;
+      m_warmup            = false;
    }
+
+   // Liga/desliga o modo warm-up. Durante warm-up (fill histórico), o
+   // OnBrickClose rastreia a direção dos bricks mas NÃO abre/fecha
+   // posições — senão a estratégia "operaria" sobre bricks do passado.
+   // Composition root chama SetWarmup(true) antes do fill, SetWarmup(false)
+   // depois. A direção do último brick histórico fica registrada, então o
+   // primeiro flip live decide corretamente.
+   void SetWarmup(bool v) { m_warmup = v; }
+   bool IsWarmup() const  { return m_warmup; }
 
    //--- IRenkoSink overrides ---------------------------------------+
 
@@ -289,12 +301,20 @@ public:
          return;
       }
 
-      // 4. FLIP. Fecha + abre na nova direção.
+      // 4. FLIP. Durante warm-up (fill histórico), só rastreia a direção —
+      // não opera sobre bricks do passado.
+      if(m_warmup)
+      {
+         m_lastBrickDir = brick.direction;
+         return;
+      }
+
+      // 5. FLIP live. Fecha + abre na nova direção.
       m_metrics.flipsDetected++;
       CloseCurrentIfAny(brick);
       OpenNewInDirection(brick.direction, brick);
 
-      // 5. Atualiza última direção observada.
+      // 6. Atualiza última direção observada.
       m_lastBrickDir = brick.direction;
    }
 

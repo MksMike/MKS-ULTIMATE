@@ -393,6 +393,39 @@ void Test_CR_VisualizerParityOnVsOff()
                       "sendsFilled idênticos");
 }
 
+//==================================================================
+// Warm-up (fill histórico) — rastreia direção, NÃO opera
+//==================================================================
+
+void Test_CR_WarmupTracksDirectionNoTrades()
+{
+   CMksRecordingBroker br;
+   CMksFakeSymbol sym;
+   CMksFixedLotSizer sizer(GetPointer(sym), FIXED_LOTS);
+   CMksColorReversalStrategy strat(GetPointer(br), GetPointer(sizer),
+                                    GetPointer(sym), SL_POINTS, MAGIC);
+
+   strat.SetWarmup(true);
+   // Vários flips durante warm-up — nenhum trade deve sair.
+   strat.OnBrickClose(MakeBrick(MKS_BRICK_BULL, 2000.0, 2003.0));
+   strat.OnBrickClose(MakeBrick(MKS_BRICK_BEAR, 2003.0, 2000.0)); // flip
+   strat.OnBrickClose(MakeBrick(MKS_BRICK_BULL, 2000.0, 2003.0)); // flip
+   strat.OnBrickClose(MakeBrick(MKS_BRICK_BEAR, 2003.0, 2000.0)); // flip
+
+   MKS_ASSERT_EQ_INT(0, br.SendCount(), "warm-up: 0 Sends apesar dos flips");
+   MKS_ASSERT_EQ_INT(0, br.CloseCount(), "warm-up: 0 Closes");
+   MKS_ASSERT_FALSE(strat.HasOpenPosition(), "warm-up: sem posição");
+   MKS_ASSERT_EQ_INT((int)MKS_BRICK_BEAR, (int)strat.LastBrickDir(),
+                     "warm-up rastreou última direção (BEAR)");
+
+   // Sai do warm-up — primeiro flip live deve operar, na direção correta.
+   strat.SetWarmup(false);
+   strat.OnBrickClose(MakeBrick(MKS_BRICK_BULL, 2000.0, 2003.0)); // flip BEAR->BULL
+   MKS_ASSERT_EQ_INT(1, br.SendCount(), "pós-warm-up: 1 Send no 1o flip live");
+   MKS_ASSERT_EQ_INT((int)MKS_ORDER_BUY, (int)strat.CurrentSide(),
+                     "pós-warm-up: abre BUY (flip p/ BULL)");
+}
+
 //+------------------------------------------------------------------+
 void OnStart()
 {
@@ -414,6 +447,8 @@ void OnStart()
 
    MKS_RUN(Test_CR_VisualizerReceivesEntryAndExit);
    MKS_RUN(Test_CR_VisualizerParityOnVsOff);
+
+   MKS_RUN(Test_CR_WarmupTracksDirectionNoTrades);
 
    g_mksTestRunner.Summary();
 }

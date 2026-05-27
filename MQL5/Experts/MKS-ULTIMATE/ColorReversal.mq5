@@ -105,6 +105,10 @@ input bool   InpShowWicksInCS         = false;
 
 input group "=== Visualização (ADR-028) ==="
 input bool   InpShowTradeMarkers      = true;  // setas de entrada/saída + linha P&L no chart
+input ENUM_MKS_RENKO_VIEW InpRenkoView = MKS_RENKO_VIEW_OVERLAY; // tester: OVERLAY (sobre candles) | CLEAN (largura igual, candles escondidos)
+
+input group "=== Histórico ==="
+input int    InpHistoricalFillDays    = 3;     // dias de bricks históricos no CS/.mksbk no live (0 = só live). Estratégia NÃO opera no histórico.
 
 input group "=== Logging ==="
 input bool   InpPrintBricks         = false;
@@ -578,7 +582,8 @@ int OnInit()
                StringFormat("\"cs\":\"%s\"", MksJsonEscape(g_csName)));
       }
       bool drawBricks = g_isTesting; // no live o CS já mostra os bricks
-      g_painter = new CMksChartPainter(vizChartId, g_digits, drawBricks, vizEnabled);
+      g_painter = new CMksChartPainter(vizChartId, g_digits, drawBricks, vizEnabled,
+                                        InpRenkoView);
       g_painter.Clear(); // start limpo — remove marcadores de sessão anterior (ADR-028 §6)
       if(drawBricks)
       {
@@ -617,12 +622,62 @@ int OnInit()
 
    g_lastCheckpointMs = GetTickCount(); // primeiro checkpoint 60s após init
 
+   //--- 15. Fill histórico (live only) ----------------------------+
+   // Popula CS + .mksbk com N dias de bricks ANTES de operar live, em
+   // modo warm-up (estratégia rastreia direção mas não opera no passado).
+   // No tester o histórico já vem pelos ticks do período de teste.
+   if(!g_isTesting && InpHistoricalFillDays > 0)
+      RunHistoricalFill(InpHistoricalFillDays);
+
    g_logger.Info("ColorReversal", "OnInit done — ready for ticks",
-      StringFormat("\"cs\":\"%s\",\"csReset\":%s",
+      StringFormat("\"cs\":\"%s\",\"csReset\":%s,\"histDays\":%d",
                    MksJsonEscape(g_csName),
-                   (InpResetCustomSymbolBars ? "true" : "false")));
+                   (InpResetCustomSymbolBars ? "true" : "false"),
+                   InpHistoricalFillDays));
 
    return INIT_SUCCEEDED;
+}
+
+//+------------------------------------------------------------------+
+//| Fill histórico — popula CS/.mksbk com N dias de bricks em warm-up. |
+//| A estratégia NÃO opera durante o fill (SetWarmup). Lê de            |
+//| CopyTicksRange (fonte diferente do feed live — vale só para o       |
+//| trecho histórico visual/registro; paridade canônica é do trecho    |
+//| live, ADR-024 R4.5.2). Síncrono — pode levar alguns segundos.       |
+//+------------------------------------------------------------------+
+void RunHistoricalFill(int days)
+{
+   long toMsc   = (long)TimeCurrent() * 1000;
+   long fromMsc = toMsc - (long)days * 24L * 3600L * 1000L;
+
+   MqlTick histTicks[];
+   int n = CopyTicksRange(g_symbol, histTicks, COPY_TICKS_ALL, fromMsc, toMsc);
+   if(n <= 0)
+   {
+      g_logger.Warn("ColorReversal", "historical fill: CopyTicksRange vazio/falhou",
+         StringFormat("\"ret\":%d,\"lastErr\":%d", n, GetLastError()));
+      return;
+   }
+
+   g_builder.SetEmitForming(false);  // não dispara OnBrickForming por tick no fill
+   g_strategy.SetWarmup(true);       // rastreia direção mas não opera no passado
+   long bricksBefore = (g_writer != NULL) ? g_writer.BrickCount() : 0;
+
+   for(int i = 0; i < n; i++)
+   {
+      MksTick t = ToMksTick(histTicks[i]);
+      IngestOne(t);
+      if(g_streamHalted) break;
+   }
+
+   long bricksAfter = (g_writer != NULL) ? g_writer.BrickCount() : 0;
+   g_strategy.SetWarmup(false);      // live: estratégia volta a operar
+   g_builder.SetEmitForming(true);
+
+   g_logger.Info("ColorReversal", "historical fill done",
+      StringFormat("\"days\":%d,\"ticks\":%d,\"bricks\":%I64d,\"lastDir\":\"%s\"",
+                   days, n, bricksAfter - bricksBefore,
+                   (g_strategy.LastBrickDir() == MKS_BRICK_BULL ? "BULL" : "BEAR")));
 }
 
 //+------------------------------------------------------------------+

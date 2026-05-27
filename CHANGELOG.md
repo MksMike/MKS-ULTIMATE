@@ -7,6 +7,13 @@ O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/) e es
 ## [Não lançado]
 
 ### Added
+- **Fase 9 — refinamentos de visualização + fill histórico (feedback empírico 2026-05-27).**
+  - `MQL5/Include/MKS-ULTIMATE/Core/Output/CMksChartPainter.mqh` — modo de view `ENUM_MKS_RENKO_VIEW` (OVERLAY/CLEAN). **OVERLAY** (default): retângulos proporcionais ao tempo sobre os candles M1 (o que o tester mostrou). **CLEAN**: esconde os candles (cores = fundo) + desenha bricks de **largura igual** em slots sintéticos (60s cada) — forma renko clássica, igual ao CS. Marcadores re-ancorados no slot do brick que os disparou (`m_lastDisplayTime`, mapeado por `MarkerX`). Resolve o feedback "quero ver só o renko na forma original".
+  - `MQL5/Experts/MKS-ULTIMATE/ColorReversal.mq5` — input `InpRenkoView` (OVERLAY default) passado ao painter. Input `InpHistoricalFillDays = 3`: no live, popula CS + `.mksbk` com 3 dias de bricks históricos ANTES de operar, via `RunHistoricalFill` (CopyTicksRange + warm-up). Resolve "CS nasce sem histórico".
+  - `MQL5/Include/MKS-ULTIMATE/Strategy/CMksColorReversalStrategy.mqh` — `SetWarmup(bool)`: durante o fill histórico a estratégia **rastreia a direção dos bricks mas NÃO opera** (sem Send/Close sobre bricks do passado). O primeiro flip live decide corretamente (direção do último brick histórico registrada). Segurança: sem warm-up, o fill abriria "trades" no passado.
+  - `MQL5/Scripts/MKS-ULTIMATE/Tests/Test_CMksColorReversalStrategy.mq5` — teste novo `Test_CR_WarmupTracksDirectionNoTrades` (flips em warm-up → 0 trades; pós-warm-up → 1o flip opera na direção certa).
+
+### Added
 - **Visualização de trades (ADR-028) — camada de chart objects.**
   - `docs/ARCHITECTURE.md` §3 — **ADR-028** (camada de visualização de trades: chart objects, canal de eventos, paridade preservada). Materializa a alternativa (f) da ADR-020 ("indicador renko canvas / OBJECT_RECTANGLE", adiada). Marcadores de entrada/saída + linha P&L desenhados como chart objects — único mecanismo que funciona idêntico em tester (CS proibido lá) e live. Documenta a garantia de paridade testável (viz ON vs OFF → `.mksbk` byte-a-byte idêntico) e 5 alternativas rejeitadas.
   - `docs/ARCHITECTURE.md` §3 — **ADR-023 promovida de Proposta para Aceita** (critério de produto acionado pela ADR-028: "agradável para usuário final", marcadores ancorados em tempo). Timeline híbrida real+bump agora vale.
