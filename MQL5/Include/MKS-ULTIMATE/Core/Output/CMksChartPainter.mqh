@@ -91,6 +91,21 @@ private:
       ArrayResize(m_entSide,  last);
    }
 
+   // Tempo de ancoragem do marcador. No chart-alvo, a barra mais recente
+   // (index 0) é o brick que disparou o trade — o CSSink processa o brick
+   // ANTES da estratégia na mesma OnBrickClose (ordem do multiSink), então
+   // iTime(...,0) devolve exatamente a barra desse brick. Isso resolve o
+   // descasamento: o CS usa timeline híbrida com bump (ADR-023), e o tempo
+   // real do tick (timeMsc) diverge das barras do CS — ancorar no tempo
+   // real jogava o marcador atrás das barras (fora da tela). Fallback ao
+   // tempo real se a série do símbolo ainda não estiver disponível.
+   datetime AnchorTime(long timeMsc) const
+   {
+      datetime barT = iTime(ChartSymbol(m_chartId), PERIOD_M1, 0);
+      if(barT > 0) return barT;
+      return (datetime)(timeMsc / 1000);
+   }
+
    void LogDraw(const string &what, const string &name, datetime t, double price, bool ok)
    {
       if(m_logger == NULL) return;
@@ -145,7 +160,7 @@ public:
    virtual void MarkEntry(long timeMsc, ENUM_MKS_ORDER_SIDE side,
                           double price, ulong positionId) override
    {
-      datetime t = (datetime)(timeMsc / 1000);
+      datetime t = AnchorTime(timeMsc);
       RecordEntry(positionId, t, price, side); // registra mesmo se !enabled
       if(!m_enabled) return;
       int    code = (side == MKS_ORDER_BUY) ? 233 : 234; // 233 up, 234 down
@@ -161,7 +176,7 @@ public:
    virtual void MarkExit(long timeMsc, double price, ulong positionId) override
    {
       int idx = FindEntry(positionId);
-      datetime t = (datetime)(timeMsc / 1000);
+      datetime t = AnchorTime(timeMsc);
 
       if(m_enabled)
       {
