@@ -137,6 +137,10 @@ public:
       color  clr  = (side == MKS_ORDER_BUY) ? m_colorBuy : m_colorSell;
       string name = m_prefix + "E_" + (string)positionId;
       CreateArrow(name, t, price, code, clr);
+      // O painter desenha no chart do CS, que é DIFERENTE do chart que
+      // processa os ticks do EA (o base). Objeto criado em outro chart só
+      // aparece após ChartRedraw explícito daquele chart.
+      ChartRedraw(m_chartId);
    }
 
    virtual void MarkExit(long timeMsc, double price, ulong positionId) override
@@ -167,6 +171,7 @@ public:
          }
          string name = m_prefix + "X_" + (string)positionId;
          CreateArrow(name, t, price, 251, exitClr); // 251 = x
+         ChartRedraw(m_chartId); // cross-chart: força refresh do chart do CS
       }
 
       if(idx >= 0) RemoveEntry(idx);
