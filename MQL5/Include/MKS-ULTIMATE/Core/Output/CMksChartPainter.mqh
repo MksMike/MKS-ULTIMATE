@@ -23,6 +23,7 @@
 #define MKS_ULTIMATE_CORE_OUTPUT_CMKSCHARTPAINTER_MQH
 
 #include <MKS-ULTIMATE/Core/Interfaces/ITradeVisualizer.mqh>
+#include <MKS-ULTIMATE/Core/Interfaces/ILogger.mqh>
 #include <MKS-ULTIMATE/Core/Types/OrderRequest.mqh>
 
 // Desenha marcadores de trade como chart objects, ancorados no TEMPO REAL
@@ -34,10 +35,11 @@
 class CMksChartPainter : public ITradeVisualizer
 {
 private:
-   long   m_chartId;
-   string m_prefix;
-   int    m_digits;
-   bool   m_enabled;          // false em backtest não-visual
+   long     m_chartId;
+   string   m_prefix;
+   int      m_digits;
+   bool     m_enabled;        // false em backtest não-visual
+   ILogger *m_logger;         // opcional — diagnóstico de desenho
 
    color  m_colorBuy;
    color  m_colorSell;
@@ -89,10 +91,21 @@ private:
       ArrayResize(m_entSide,  last);
    }
 
+   void LogDraw(const string &what, const string &name, datetime t, double price, bool ok)
+   {
+      if(m_logger == NULL) return;
+      m_logger.Log(ok ? MKS_LOG_INFO : MKS_LOG_WARN, "ChartPainter", what,
+         StringFormat("\"chartId\":%I64d,\"obj\":\"%s\",\"t\":%I64d,\"price\":%.5f,"
+                      "\"ok\":%s,\"lastErr\":%d",
+                      m_chartId, name, (long)t, price,
+                      (ok ? "true" : "false"), (ok ? 0 : GetLastError())));
+   }
+
    void CreateArrow(const string name, datetime t, double price, int arrowCode, color clr)
    {
       if(!m_enabled) return;
-      if(ObjectCreate(m_chartId, name, OBJ_ARROW, 0, t, price))
+      bool ok = ObjectCreate(m_chartId, name, OBJ_ARROW, 0, t, price);
+      if(ok)
       {
          ObjectSetInteger(m_chartId, name, OBJPROP_ARROWCODE, arrowCode);
          ObjectSetInteger(m_chartId, name, OBJPROP_COLOR, clr);
@@ -101,18 +114,20 @@ private:
          ObjectSetInteger(m_chartId, name, OBJPROP_BACK, false);
          ObjectSetInteger(m_chartId, name, OBJPROP_SELECTABLE, false);
       }
+      LogDraw("arrow", name, t, price, ok);
    }
 
 public:
    // chartId: chart-alvo (CS no live, chart do tester no backtest).
    // digits: casas decimais. enabled: false desliga todo desenho
    // (backtest não-visual — paridade preservada, ADR-028 §7).
-   CMksChartPainter(long chartId, int digits, bool enabled)
+   CMksChartPainter(long chartId, int digits, bool enabled, ILogger *logger = NULL)
    {
       m_chartId = chartId;
       m_prefix  = "MKSCR_VIZ_";
       m_digits  = digits;
       m_enabled = enabled;
+      m_logger  = logger;
 
       m_colorBuy    = clrDodgerBlue;
       m_colorSell   = clrOrangeRed;
@@ -159,8 +174,9 @@ public:
             exitClr = profit ? m_colorProfit : m_colorLoss;
 
             string cname = m_prefix + "C_" + (string)positionId;
-            if(ObjectCreate(m_chartId, cname, OBJ_TREND, 0,
-                            m_entTime[idx], m_entPrice[idx], t, price))
+            bool okc = ObjectCreate(m_chartId, cname, OBJ_TREND, 0,
+                            m_entTime[idx], m_entPrice[idx], t, price);
+            if(okc)
             {
                ObjectSetInteger(m_chartId, cname, OBJPROP_COLOR, exitClr);
                ObjectSetInteger(m_chartId, cname, OBJPROP_WIDTH, 1);
@@ -168,6 +184,7 @@ public:
                ObjectSetInteger(m_chartId, cname, OBJPROP_BACK, true);
                ObjectSetInteger(m_chartId, cname, OBJPROP_SELECTABLE, false);
             }
+            LogDraw("connector", cname, t, price, okc);
          }
          string name = m_prefix + "X_" + (string)positionId;
          CreateArrow(name, t, price, 251, exitClr); // 251 = x
