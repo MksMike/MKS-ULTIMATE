@@ -146,6 +146,7 @@ CMksBrickWriterSink  *g_brickSink   = NULL;
 CMksCustomSymbolSink *g_csSink      = NULL;
 CMksAuditLogSink     *g_auditSink   = NULL;
 CMksChartPainter     *g_painter     = NULL;  // ADR-028 visualização de trades
+long                  g_csChartId   = -1;     // chart do CS auto-aberto (live); -1 = nenhum
 CMksMultiSink        *g_multiSink   = NULL;
 CMksRenkoBuilder     *g_builder     = NULL;
 CMksLogger           *g_logger      = NULL;
@@ -444,6 +445,33 @@ int OnInit()
       }
       if(InpResetCustomSymbolBars)
          CustomRatesDelete(g_csName, 0, LONG_MAX);
+
+      // Auto-open do chart do CS (ADR-022 §6) — UX: o operador não precisa
+      // arrastar do Market Watch. Reusa um chart já aberto do CS se houver
+      // (evita spam de janelas em re-init); senão abre um novo em M1. Só no
+      // live (no tester ChartOpen de CS não se aplica).
+      long existing = FindChartIdBySymbol(g_csName);
+      if(existing >= 0)
+      {
+         g_csChartId = existing;
+      }
+      else
+      {
+         g_csChartId = (long)ChartOpen(g_csName, PERIOD_M1);
+         if(g_csChartId == 0)
+         {
+            g_logger.Warn("ColorReversal", "ChartOpen do CS falhou (segue sem auto-open)",
+               StringFormat("\"cs\":\"%s\",\"lastErr\":%d",
+                            MksJsonEscape(g_csName), GetLastError()));
+            g_csChartId = -1;
+         }
+         else
+         {
+            g_logger.Info("ColorReversal", "cs chart aberto",
+               StringFormat("\"cs\":\"%s\",\"chartId\":%I64d",
+                            MksJsonEscape(g_csName), g_csChartId));
+         }
+      }
    }
    // ADR-023 §1: nextBarTime inicia em 0 (epoch) — o primeiro brick decide
    // o slot de partida via timeline híbrida (realTime vence). Garante que
@@ -562,20 +590,19 @@ int OnInit()
 
    //--- 11.5 Visualização (ADR-028) -------------------------------+
    // Marcadores de trade como chart objects. No live desenha no chart do
-   // CS (caixinhas renko); no tester desenha no chart visual + retângulos
-   // de brick (não há CS). No-op em backtest não-visual (otimização).
+   // CS auto-aberto (caixinhas renko); no tester desenha sobre os candles
+   // M1 do chart visual. No-op em backtest não-visual (otimização).
    if(InpShowTradeMarkers)
    {
       bool vizEnabled = (!g_isTesting) || (bool)MQLInfoInteger(MQL_VISUAL_MODE);
       long vizChartId = ChartID();
       if(!g_isTesting)
       {
-         long csChart = FindChartIdBySymbol(g_csName);
-         if(csChart >= 0)
-            vizChartId = csChart;
+         if(g_csChartId > 0)
+            vizChartId = g_csChartId;  // chart do CS auto-aberto acima
          else
             g_logger.Warn("ColorReversal",
-               "chart do CS não encontrado — marcadores no chart do EA",
+               "chart do CS indisponível — marcadores no chart do EA",
                StringFormat("\"cs\":\"%s\"", MksJsonEscape(g_csName)));
       }
       // Painter só desenha MARCADORES de trade. Renko fica a cargo do CS
