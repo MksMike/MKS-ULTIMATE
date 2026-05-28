@@ -104,8 +104,7 @@ input bool   InpResetCustomSymbolBars = true;
 input bool   InpShowWicksInCS         = false;
 
 input group "=== Visualização (ADR-028) ==="
-input bool   InpShowTradeMarkers      = true;  // setas de entrada/saída + linha P&L no chart
-input ENUM_MKS_RENKO_VIEW InpRenkoView = MKS_RENKO_VIEW_OVERLAY; // tester: OVERLAY (sobre candles) | CLEAN (largura igual, candles escondidos)
+input bool   InpShowTradeMarkers      = true;  // setas de entrada/saída + linha P&L no chart (live: sobre CS; tester: sobre M1)
 
 input group "=== Histórico ==="
 input int    InpHistoricalFillDays    = 3;     // dias de bricks históricos no CS/.mksbk no live (0 = só live). Estratégia NÃO opera no histórico.
@@ -146,8 +145,7 @@ CMksBrickFileWriter  *g_writer      = NULL;
 CMksBrickWriterSink  *g_brickSink   = NULL;
 CMksCustomSymbolSink *g_csSink      = NULL;
 CMksAuditLogSink     *g_auditSink   = NULL;
-CMksChartPainter     *g_painter     = NULL;  // ADR-028 visualização
-CMksBrickPainterSink *g_brickPainterSink = NULL; // adaptador IRenkoSink -> painter (tester)
+CMksChartPainter     *g_painter     = NULL;  // ADR-028 visualização de trades
 CMksMultiSink        *g_multiSink   = NULL;
 CMksRenkoBuilder     *g_builder     = NULL;
 CMksLogger           *g_logger      = NULL;
@@ -293,7 +291,6 @@ bool EnsureCustomSymbolReady(const string &cs, ISymbol *src, MksError &err)
 void Cleanup()
 {
    if(g_strategy        != NULL) { delete g_strategy;        g_strategy        = NULL; }
-   if(g_brickPainterSink != NULL){ delete g_brickPainterSink; g_brickPainterSink = NULL; }
    if(g_painter         != NULL) { delete g_painter;         g_painter         = NULL; }
    if(g_gatedBroker != NULL) { delete g_gatedBroker; g_gatedBroker = NULL; }
    if(g_mt5Broker   != NULL) { delete g_mt5Broker;   g_mt5Broker   = NULL; }
@@ -581,19 +578,14 @@ int OnInit()
                "chart do CS não encontrado — marcadores no chart do EA",
                StringFormat("\"cs\":\"%s\"", MksJsonEscape(g_csName)));
       }
-      bool drawBricks = g_isTesting; // no live o CS já mostra os bricks
-      g_painter = new CMksChartPainter(vizChartId, g_digits, drawBricks, vizEnabled,
-                                        InpRenkoView);
+      // Painter só desenha MARCADORES de trade. Renko fica a cargo do CS
+      // (live) ou do visualizador de backtest (.mksbk → CS). No tester os
+      // marcadores aparecem sobre os candles M1 — honesto, sem fingir renko.
+      g_painter = new CMksChartPainter(vizChartId, g_digits, vizEnabled);
       g_painter.Clear(); // start limpo — remove marcadores de sessão anterior (ADR-028 §6)
-      if(drawBricks)
-      {
-         g_brickPainterSink = new CMksBrickPainterSink(g_painter);
-         g_multiSink.Add(g_brickPainterSink);
-      }
-      g_logger.Info("ColorReversal", "visualização habilitada",
-         StringFormat("\"chartId\":%I64d,\"drawBricks\":%s,\"enabled\":%s",
-                      vizChartId, (drawBricks ? "true" : "false"),
-                      (vizEnabled ? "true" : "false")));
+      g_logger.Info("ColorReversal", "visualização de trades habilitada",
+         StringFormat("\"chartId\":%I64d,\"enabled\":%s",
+                      vizChartId, (vizEnabled ? "true" : "false")));
    }
 
    //--- 12. Strategy ----------------------------------------------+

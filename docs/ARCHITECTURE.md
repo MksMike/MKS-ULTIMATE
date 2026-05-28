@@ -2110,15 +2110,20 @@ Introduz-se uma **camada de visualização por chart objects**, puro output, inj
 - **Não cobre multi-posição visual complexa** — `ColorReversal` é max 1 posição. Estratégias multi-posição futuras podem exigir gestão de objetos mais rica; quando surgir, ADR de extensão.
 - **Não cobre persistência dos objetos entre restarts** — `Clear()` no deinit remove tudo; reabrir o EA redesenha a partir dali, não recupera histórico visual. Histórico fiel está no `.mksbk` + audit.
 
-**Nota de esclarecimento — modos de view e largura-igual no tester (2026-05-27):**
+**Nota de esclarecimento — desenho de renko no tester removido; painter é só marcadores (2026-05-28):**
 
-Validação visual no Strategy Tester revelou um limite estrutural. O `CMksChartPainter` ganhou `ENUM_MKS_RENKO_VIEW`:
-- **OVERLAY** (default): caixas renko proporcionais ao tempo sobre os candles M1.
-- **CLEAN**: candles escondidos (cores = fundo + `ChartRedraw`), só as caixas renko.
+A tentativa de desenhar **bricks renko como chart objects no Strategy Tester** (modos OVERLAY/CLEAN, slots sintéticos, esconder candles) foi **removida como gambiarra**. O percurso e a razão:
 
-A primeira tentativa de CLEAN desenhava bricks de **largura igual em slots sintéticos** (base + N×60s) para reproduzir a forma renko clássica. **Falhou**: o chart do tester é o símbolo real com tempo real; como há menos bricks que minutos no período, os slots sintéticos ficam empacotados no início do período, **fora da janela visível** que o tester mostra (final). Resultado observado: tela com candles escondidos + caixas fora da tela.
+1. O tester do MT5 **proíbe criar Custom Symbol** (erro 4014). Renko, neste projeto, **é** o Custom Symbol (ADR-020). Logo, renko nativo no tester é estruturalmente impossível.
+2. Toda tentativa de fingir renko no chart de tempo real do tester (retângulos proporcionais ao tempo, slots sintéticos de largura-igual, pintar candles com a cor do fundo) é maquiagem sobre o M1 — não renko. A versão de "largura igual" colocava as caixas fora da janela visível; a de "tempo real" são retângulos esticados sobre candles; ambas brigam com a plataforma.
+3. A **ADR-015** já fixou que o Strategy Tester é "ferramenta, não fonte de verdade", e a **ADR-020** fixou o CS como a camada de visualização. Forçar o tester a ser um chart renko contrariava decisões já aceitas.
 
-**Decisão:** renko de **largura-igual verdadeira exige remapear o tempo**, o que só é coerente num símbolo próprio — o **Custom Symbol (live)**, que já faz exatamente isso (1 bar por brick). Num chart de tempo real do tester, as caixas são desenhadas em **tempo real** (proporcionais ao tempo, alinhadas à janela visível); CLEAN apenas esconde os candles. A largura-igual no tester fica como possível trabalho futuro via **indicador canvas dedicado** (a alternativa (f) da ADR-020, Nível 3) que renderize renko ignorando o eixo de tempo do chart — não é alcançável com chart objects ancorados em tempo.
+**Decisão (separação limpa):**
+- O `CMksChartPainter` desenha **apenas marcadores de trade** (setas de entrada/saída ▲▼✗ + linha conectora colorida por P&L), ancorados no tempo real do tick disparador. Funciona em qualquer chart-alvo: no **live** sobre o CS renko; no **tester** sobre os candles M1 (onde os trades de fato aconteceram — honesto, sem fingir renko). Removidos do painter: `DrawBrick`, `ENUM_MKS_RENKO_VIEW`, `HideCandlesOnce`, `CMksBrickPainterSink`, input `InpRenkoView`.
+- **Renko visual é responsabilidade do Custom Symbol**, que funciona nativamente no live (1 bar por brick, sem maquiagem).
+- Para **revisar um backtest como renko**, o caminho limpo é um **visualizador de backtest** (slice A2): lê o `.mksbk` produzido pela corrida (via `CMksBrickFileReader`) + uma lista de eventos de trade, cria um CS de verdade (fora do tester, onde `CustomSymbolCreate` é permitido) e renderiza bricks (`CMksCustomSymbolSink`) + marcadores (`CMksChartPainter`). Uma única via de visualização (o CS), alimentada por live OU por replay de backtest.
+
+**Caminho proibido (registrado para não reabrir):** rodar o backtest **sobre** um CS pré-construído. O tester aceita testar num custom symbol existente, mas isso faria a estratégia ler bricks do CS como série de preço — o **eixo 2 do V5-POSTMORTEM** + violação da ADR-020 §1 (estratégia não lê CS), com ticks sintéticos da série OHLC destruindo a paridade. Fechado.
 
 ---
 

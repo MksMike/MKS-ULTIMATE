@@ -7,11 +7,13 @@ O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/) e es
 ## [Não lançado]
 
 ### Added
-- **Fase 9 — refinamentos de visualização + fill histórico (feedback empírico 2026-05-27).**
-  - `MQL5/Include/MKS-ULTIMATE/Core/Output/CMksChartPainter.mqh` — modo de view `ENUM_MKS_RENKO_VIEW` (OVERLAY/CLEAN). **OVERLAY** (default): retângulos proporcionais ao tempo sobre os candles M1 (o que o tester mostrou). **CLEAN**: esconde os candles (cores = fundo) + desenha bricks de **largura igual** em slots sintéticos (60s cada) — forma renko clássica, igual ao CS. Marcadores re-ancorados no slot do brick que os disparou (`m_lastDisplayTime`, mapeado por `MarkerX`). Resolve o feedback "quero ver só o renko na forma original".
-  - `MQL5/Experts/MKS-ULTIMATE/ColorReversal.mq5` — input `InpRenkoView` (OVERLAY default) passado ao painter. Input `InpHistoricalFillDays = 3`: no live, popula CS + `.mksbk` com 3 dias de bricks históricos ANTES de operar, via `RunHistoricalFill` (CopyTicksRange + warm-up). Resolve "CS nasce sem histórico".
+- **Fase 9 — fill histórico no live (feedback empírico 2026-05-27).**
+  - `MQL5/Experts/MKS-ULTIMATE/ColorReversal.mq5` — input `InpHistoricalFillDays = 3`: no live, popula CS + `.mksbk` com 3 dias de bricks históricos ANTES de operar, via `RunHistoricalFill` (CopyTicksRange + warm-up). Resolve "CS nasce sem histórico".
   - `MQL5/Include/MKS-ULTIMATE/Strategy/CMksColorReversalStrategy.mqh` — `SetWarmup(bool)`: durante o fill histórico a estratégia **rastreia a direção dos bricks mas NÃO opera** (sem Send/Close sobre bricks do passado). O primeiro flip live decide corretamente (direção do último brick histórico registrada). Segurança: sem warm-up, o fill abriria "trades" no passado.
   - `MQL5/Scripts/MKS-ULTIMATE/Tests/Test_CMksColorReversalStrategy.mq5` — teste novo `Test_CR_WarmupTracksDirectionNoTrades` (flips em warm-up → 0 trades; pós-warm-up → 1o flip opera na direção certa).
+
+### Changed
+- **Visualização (ADR-028) — removido o desenho de renko no tester (gambiarra); painter vira só marcadores de trade.** Após validação visual no tester, decidida a separação limpa (ADR-028 nota 2026-05-28). O tester do MT5 proíbe criar Custom Symbol (err 4014), então qualquer renko desenhado lá é maquiagem sobre M1 — fingir bricks como retângulos + esconder candles brigava com a plataforma e contrariava ADR-015 (tester é ferramenta) + ADR-020 (CS é a viz). Removidos de `CMksChartPainter`: `DrawBrick`, `ENUM_MKS_RENKO_VIEW` (OVERLAY/CLEAN), `HideCandlesOnce`, `CMksBrickPainterSink`; do `ColorReversal.mq5`: input `InpRenkoView` + wiring do brick painter sink. O painter agora desenha **apenas marcadores de trade** (setas ▲▼✗ + linha P&L) — no live sobre o CS renko, no tester sobre os candles M1. Renko visual é do CS (live) ou do visualizador de backtest futuro (slice A2: `.mksbk` → CS).
 
 ### Added
 - **Visualização de trades (ADR-028) — camada de chart objects.**
