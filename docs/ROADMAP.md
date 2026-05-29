@@ -99,7 +99,7 @@ Este documento define **o que construir e em que ordem**. Cada fase tem entregá
 
 **Status:** Concluída
 
-**Nota:** Framework formal `Core/Testing/` materializado e validado empiricamente em 2026-05-22 (ADR-005 aceita). Inventário: `Asserts.mqh` (macros `MKS_ASSERT_*` com `__FILE__:__LINE__`), `TestRunner.mqh` (registro automático via `MKS_RUN(#funcname)`, summary com Alert em falha), mocks (`CMksCapturingSink`, `CMksFakeSymbol`, `CMksFakeAccount`). As 4 suítes pré-existentes foram migradas (redução de -55% a -67% em linhas) + smoke test do próprio framework. Total atual: **648/648 assertions** em **41 tests** + smoke. Detalhes em `docs/CHECKPOINT-2026-05-22.md`.
+**Nota:** Framework formal `Core/Testing/` materializado e validado empiricamente em 2026-05-22 (ADR-005 aceita). Inventário: `Asserts.mqh` (macros `MKS_ASSERT_*` com `__FILE__:__LINE__`), `TestRunner.mqh` (registro automático via `MKS_RUN(#funcname)`, summary com Alert em falha), mocks (`CMksCapturingSink`, `CMksFakeSymbol`, `CMksFakeAccount`). As 4 suítes pré-existentes foram migradas (redução de -55% a -67% em linhas) + smoke test do próprio framework. Snapshot de 2026-05-22 (ADR-005): **648/648 assertions** em **41 tests** + smoke. **Nota (sync auditoria 2026-05-29):** esse número é histórico — desde então entraram suítes novas (`Test_CMksColorReversalStrategy`, os 5 testes de indicadores) e cresceram as existentes (RenkoBuilder 14→22 tests, SimulatedBroker 12→17, + TickFile/FileTickSource/MultiFile/StressLab), então o total corrente é bem maior; a contagem exata "passando" exige rodar as suítes no MT5 (a contagem estática de macros já passa de 870). Detalhes em `docs/CHECKPOINT-2026-05-22.md`.
 
 **Entregáveis:**
 - Estrutura de testes em `tests/` (formato a decidir — pode ser scripts `.mq5` que rodam asserções, ou infra externa)
@@ -207,7 +207,7 @@ Este documento define **o que construir e em que ordem**. Cada fase tem entregá
 - **`ATR-adjusted` sizer e `Kelly fracionado` sizer não foram implementados.** O eixo de tamanho dinâmico já está coberto no `CMksAtrBrickSizer` (tamanho do brick, ADR-018), e sizing por Kelly é estatística agressiva sem dados de retorno realizados ainda. Ficam para ADR futura quando estratégia rodando produzir histórico suficiente.
 
 **Limitações conhecidas (auditoria 2026-05-25):**
-- **`CMksTradeManager` + conta netting:** `positionId` em netting não identifica posição individual; partial close pode dessincronizar estado interno. Aceitável enquanto o pipeline operar em hedging; ADR explícita necessária se conta netting virar caso de uso.
+- **`CMksTradeManager` + conta netting:** `positionId` em netting não identifica posição individual; partial close pode dessincronizar estado interno. ~~Aceitável enquanto o pipeline operar em hedging; ADR explícita necessária se conta netting virar caso de uso.~~ **Resolvido por ADR-029 (2026-05-29):** **hedging-only é invariante de v1** — o `CMksMt5Broker.Init()` recusa estruturalmente conta netting/exchange (`MKS_ERR_BROKER_NETTING_UNSUPPORTED = 204`) e o EA faz fail-fast com popup (`Alert`). Suporte a netting fica para fork futuro. Não há mais quebra silenciosa possível — a porta está trancada e barulhenta.
 - ~~**Auto-detach em fechamento externo (SL hit, manual close)**~~ — **resolvido em 2026-05-26**: `CMksTradeManager` ganhou injeção opcional de `IPositionBook`. Quando provido, `Update()` consulta `book.IsOpen(positionId)` no início e auto-detacha se a posição sumiu. `IPositionBook` ganhou método `IsOpen(positionId)`; `CMksMt5PositionBook` itera posições MT5 com escopo símbolo+magic; `CMksFakePositionBook` ganhou `MarkClosed(id)` para testes. Step do `Update` ganhou flag `autoDetached`.
 
 **Por que importa:** Gestão errada de trade transforma estratégia boa em perdedora e vice-versa. Precisa ser testável em isolamento — e é, em testes do framework `Core/Testing`.
@@ -293,7 +293,16 @@ Este documento define **o que construir e em que ordem**. Cada fase tem entregá
 
 ## Fase 9 — Primeiro EA de validação end-to-end
 
-**Status:** Não iniciada
+**Status:** Em andamento — MVP entregue e validado em 3 ambientes. Falta o slice 2 (stress runner) para declarar 100% concluída.
+
+**Nota (sync auditoria 2026-05-29):** o label anterior "Não iniciada" estava desatualizado — a Fase 9 foi entregue entre 2026-05-27 e 2026-05-28. Materializado em disco: `Strategy/CMksColorReversalStrategy.mqh` (reversão de cor pura, implementa `IRenkoSink`), `Experts/MKS-ULTIMATE/ColorReversal.mq5` (composition root), `Scripts/.../Tests/Test_CMksColorReversalStrategy.mq5`, e a camada de visualização de trades (ADR-028: `ITradeVisualizer` + `CMksChartPainter`) com a ADR-023 (timeline híbrida) promovida a Aceita. Validação empírica acumulada:
+- **Testes unitários:** 46/46 assertions, 11 tests, 0 falhas.
+- **Strategy Tester:** 1.112.064 ticks → 1.275 bricks → 617 flips, 617/617 Sends, 297 auto-trigger SL, Net −16.26 USD, DD 1.14% (não-lucrativa por design — alvo é exercitar o core).
+- **Demo live (Exness, servidor real):** 11 ordens reais, fills e tickets reais do broker, 0 rejeições.
+
+Detalhes em `docs/CHECKPOINT-2026-05-27-night.md` e `docs/CHECKPOINT-2026-05-27-demo-live.md`.
+
+**Pendente para fechar a Fase 9 — slice 2 (stress runner):** EA/script que replaya `.mkstick` plugando `CMksColorReversalStrategy` sobre `CMksSimulatedBroker` + `CMksStressLabBroker` (níveis None→Nightmare), agregando via `CMksStressLabReport`. É o que exercita a ADR-027 em pipeline real. **A auditoria de 2026-05-29 levantou 3 furos de credibilidade no StressLab que devem ser fechados ANTES deste runner** — saídas (SL/TP) não estressadas, loop de requote inerte contra o broker simulado, e o teste do report nunca executa o broker. Tratar antes de carimbar a estratégia como "robusta".
 
 **Entregáveis:**
 - EA minimalista usando todo o core construído
@@ -302,9 +311,9 @@ Este documento define **o que construir e em que ordem**. Cada fase tem entregá
 - Comparar logs e validar paridade
 
 **Critério de saída:**
-- Paridade backtest/live validada por log-diff
-- EA sobrevive a stress médio sem quebrar core
-- Zero crash, zero vazamento de handles, zero `_LastError` não tratado
+- ✅ Paridade backtest/live validada por log-diff — `.log` + `.mksbk` + audit TSV no mesmo formato nos 3 ambientes
+- ⏳ EA sobrevive a stress médio sem quebrar core — **pendente** do slice 2 (stress runner) + correção dos 3 furos do StressLab
+- ✅ Zero crash, zero vazamento de handles, zero `_LastError` não tratado — confirmado em tester e demo live
 
 **Por que importa:** Primeira hora da verdade. Se paridade falhar aqui, voltamos e consertamos o core antes de ir adiante.
 

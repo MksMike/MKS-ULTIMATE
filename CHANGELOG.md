@@ -7,6 +7,18 @@ O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/) e es
 ## [Não lançado]
 
 ### Added
+- **ADR-029 — framework v1 é hedging-only: detecta e recusa conta netting/exchange (2026-05-29).**
+  - `MQL5/Include/MKS-ULTIMATE/Core/Types/Error.mqh` — código `MKS_ERR_BROKER_NETTING_UNSUPPORTED = 204` (faixa Broker).
+  - `MQL5/Scripts/MKS-ULTIMATE/Tests/Test_CMksMt5Broker.mq5` — **novo**: valida `Init` aceitando hedging e recusando netting/exchange com 204, e precedência do guard de nulos (mocks, sem API real do MT5). Os 3 arquivos `.mq5` afetados compilam **0 erros / 0 warnings** via MetaEditor64 headless (ColorReversal, Test_CMksMt5Broker, Test_MksMt5BrokerLive). **Teste RODADO no MT5 (2026-05-29): `11/11 assertions, 4 tests, 0 failed` ✅** — hedging aceito, netting/exchange recusados com 204, precedência do guard de nulos confirmada. **⚠️ Resta (oportunístico, não-bloqueante):** exercitar o guard contra uma **conta netting real** — o unit test usa mocks; o popup `Alert` no live só dispara numa conta netting de fato.
+  - `docs/ARCHITECTURE.md` — **ADR-029** (6 cláusulas, 5 alternativas, fronteiras; relações com ADR-013/017); §2 (árvore) sincronizada com o disco (`Strategy/`, `ITradeVisualizer`, `CMksChartPainter`, `CMksAuditLogSink`, `ColorReversal`).
+  - `docs/Projeto.md` §9 — "hedging-only (v1)" registrado como decisão-chave.
+
+### Changed
+- `MQL5/Include/MKS-ULTIMATE/Core/Broker/CMksMt5Broker.mqh` — `Init()` recusa qualquer `MarginMode != ACCOUNT_MARGIN_MODE_RETAIL_HEDGING` (whitelist hedging — netting e exchange caem) com `MKS_ERR_BROKER_NETTING_UNSUPPORTED`, antes de qualquer ordem. Camada única de detecção; todo EA de trade herda. O ramo netting de `Close`/`Modify` (ADR-017 §5) vira código dormente (mantido para fork futuro). ADR-029.
+- `MQL5/Experts/MKS-ULTIMATE/ColorReversal.mq5` — `OnInit` faz fail-fast (antes de criar Custom Symbol/arquivos) com `Alert()` (popup) + log ERROR + `INIT_PARAMETERS_INCORRECT` se a conta não for hedging. Mesmo molde do guard de Custom Symbol existente. Vale em tester e live. ADR-029.
+- `docs/ROADMAP.md` — **Fase 9 status corrigido** de "Não iniciada" para "Em andamento" (MVP validado em 3 ambientes: testes 46/46, tester 617 trades, demo live 11 ordens reais; falta slice 2 stress runner); limitação netting da Fase 5 marcada **resolvida por ADR-029**; nota "648/41 assertions" reenquadrada como snapshot histórico de 2026-05-22 (total corrente maior). Sync da auditoria 2026-05-29.
+
+### Added
 - **Fase 9 — fill histórico no live (feedback empírico 2026-05-27).**
   - `MQL5/Experts/MKS-ULTIMATE/ColorReversal.mq5` — input `InpHistoricalFillDays = 3`: no live, popula CS + `.mksbk` com 3 dias de bricks históricos ANTES de operar, via `RunHistoricalFill` (CopyTicksRange + warm-up). Resolve "CS nasce sem histórico".
   - `MQL5/Include/MKS-ULTIMATE/Strategy/CMksColorReversalStrategy.mqh` — `SetWarmup(bool)`: durante o fill histórico a estratégia **rastreia a direção dos bricks mas NÃO opera** (sem Send/Close sobre bricks do passado). O primeiro flip live decide corretamente (direção do último brick histórico registrada). Segurança: sem warm-up, o fill abriria "trades" no passado.
