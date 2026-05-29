@@ -6,6 +6,9 @@ O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/) e es
 
 ## [Não lançado]
 
+### Changed
+- **Marcadores de trade (ADR-028) com estilo configurável (2026-05-30).** `CMksChartPainter`: setas reduzidas (width 2→1) com borda branca (halo — glyph maior atrás do colorido), linha conectora tracejada (`STYLE_DASH`) e movida para a frente dos bricks (`OBJPROP_BACK` true→false). Cores agora vêm de `MksChartPainterStyle` (POD) injetado via `SetStyle`; `ColorReversal.mq5` expõe os inputs `InpVizArrowBuy/Sell/Border` e `InpVizLineProfit/Loss`. Larguras e estilo da linha ficam como default do struct. Output puro — não toca decisão/execução (paridade preservada); compila 0/0 no MT5. Marcadores são chart-agnósticos: o estilo carrega para o chart do símbolo real quando a viz migrar para fora do CS (ADR-031). **⚠️ Halo/dash/z-order pendentes de confirmação visual no chart.**
+
 ### Fixed
 - **Cap no runaway do bump da timeline híbrida do CS (ADR-023-A, 2026-05-29).** `brickTime` no `CMksCustomSymbolSink` agora tem teto (`realTime + maxFutureDriftSecs`, default **6h**), via a função pura `ComputeBrickTime` (testável sem Custom Symbol). Isso elimina o runaway **auto-infligido** em que o bump (`nextBarTime += 60`) empurrava a barra do CS +60s/brick num mercado >1/min sustentado.
   - `MQL5/Include/MKS-ULTIMATE/Core/Output/CMksCustomSymbolSink.mqh` — cap + `ComputeBrickTime`. Em mercado calmo nada muda; ao bater o teto numa rajada, bricks do mesmo minuto se sobrescrevem (CS amostra ≤1/min) e autocura quando o mercado desacelera.

@@ -105,6 +105,11 @@ input bool   InpShowWicksInCS         = false;
 
 input group "=== Visualização (ADR-028) ==="
 input bool   InpShowTradeMarkers      = true;  // setas de entrada/saída + linha P&L no chart (live: sobre CS; tester: sobre M1)
+input color  InpVizArrowBuy           = clrDodgerBlue;  // seta de entrada BUY
+input color  InpVizArrowSell          = clrOrangeRed;   // seta de entrada SELL
+input color  InpVizArrowBorder        = clrWhite;       // borda (halo) das setas
+input color  InpVizLineProfit         = clrLimeGreen;   // linha conectora — trade com lucro
+input color  InpVizLineLoss           = clrCrimson;     // linha conectora — trade com prejuízo
 
 input group "=== Histórico ==="
 input int    InpHistoricalFillDays    = 3;     // dias de bricks históricos no CS/.mksbk no live (0 = só live). Estratégia NÃO opera no histórico.
@@ -634,6 +639,15 @@ int OnInit()
       // (live) ou do visualizador de backtest (.mksbk → CS). No tester os
       // marcadores aparecem sobre os candles M1 — honesto, sem fingir renko.
       g_painter = new CMksChartPainter(vizChartId, g_digits, vizEnabled, g_logger);
+
+      MksChartPainterStyle vizStyle;  // widths/dash ficam no default do struct
+      vizStyle.arrowBuy    = InpVizArrowBuy;
+      vizStyle.arrowSell   = InpVizArrowSell;
+      vizStyle.arrowBorder = InpVizArrowBorder;
+      vizStyle.lineProfit  = InpVizLineProfit;
+      vizStyle.lineLoss    = InpVizLineLoss;
+      g_painter.SetStyle(vizStyle);
+
       g_painter.Clear(); // start limpo — remove marcadores de sessão anterior (ADR-028 §6)
       g_logger.Info("ColorReversal", "visualização de trades habilitada",
          StringFormat("\"chartId\":%I64d,\"enabled\":%s",
