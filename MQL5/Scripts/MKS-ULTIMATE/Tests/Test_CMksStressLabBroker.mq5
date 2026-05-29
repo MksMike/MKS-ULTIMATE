@@ -22,6 +22,7 @@
 #include <MKS-ULTIMATE/Core/Testing/Mocks/CMksRecordingBroker.mqh>
 #include <MKS-ULTIMATE/Core/Testing/Mocks/CMksFakeSymbol.mqh>
 #include <MKS-ULTIMATE/Core/Types/OrderRequest.mqh>
+#include <MKS-ULTIMATE/Core/Broker/CMksSimulatedBroker.mqh>  // exit-stress tests (ADR-030)
 
 #define SL_TOL 1e-9
 
@@ -267,45 +268,111 @@ void Test_SL_LatencyZeroDriftPreservesLegacy()
 }
 
 //==================================================================
-// Requote
+// Requote — modelado internamente (ADR-030), independente do underlying
 //==================================================================
 
-void Test_SL_RequoteEsgota()
+void Test_SL_RequoteStormRejects()
 {
-   // Underlying sempre retorna REJECTED, requoteProb=1.0, maxRequotes=3
-   // → 1 send inicial + 3 requotes = 4 chamadas no underlying, fim com REJECTED.
+   // requoteProb=1.0, maxRequotes=3 → 3 requotes consecutivos → tempestade
+   // → REJECTED. Modelo novo (ADR-030): requote e interno; o underlying NEM
+   // e chamado no storm (antes dependia dele retornar REJECTED — knob morto
+   // contra o broker simulado, que sempre preenche).
    CMksRecordingBroker under;
-   under.SetNextSendStatus(MKS_EXEC_REJECTED);
+   under.SetNextSendFillPrice(BASE_FILL);
    CMksFakeSymbol sym; sym.SetPoint(POINT_XAU);
 
    CMksStressParams p;
-   p.rejectionProb = 0.0;  // sem rejeicao pre
-   p.requoteProb   = 1.0;  // sempre requota
+   p.rejectionProb = 0.0;
+   p.requoteProb   = 1.0;
    p.maxRequotes   = 3;
    CMksStressLabBroker stress(GetPointer(under), GetPointer(sym), p);
 
    MksExecutionResult r = stress.Send(MakeBuy());
-   MKS_ASSERT_TRUE(r.status == MKS_EXEC_REJECTED, "REJECTED apos esgotar requotes");
-   MKS_ASSERT_EQ_INT(4, under.SendCount(), "underlying chamado 1+3=4 vezes");
+   MKS_ASSERT_TRUE(r.status == MKS_EXEC_REJECTED, "REJECTED por tempestade de requote");
+   MKS_ASSERT_EQ_INT(0, under.SendCount(), "underlying NAO chamado em storm (requote interno)");
    MKS_ASSERT_EQ_LONG(3, stress.Metrics().requoteEvents, "3 requoteEvents");
-   MKS_ASSERT_EQ_LONG(1, stress.Metrics().sendsRejectedRequote, "1 rejeicao por requote esgotado");
+   MKS_ASSERT_EQ_LONG(1, stress.Metrics().sendsRejectedRequote, "1 rejeicao por requote");
 }
 
-void Test_SL_RequoteSucessoNaPrimeira()
+void Test_SL_RequoteCleanFillWhenProbZero()
 {
+   // requoteProb=0 → nenhum requote, fill limpo com slip base. Garante que
+   // o knob desligado nao dispara requote e que o underlying e chamado 1x.
    CMksRecordingBroker under;
-   under.SetNextSendFillPrice(BASE_FILL); // FILLED por default
+   under.SetNextSendFillPrice(BASE_FILL);
    CMksFakeSymbol sym; sym.SetPoint(POINT_XAU);
 
    CMksStressParams p;
-   p.requoteProb = 1.0;
-   p.maxRequotes = 5;
+   p.requoteProb  = 0.0;
+   p.maxRequotes  = 5;
+   p.slippageDist = MKS_STRESS_DIST_FIXED;
+   p.slippageMean = 1.0;
    CMksStressLabBroker stress(GetPointer(under), GetPointer(sym), p);
 
    MksExecutionResult r = stress.Send(MakeBuy());
-   MKS_ASSERT_TRUE(r.IsFilled(), "FILLED na primeira tentativa");
+   MKS_ASSERT_TRUE(r.IsFilled(), "FILLED sem requote");
    MKS_ASSERT_EQ_INT(1, under.SendCount(), "underlying chamado 1x");
-   MKS_ASSERT_EQ_LONG(0, stress.Metrics().requoteEvents, "0 requotes");
+   MKS_ASSERT_EQ_LONG(0, stress.Metrics().requoteEvents, "0 requotes com prob=0");
+   MKS_ASSERT_NEAR_DOUBLE(BASE_FILL + 1.0 * POINT_XAU, r.fillPrice, SL_TOL, "fill com slip base");
+}
+
+//==================================================================
+// Saidas estressadas (ADR-030) — exitSim concreto destrava close/auto-close
+//==================================================================
+
+void Test_SL_CloseAppliesAdverseSlip()
+{
+   CMksFakeSymbol sym; sym.SetPoint(POINT_XAU);
+   CMksCostModel  cm; // custos zero → fill do sim = mid exato
+   CMksSimulatedBroker sim(GetPointer(sym), GetPointer(cm));
+
+   MksTick t; t.bid = 2050.00; t.ask = 2050.00; t.timeMsc = 1000; t.seq = 1;
+   sim.OnTick(t);
+   MksExecutionResult open = sim.Send(MakeBuy()); // BUY @ mid=2050
+   MKS_ASSERT_TRUE(open.IsFilled(), "abertura FILLED");
+
+   CMksStressParams p;
+   p.slippageDist = MKS_STRESS_DIST_FIXED;
+   p.slippageMean = 2.0;
+   // exitSim = o MESMO sim broker → destrava slip de saida (ADR-030).
+   CMksStressLabBroker stress(GetPointer(sim), GetPointer(sym), p, GetPointer(sim));
+
+   MksExecutionResult c = stress.Close(open.positionId, 0.1);
+   MKS_ASSERT_TRUE(c.IsFilled(), "close FILLED");
+   // BUY → close = SELL → adverso = recebe MENOS → fill abaixo do mid.
+   double expected = 2050.00 - 2.0 * POINT_XAU;
+   MKS_ASSERT_NEAR_DOUBLE(expected, c.fillPrice, SL_TOL, "close de BUY recebe menos (slip adverso)");
+   MKS_ASSERT_EQ_LONG(1, stress.Metrics().closesStressed, "1 close estressado");
+}
+
+void Test_SL_AutoCloseAppliesAdverseSlip()
+{
+   CMksFakeSymbol sym; sym.SetPoint(POINT_XAU);
+   CMksCostModel  cm; // custos zero
+   CMksSimulatedBroker sim(GetPointer(sym), GetPointer(cm));
+
+   MksTick t1; t1.bid = 2050.00; t1.ask = 2050.00; t1.timeMsc = 1000; t1.seq = 1;
+   sim.OnTick(t1);
+   MksExecutionResult open = sim.Send(MakeBuy()); // BUY @ 2050, SL 100pts = 2049.0
+   MKS_ASSERT_TRUE(open.IsFilled(), "abertura FILLED");
+
+   CMksStressParams p;
+   p.slippageDist = MKS_STRESS_DIST_FIXED;
+   p.slippageMean = 3.0;
+   CMksStressLabBroker stress(GetPointer(sim), GetPointer(sym), p, GetPointer(sim));
+
+   // Preco cai para 2048 → bidProxy=2048 <= SL=2049 → SL hit.
+   MksTick t2; t2.bid = 2048.00; t2.ask = 2048.00; t2.timeMsc = 2000; t2.seq = 2;
+   stress.OnTick(t2); // delega ao sim → SL dispara → StressLab aplica slip
+
+   MksSimAutoCloseEvent evs[];
+   int n = stress.PollAutoCloses(evs);
+   MKS_ASSERT_EQ_INT(1, n, "1 auto-close drenado do StressLab");
+   MKS_ASSERT_TRUE(evs[0].hitSl, "foi SL hit");
+   // sim fecha SL a mid=2048 (cm zero); BUY → close SELL → adverso → -3pts.
+   double expected = 2048.00 - 3.0 * POINT_XAU;
+   MKS_ASSERT_NEAR_DOUBLE(expected, evs[0].closePrice, SL_TOL, "auto-close de SL recebe slip adverso");
+   MKS_ASSERT_EQ_LONG(1, stress.Metrics().autoClosesStressed, "1 auto-close estressado");
 }
 
 //==================================================================
@@ -355,7 +422,7 @@ void Test_SL_CloseAndModifyPassthrough()
 {
    CMksRecordingBroker under;
    CMksFakeSymbol sym; sym.SetPoint(POINT_XAU);
-   CMksStressParams p = MksStressHigh(); // mesmo com stress, Close/Modify nao sao afetados
+   CMksStressParams p = MksStressHigh(); // SEM exitSim → Close/Modify passthrough (ADR-030)
    CMksStressLabBroker stress(GetPointer(under), GetPointer(sym), p);
 
    stress.Close(123, 0.1);
@@ -428,8 +495,11 @@ void OnStart()
    MKS_RUN(Test_SL_LatencyDriftAdverseFixed);
    MKS_RUN(Test_SL_LatencyZeroDriftPreservesLegacy);
 
-   MKS_RUN(Test_SL_RequoteEsgota);
-   MKS_RUN(Test_SL_RequoteSucessoNaPrimeira);
+   MKS_RUN(Test_SL_RequoteStormRejects);
+   MKS_RUN(Test_SL_RequoteCleanFillWhenProbZero);
+
+   MKS_RUN(Test_SL_CloseAppliesAdverseSlip);
+   MKS_RUN(Test_SL_AutoCloseAppliesAdverseSlip);
 
    MKS_RUN(Test_SL_MetricsAggregate);
    MKS_RUN(Test_SL_ResetMetrics);

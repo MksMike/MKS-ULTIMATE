@@ -29,9 +29,17 @@
 // disparador (closeTimeMsc/1000) e o último slot+60s. Em mercado calmo,
 // o tempo real vence → granularidade de segundos aparece naturalmente.
 // Em mercado frenético (vários bricks/min), o bump +60s garante slot
-// único (CustomRatesUpdate sobrescreve bars com mesmo time). Resultado:
-// bricks distribuídos no tempo real, marcadores de trade (ADR-028)
-// ancoram na barra correta.
+// único (CustomRatesUpdate sobrescreve bars com mesmo time), MAS limitado a
+// realTime+maxFutureDriftSecs (ADR-023-A): sem esse teto o bump sustentado
+// dispara a timeline pro futuro sem limite — o que AMPLIFICA, mas não causa
+// sozinho, o bug de plataforma do MT5.
+//
+// ATENÇÃO (correção 2026-05-30): CustomRatesUpdate tem um bug conhecido e
+// não-corrigido que corrompe o container do Custom Symbol na VIRADA DE DIA do
+// server (independe de barra-no-futuro; apaga a série inteira; retorna -1 com
+// GetLastError()=0). O cap reduz o gatilho auto-infligido (futuro), mas NÃO
+// elimina esse bug. A correção estrutural é aposentar o CS do caminho de
+// visualização (renko brick-native em indicador/objetos — ADR em decisão).
 class CMksCustomSymbolSink : public IRenkoSink
 {
 public:
@@ -43,16 +51,44 @@ public:
    int      updateFailures;
    bool     showWicks;     // ADR-022 regra 3: false (default) = caixinhas;
                            // true = wicks de excursão preservados no CS
+   long     maxFutureDriftSecs; // ADR-023-A: teto de adianto da timeline em
+                                // segundos (default 6h). Trava o runaway do
+                                // bump — ver ComputeBrickTime.
 
    CMksCustomSymbolSink()
    {
-      csName         = "";
-      nextBarTime    = 0;
-      lastBarTime    = 0;
-      brickSizePts   = 0.0;
-      barsPushed     = 0;
-      updateFailures = 0;
-      showWicks      = false;
+      csName             = "";
+      nextBarTime        = 0;
+      lastBarTime        = 0;
+      brickSizePts       = 0.0;
+      barsPushed         = 0;
+      updateFailures     = 0;
+      showWicks          = false;
+      maxFutureDriftSecs = 6 * 3600; // 6h: folga ampla sob o teto do MT5
+                                     // (~fim-de-amanhã, ≥24h no pior caso)
+   }
+
+   // ADR-023-A: timeline híbrida COM teto de adianto. Sem teto, num mercado
+   // que fecha bricks mais rápido que 1/min de forma sustentada, o ramo do
+   // bump (brickTime = nextBarTime) empurra a barra +60s por brick enquanto o
+   // relógio real anda segundos — a timeline do CS dispara pro futuro sem
+   // limite até o MT5 recusar CustomRatesUpdate (retorna -1, GetLastError()=0)
+   // e os bricks "somem". O teto trava brickTime em realTime+maxFutureDriftSecs:
+   // ao bater o teto, bricks do mesmo minuto se sobrescrevem (degradação visual
+   // só nas rajadas extremas), reduzindo o gatilho AUTO-INFLIGIDO (não o bug de
+   // virada-de-dia do MT5, ver header) e se autocurando quando o mercado
+   // desacelera (realTime volta a vencer, adianto → ~0).
+   // Em mercado calmo realTime > nextBarTime → brickTime = realTime ≤ teto →
+   // sem efeito (comportamento ADR-023 original preservado). Pura → testável
+   // sem Custom Symbol (Test_CMksCustomSymbolSink_Timeline).
+   static datetime ComputeBrickTime(long closeTimeMsc, datetime nextBarTime,
+                                    long maxFutureDriftSecs)
+   {
+      datetime realTime  = (datetime)(closeTimeMsc / 1000);
+      datetime brickTime = (realTime > nextBarTime) ? realTime : nextBarTime;
+      datetime cap       = (datetime)((long)realTime + maxFutureDriftSecs);
+      if(brickTime > cap) brickTime = cap;
+      return brickTime;
    }
 
    void OnBrickClose(const MksBrick &brick) override
@@ -60,12 +96,13 @@ public:
       if(StringLen(csName) == 0) return;
       MqlRates rates[1];
 
-      // ADR-023 timeline híbrida real+bump. closeTimeMsc é o tempo real
-      // do tick que disparou o brick. Usa real se maior que o último
-      // slot+60s; senão bump. Guarda o slot escolhido em lastBarTime —
-      // o painter (ADR-028) ancora marcadores nesse tempo.
-      datetime realTime  = (datetime)(brick.closeTimeMsc / 1000);
-      datetime brickTime = (realTime > nextBarTime) ? realTime : nextBarTime;
+      // ADR-023 + ADR-023-A: timeline híbrida real+bump COM teto de drift.
+      // closeTimeMsc é o tempo real do tick disparador. Usa real se maior que o
+      // último slot+60s; senão bump — nunca além de realTime+maxFutureDriftSecs
+      // (ComputeBrickTime). Guarda o slot escolhido em lastBarTime — o painter
+      // (ADR-028) ancora marcadores nesse tempo.
+      datetime brickTime = ComputeBrickTime(brick.closeTimeMsc, nextBarTime,
+                                            maxFutureDriftSecs);
       rates[0].time = brickTime;
 
       // ADR-022 regra 8: bricks no CS têm tamanho VISUAL full (=

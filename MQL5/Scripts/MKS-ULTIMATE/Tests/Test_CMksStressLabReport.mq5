@@ -15,6 +15,7 @@
 #include <MKS-ULTIMATE/StressLab/CMksStressLabReport.mqh>
 #include <MKS-ULTIMATE/Core/Trade/CMksTradeJournal.mqh>
 #include <MKS-ULTIMATE/Core/Testing/Asserts.mqh>
+#include <MKS-ULTIMATE/Core/Testing/Mocks/CMksFakeSymbol.mqh>  // teste de integracao (ADR-030)
 
 #define RPT_TOL 1e-9
 #define POINT   0.01
@@ -161,6 +162,64 @@ void Test_RPT_PrintComparisonEmptyArray()
    MKS_ASSERT_TRUE(true, "PrintComparison([]) nao crashou");
 }
 
+//==================================================================
+// Integracao (ADR-030) — report sobre pipeline REAL (sim + stress).
+// As metricas vem da EXECUCAO do broker, nao de MakeMetrics hand-built —
+// fecha o furo #3 da auditoria (o report so provava copia de campos, nao
+// que o broker contabiliza slip/close/auto-close de verdade).
+//==================================================================
+
+void Test_RPT_CaptureFromRealPipeline()
+{
+   CMksFakeSymbol sym; sym.SetPoint(POINT);   // point 0.01
+   CMksCostModel  cm;                          // custos zero → fill do sim = mid
+   CMksSimulatedBroker sim(GetPointer(sym), GetPointer(cm));
+
+   CMksStressParams p;
+   p.slippageDist = MKS_STRESS_DIST_FIXED;
+   p.slippageMean = 2.0;   // 2 pts adversos por fill (entrada E saida)
+   // requote/rejection/latency desligados → pipeline deterministico.
+   CMksStressLabBroker stress(GetPointer(sim), GetPointer(sym), p, GetPointer(sim));
+
+   CMksTradeJournal j(POINT);
+
+   MksOrderRequest buy;
+   buy.side = MKS_ORDER_BUY; buy.lots = 0.1; buy.slPoints = 100.0; buy.tpPoints = 0.0;
+
+   MksTick t1; t1.bid = 2050.00; t1.ask = 2050.00; t1.timeMsc = 1000; t1.seq = 1;
+   stress.OnTick(t1);
+
+   // Trade 1: entra e fecha explicitamente (close estressado).
+   MksExecutionResult o1 = stress.Send(buy);
+   j.RecordOpen(o1.positionId, MKS_ORDER_BUY, o1.filledLots, o1.fillPrice, o1.execTimeMsc);
+   MksExecutionResult c1 = stress.Close(o1.positionId, o1.filledLots);
+   j.RecordClose(o1.positionId, c1.fillPrice, c1.execTimeMsc);
+
+   // Trade 2: entra e sai por SL (auto-close estressado).
+   MksExecutionResult o2 = stress.Send(buy);
+   j.RecordOpen(o2.positionId, MKS_ORDER_BUY, o2.filledLots, o2.fillPrice, o2.execTimeMsc);
+   MksTick t2; t2.bid = 2048.00; t2.ask = 2048.00; t2.timeMsc = 2000; t2.seq = 2;
+   stress.OnTick(t2); // SL de o2 dispara → auto-close estressado
+   MksSimAutoCloseEvent evs[];
+   int n = stress.PollAutoCloses(evs);
+   for(int i = 0; i < n; i++)
+      j.RecordClose(evs[i].positionId, evs[i].closePrice, evs[i].closeTimeMsc);
+
+   // Captura do report a partir das metricas REAIS do broker.
+   CMksStressMetrics m = stress.Metrics();
+   CMksStressLabReport r;
+   r.Capture("Integration", p.rngSeed, m, j);
+
+   MKS_ASSERT_EQ_LONG(2, m.sendsFilled,         "2 entradas preenchidas");
+   MKS_ASSERT_EQ_LONG(1, m.closesStressed,      "1 close explicito estressado");
+   MKS_ASSERT_EQ_LONG(1, m.autoClosesStressed,  "1 auto-close (SL) estressado");
+   MKS_ASSERT_EQ_INT (1, n,                     "1 auto-close drenado do stress broker");
+   // 4 fills × 2 pts = 8 (entrada1 + close1 + entrada2 + autoclose2).
+   MKS_ASSERT_NEAR_DOUBLE(8.0, m.slippageTotalPoints, RPT_TOL, "slip total = 4 fills × 2pts");
+   MKS_ASSERT_NEAR_DOUBLE(8.0, r.slippageTotalPoints, RPT_TOL, "report reflete slip REAL do broker");
+   MKS_ASSERT_EQ_INT(2, r.tradesClosed, "2 trades fechados no journal");
+}
+
 //+------------------------------------------------------------------+
 void OnStart()
 {
@@ -170,6 +229,7 @@ void OnStart()
    MKS_RUN(Test_RPT_ToJsonLineHasFields);
    MKS_RUN(Test_RPT_PrintComparisonSmoke);
    MKS_RUN(Test_RPT_PrintComparisonEmptyArray);
+   MKS_RUN(Test_RPT_CaptureFromRealPipeline);
 
    g_mksTestRunner.Summary();
 }

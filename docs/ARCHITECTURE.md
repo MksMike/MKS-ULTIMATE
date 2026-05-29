@@ -1630,6 +1630,37 @@ Critério para promover de Proposta para Aceita + executar: qualquer um dos even
 
 ---
 
+**Emenda ADR-023-A — Teto de drift (cap) na timeline híbrida** (2026-05-29)
+
+**Contexto:** demo live de `ColorReversal` (XAUUSDm, brick 1.5) rodando desde 07:23 começou a cuspir `CS UPDATE FAIL: lastErr=0` às 22:30 e parou de mostrar bricks. Diagnóstico pelo `MQL5\Logs\20260529.log`: a regra 2 desta ADR (`brickTime = max(realTime, nextBarTime)`, `nextBarTime = brickTime + 60`) **não tem teto**. Num mercado que fecha bricks mais rápido que 1/min de forma sustentada (XAU em sessão ativa: vários flips por segundo), `realTime` nunca supera `nextBarTime` → todo brick cai no ramo do bump → a timeline do CS anda +60s por brick enquanto o relógio real anda segundos. Em ~15h o `t` da barra acumulou **+34,5h de adianto** e cruzou para `2026-05-31 00:00` (última barra aceita: `2026-05-30 23:59`, com o relógio real em `2026-05-29 13:30`). O MT5 **recusa `CustomRatesUpdate` para barras datadas além de ~fim-de-amanhã** — e nesse caso retorna `-1` **sem setar `_LastError`** (daí `lastErr=0`). Os bricks "somem" porque os marcadores ancoram em `iTime(CS,0)` (commit 815a174), que congela na última barra gravada, ~1,5 dia no futuro.
+
+A §Contexto desta ADR já listava "timestamps no futuro" como **dor de UX** (chart adiantado em fill histórico), mas não previu que viraria **falha dura** que mata o CS numa sessão longa. Esta emenda fecha esse furo.
+
+**Decisão:** `brickTime` nunca passa de `realTime + maxFutureDriftSecs` (default **6h**). A regra 2 ganha um clamp, encapsulado na função pura `CMksCustomSymbolSink::ComputeBrickTime` (testável sem Custom Symbol):
+
+```cpp
+datetime realTime  = (datetime)(closeTimeMsc / 1000);
+datetime brickTime = (realTime > nextBarTime) ? realTime : nextBarTime;
+datetime cap       = (datetime)((long)realTime + maxFutureDriftSecs);
+if(brickTime > cap) brickTime = cap;   // ADR-023-A: trava o runaway do bump
+```
+
+Substitui o snippet da regra 2 (linhas do §Decisão acima). Em mercado calmo nada muda (`realTime > nextBarTime` → `brickTime = realTime ≤ cap`, sem clamp) — comportamento ADR-023 original preservado.
+
+**Por que 6h:** o limite real do MT5 não está documentado; foi derivado de **um** cruzamento observado (≈ fim-de-amanhã, ou seja ≥24h de folga no pior caso, quando "agora" está no fim do dia). 6h fica com folga ampla sob qualquer leitura razoável. Configurável via campo `maxFutureDriftSecs` no sink; sem input de EA por ora (evita inflar inputs).
+
+**Consequências:**
+- **Ao bater o teto numa rajada sustentada**, bricks do mesmo minuto se sobrescrevem (`CustomRatesUpdate` mesmo `time`) → CS amostra **≤1 brick/min** enquanto grudado. **Autocura** quando o mercado desacelera (`realTime` volta a vencer; adianto encolhe a ~0). É o preço inevitável de um CS base-M1 (dentro de 1 min físico só cabe 1 barra) — troca "morre de vez" por "amostra 1/min e recupera".
+- **`.mksbk` e estratégia intactos** — não leem o CS (ADR-020 §1); recebem todo brick via `IRenkoSink`. A degradação é exclusivamente visual.
+- **`Producer` herda o fix** — mesmo sink, mesmo caminho de código (sem mudança no Producer).
+- **Teste novo:** `Test_CMksCustomSymbolSink_Timeline` (o "Test_CMksCustomSymbolSink_Timeline" previsto no §Consequências original) — cenários calmo/bump/cap/autocura + regressão do runaway de 2026-05-29 (5000 bricks no mesmo minuto, adianto provado ≤ teto).
+
+**Fronteiras:**
+- Não altera a resolução-base M1 do CS nem o limite "1 barra/minuto" — só impede a morte por barra-no-futuro.
+- O valor exato do teto do MT5 segue não-documentado; se uma sessão futura observar recusa com `t` abaixo de `realTime+6h`, baixar `maxFutureDriftSecs` (ou detectar a recusa em runtime e reduzir dinamicamente — adiado como overkill).
+
+---
+
 ### ADR-024: Captura e replay de ticks crus — formato `.mkstick`, Service de gravação, EA de replay
 
 **Data:** 2026-05-23
@@ -2168,6 +2199,55 @@ A v1 do MKS-ULTIMATE suporta **exclusivamente contas hedging**. Seis cláusulas:
 - Não cobre mudança de margin mode em runtime (evento raro; o modo é relido a cada `Init`, ou seja, a cada anexação do EA).
 - Não altera o `CMksSimulatedBroker`, que já era hedging-only por construção.
 - Não toca os EAs não-transacionais (`Producer`, `Replayer`, `TickRecorder`) — eles não abrem posição, netting é irrelevante para eles.
+
+---
+
+### ADR-030: StressLab credível, parte 2 — adversidade simétrica entrada/saída, requote independente, teste de integração
+
+**Data:** 2026-05-29
+**Status:** Aceita
+**Relação com ADR-027:** Estende. A ADR-027 tornou o StressLab credível em 3 eixos (latência aplicada, spread composto, SL/TP auto-disparados no broker simulado). A auditoria de 2026-05-29 encontrou 3 furos remanescentes; esta ADR os fecha. Pré-requisito do stress runner (Fase 9, slice 2).
+
+**Contexto:**
+Três furos de credibilidade do StressLab, confirmados por verificação adversária na auditoria de 2026-05-29:
+
+1. **Saídas não estressadas.** `CMksStressLabBroker.Close`/`Modify` eram passthrough, e o auto-close de SL/TP (a saída mais comum em live — stop hit) acontece dentro do `CMksSimulatedBroker.OnTick`, abaixo do wrapper, usando só o `CMksCostModel` determinístico. Resultado: entrada estressada, saída não — o eixo 3 do V5-POSTMORTEM (custo não aplicado) reaparecendo no ponto que mais importa. Uma estratégia de SL apertado parecia mais robusta do que é.
+
+2. **Requote inerte.** O loop de requote só reiterava quando o underlying **não** preenchia; mas o `CMksSimulatedBroker` **sempre** preenche no caminho normal. Logo `requoteProb`/`maxRequotes` (até 0.40/3 no Nightmare) eram knobs mortos contra o broker canônico — a métrica mostrava 0 requotes como se tivesse testado.
+
+3. **Teste do report oco.** `Test_CMksStressLabReport` montava as métricas à mão (`MakeMetrics`) e nunca rodava o broker — um bug de contabilidade de slip/requote/auto-close passaria batido.
+
+**Decisão:**
+O `CMksStressLabBroker` passa a **governar a superfície de fill inteira**, com adversidade simétrica e requote modelado internamente. Seis cláusulas:
+
+1. **Adversidade simétrica.** Slip adverso é aplicado na entrada (`Send`), na saída explícita (`Close`) e no auto-close de SL/TP. Direção pelo lado da ordem: BUY paga mais (+), SELL recebe menos (−); fechar uma posição BUY é uma ordem SELL, fechar SELL é BUY.
+
+2. **Coupling opcional via `exitSim`.** O construtor ganha 4º parâmetro `CMksSimulatedBroker *exitSim = NULL`. É necessário porque `OnTick`/`PollAutoCloses`/`TryGetPosition` (de onde vêm os auto-closes e o lado da posição) **não estão na `IBroker`**. Sem `exitSim`, o `Send` é estressado normalmente mas as saídas ficam passthrough — preserva o uso genérico (mocks `IBroker`) e todos os testes de entrada pré-existentes. No pipeline canônico, `underlying` e `exitSim` são o **mesmo** broker simulado. O StressLab broker é ferramenta de backtest e só faz sentido sobre o broker simulado — o coupling é honesto sobre o que a classe é (a generalidade `IBroker` plena ali era teórica e nunca usada).
+
+3. **`OnTick`/`PollAutoCloses` no wrapper.** O `StressLabBroker.OnTick` delega ao `exitSim`, drena os auto-closes que ele gerou, aplica slip adverso a cada um e re-enfileira. O runner/teste drena do **StressLab**, não do sim broker direto — senão os auto-closes saem sem stress.
+
+4. **Requote independente do underlying.** Modelado como sorteio interno do StressLab: cada requote = re-cotação adversa (+1 sorteio de slip no fill); `maxRequotes` consecutivos = tempestade → `REJECTED` (retcode 10004), e o underlying nem é chamado. Assim `requoteProb` vale contra qualquer underlying, inclusive o broker simulado.
+
+5. **Métricas novas.** `CMksStressMetrics` ganha `closesStressed` e `autoClosesStressed`; `slippageTotalPoints` agrega entrada **e** saída.
+
+6. **Teste de integração.** `Test_CMksStressLabReport` ganha um caso que roda um pipeline **real** (sim + stress, ticks, Send/Close/auto-close) e captura as métricas **reais** no report — prova que o broker contabiliza, em vez de só copiar campos hand-built.
+
+**Alternativas consideradas:**
+- **Forçar o coupling no construtor (único ponteiro `CMksSimulatedBroker*`):** rejeitada. Quebraria os ~15 testes que usam o mock `IBroker` (`CMksRecordingBroker`). O 4º parâmetro opcional atinge o mesmo objetivo com dano colateral mínimo (só os 2 testes de requote mudam, porque o modelo mudou).
+- **Mover a adversidade de saída para dentro do `CMksSimulatedBroker`:** rejeitada. Quebra o layering — o broker simulado é a camada "limpa" (CostModel determinístico); a adversidade estocástica pertence à camada StressLab que o envelopa.
+- **Requote dependente do underlying + zerar `requoteProb` nos presets:** rejeitada. Knob morto silencioso é exatamente o teatro que a ADR-027 combateu.
+- **Estressar a saída dando ao sim um `CostModel` mais adverso sob stress:** rejeitada. Double-count na entrada (CostModel adverso + slip do StressLab). A adversidade deve viver numa camada só.
+
+**Consequências:**
+- `CMksStressLabBroker` reescrito: `exitSim` opcional; `Send` com requote interno + slip; `Close` com slip (quando `exitSim` presente); `OnTick`/`PollAutoCloses`; helpers `SampleSlipPoints`/`ApplyAdverse`. `CMksStressMetrics` ganha `closesStressed`/`autoClosesStressed`.
+- **`CMksSimulatedBroker` intocado** — segue limpo; toda adversidade do StressLab vive no wrapper.
+- Testes: `Test_CMksStressLabBroker` — 2 testes de requote reescritos para o modelo novo (`Test_SL_RequoteStormRejects`, `Test_SL_RequoteCleanFillWhenProbZero`) + 2 novos (`Test_SL_CloseAppliesAdverseSlip`, `Test_SL_AutoCloseAppliesAdverseSlip`). `Test_CMksStressLabReport` — `Test_RPT_CaptureFromRealPipeline` novo.
+- O stress runner (Fase 9 slice 2), quando construído, drena auto-closes do StressLab e herda a adversidade simétrica de graça.
+
+**Fronteiras:**
+- Não constrói o stress runner (slice 2) — só deixa o StressLab pronto para ele.
+- Não modela requote como atraso temporal real (sem fila de eventos) — captura o efeito econômico (slip + reject), não a latência do re-quote.
+- Não toca o `CMksMt5Broker` (live) — o StressLab é backtest-only; em live o custo é real (`HistoryDeal*`).
 
 ---
 
