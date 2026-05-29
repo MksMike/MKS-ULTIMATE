@@ -33,7 +33,7 @@ MKS-ULTIMATE/
 │   ├── Include/MKS-ULTIMATE/
 │   │   ├── Core/
 │   │   │   ├── Version.mqh                # Versão única do framework (SemVer — ADR-001)
-│   │   │   ├── Interfaces/                # IBroker, ITickSource, IClock, ILogger, IRenkoSink, IBrickSizer, ISymbol, IAccount, IPositionBook, IPositionSizer
+│   │   │   ├── Interfaces/                # IBroker, ITickSource, IClock, ILogger, IRenkoSink, IBrickSizer, ISymbol, IAccount, IPositionBook, IPositionSizer, ITradeVisualizer (ADR-028)
 │   │   │   ├── Types/                     # Tick, Brick, FormingBrick, OrderRequest, ExecutionResult, Error, RenkoGeometry
 │   │   │   ├── RenkoBuilder/              # CMksRenkoBuilder + CMksFixedBrickSizer + CMksAtrBrickSizer
 │   │   │   ├── Data/                      # BrickFileFormat, TickFileFormat, CMksBrick/TickFile Writer/Reader, CMksFileTickSource, CMksMultiFileTickSource, CMksBrickWriterSink
@@ -44,11 +44,12 @@ MKS-ULTIMATE/
 │   │   │   ├── Broker/                    # CMksMt5Broker (real), CMksSimulatedBroker (backtest), CMksCostModel
 │   │   │   ├── Trade/                     # CMksFixedLotSizer + CMksPercentRiskSizer (slice 5a), CMksTradeManager (slice 5b — BE+Trail+Partial), CMksTradeJournal
 │   │   │   ├── Risk/                      # CMksRiskManager (slices 6.1+6.2+6.3) + CMksRiskGatedBroker (decorator de IBroker)
-│   │   │   ├── Output/                    # CMksMultiSink (compositor), CMksCustomSymbolSink (CS visual), CMksProgressPanel (UX)
+│   │   │   ├── Output/                    # CMksMultiSink (compositor), CMksCustomSymbolSink (CS visual), CMksProgressPanel (UX), CMksAuditLogSink (TSV de paridade), CMksChartPainter (marcadores de trade — ADR-028)
 │   │   │   ├── Log/                       # CMksLogger (JSON-line — ADR-007)
 │   │   │   └── Testing/                   # Framework próprio (Asserts.mqh + TestRunner.mqh — ADR-005) + Mocks/ (Fake* + Capturing* + Recording*)
-│   │   └── StressLab/                     # CMksRandom (LCG seedável), CMksStressParams (5 presets), CMksStressLabBroker (wrapper IBroker), CMksStressLabReport
-│   ├── Experts/MKS-ULTIMATE/              # EAs do framework — Producer, Replayer, Test_MksMt5BrokerLive
+│   │   ├── StressLab/                     # CMksRandom (LCG seedável), CMksStressParams (5 presets), CMksStressLabBroker (wrapper IBroker), CMksStressLabReport
+│   │   └── Strategy/                      # CMksColorReversalStrategy (Fase 9 — reversão de cor pura; implementa IRenkoSink, visualização via ADR-028)
+│   ├── Experts/MKS-ULTIMATE/              # EAs do framework — Producer, Replayer, ColorReversal (Fase 9), Test_MksMt5BrokerLive
 │   ├── Indicators/MKS-ULTIMATE/           # CMksDonchian, CMksChandelier, CMksSuperTrend, CMksRSI, CMksMACD (brick-driven — ver docs/INDICATORS.md)
 │   ├── Scripts/MKS-ULTIMATE/              # Validate* (scripts manuais) + Tests/Test_* (suítes do framework Testing)
 │   └── Services/MKS-ULTIMATE/             # TickRecorder (Service que captura .mkstick em background — ADR-024)
@@ -2124,6 +2125,49 @@ A tentativa de desenhar **bricks renko como chart objects no Strategy Tester** (
 - Para **revisar um backtest como renko**, o caminho limpo é um **visualizador de backtest** (slice A2): lê o `.mksbk` produzido pela corrida (via `CMksBrickFileReader`) + uma lista de eventos de trade, cria um CS de verdade (fora do tester, onde `CustomSymbolCreate` é permitido) e renderiza bricks (`CMksCustomSymbolSink`) + marcadores (`CMksChartPainter`). Uma única via de visualização (o CS), alimentada por live OU por replay de backtest.
 
 **Caminho proibido (registrado para não reabrir):** rodar o backtest **sobre** um CS pré-construído. O tester aceita testar num custom symbol existente, mas isso faria a estratégia ler bricks do CS como série de preço — o **eixo 2 do V5-POSTMORTEM** + violação da ADR-020 §1 (estratégia não lê CS), com ticks sintéticos da série OHLC destruindo a paridade. Fechado.
+
+---
+
+### ADR-029: Framework v1 é hedging-only — detecta e recusa conta netting/exchange
+
+**Data:** 2026-05-29
+**Status:** Aceita
+**Relação com ADR-013:** Concretiza, no escopo mínimo, a "detecção de broker" que a §5 deixou como dívida — detectar o margin mode e **recusar** netting, não um perfil estruturado de broker. O gatilho de reabertura da ADR-013 (operar contra segundo broker / caso de uso concreto) continua valendo para o perfil completo.
+**Relação com ADR-017:** Restringe a §5 (margin mode dual netting/hedging no `Close`/`Modify`). Como o broker passa a recusar netting no `Init`, o ramo netting do `Close`/`Modify` (`req.position` omitido) vira **código dormente** — mantido para o fork futuro, nunca exercitado em v1.
+
+**Contexto:**
+O framework foi pensado de ponta a ponta para o modelo **hedging** (cada ordem é uma posição própria, com ticket único). Várias peças embutem essa premissa: `CMksSimulatedBroker` cria uma posição nova por `Send`; `CMksMt5PositionBook.IsOpen` casa `ticket == positionId`; `CMksTradeManager` e a estratégia raciocinam sobre "minha posição X com N lotes". Em conta **netting** (uma posição líquida por símbolo) ou **exchange** (netting de bolsa), essa premissa quebra: `positionId` não mapeia 1:1 para uma posição, partial close e auto-detach dessincronizam — e fazem isso **em silêncio**, que é exatamente o eixo 2 do `V5-POSTMORTEM` (divergência não-anunciada). A auditoria de 2026-05-29 confirmou que **nada no código guardava contra netting** (nenhum `Validate` checa margin mode) e que um checkpoint afirmava falsamente existir essa proteção. Suportar os dois modos end-to-end com paridade bit-a-bit em cada um **dobra** a superfície de código e de testes (o broker simulado precisaria de um modo netting equivalente) — fazer isso agora, sem nenhuma conta netting em uso, é arquitetura no vazio (§4).
+
+**Decisão:**
+A v1 do MKS-ULTIMATE suporta **exclusivamente contas hedging**. Seis cláusulas:
+
+1. **Camada única de detecção: `CMksMt5Broker.Init()`.** É a única peça que lê `ACCOUNT_MARGIN_MODE` e que controla todo trade real. Se o modo **não** for `ACCOUNT_MARGIN_MODE_RETAIL_HEDGING`, `Init()` falha e devolve `MKS_ERR_BROKER_NETTING_UNSUPPORTED = 204` (faixa Broker), sem inicializar. Whitelist de hedging: qualquer outro modo (netting, exchange, futuros) é recusado.
+2. **Recusa estrutural herdada por todo EA de trade.** Como a recusa vive no broker, qualquer EA que opere via `CMksMt5Broker` herda a trava sem precisar reimplementá-la.
+3. **A borda (EA) faz fail-fast e mostra o popup.** O EA, no `OnInit`, lê o margin mode cedo (antes de criar Custom Symbol/arquivos) e, se não-hedging, dispara `Alert()` (popup do MT5) + `Print` + log `ERROR` + retorna `INIT_PARAMETERS_INCORRECT`. Mensagem orienta o operador a usar conta/corretora hedging. Detecção é do broker (representação); apresentação é da borda.
+4. **`Alert()`, não `MessageBox()`.** `MessageBox` é modal/bloqueante e quebra execução automatizada e o Strategy Tester; `Alert` é o primitivo correto para um aviso não-bloqueante na recusa.
+5. **Vale em tester e live.** Um backtest em conta netting produziria resultado enganoso (o `Close` netaria em vez de fechar por ticket) — recusar é mais honesto que gerar um número que mente.
+6. **Suporte a netting é fork futuro, fora do roadmap de v1.** Quando netting virar caso de uso real (conta netting em operação), um fork implementa o modo netting no broker simulado + book + trade manager, com a prova de paridade rodando nos dois modos. Até lá, hedging-only é invariante de v1.
+
+**Alternativas consideradas:**
+- **Suportar os dois modos end-to-end agora:** rejeitada. Dobra a superfície de código/teste e exige paridade bit-a-bit em cada modo, para um caso de uso inexistente — arquitetura no vazio (§4).
+- **Só documentar "hedging-only", sem guard em código:** rejeitada. Porta destrancada = quebra silenciosa em netting, a própria doença do V5. Garantia que depende de o operador lembrar não é garantia.
+- **Popup via `MessageBox()`:** rejeitada (cláusula 4 — modal/bloqueante, quebra tester/automação).
+- **Guard só na EA (sem o broker):** rejeitada. Não-estrutural — cada EA futuro teria que lembrar de checar. O broker é o ponto único e herdável.
+- **Recusar só `RETAIL_NETTING`, deixar `EXCHANGE` passar:** rejeitada. Exchange tem a mesma semântica de posição-líquida; whitelist de hedging é mais seguro que blacklist de modos conhecidos.
+
+**Consequências:**
+- Novo código `MKS_ERR_BROKER_NETTING_UNSUPPORTED = 204` em `Error.mqh` (faixa Broker 200–299).
+- `CMksMt5Broker.Init()` recusa não-hedging antes de qualquer ordem.
+- `ColorReversal.OnInit` ganha guard de fail-fast + `Alert` + recusa de init.
+- Teste `Test_CMksMt5Broker.mq5` (novo) valida: hedging passa, netting recusa com 204, exchange recusa com 204 — usando `CMksFakeAccount.SetMarginMode`, sem tocar a API real do MT5 (o guard roda antes de qualquer `OrderSend`).
+- O ramo netting de `Close`/`Modify` do `CMksMt5Broker` (ADR-017 §5) fica dormente; é mantido (não removido) porque o fork futuro o reusa.
+- **"Hedging-only" passa a ser invariante de v1** — registrado aqui e no `ROADMAP.md`.
+
+**Fronteiras:**
+- Não remove o código netting dormente do broker — o fork futuro parte dele.
+- Não cobre mudança de margin mode em runtime (evento raro; o modo é relido a cada `Init`, ou seja, a cada anexação do EA).
+- Não altera o `CMksSimulatedBroker`, que já era hedging-only por construção.
+- Não toca os EAs não-transacionais (`Producer`, `Replayer`, `TickRecorder`) — eles não abrem posição, netting é irrelevante para eles.
 
 ---
 

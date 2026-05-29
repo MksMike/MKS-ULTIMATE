@@ -134,6 +134,7 @@ Esta seção captura decisões fundamentais já discutidas e aprovadas. Novas de
 - **Plataforma-alvo é exclusivamente MT5.** Não há multi-plataforma no escopo V6.
 - **Linguagem é MQL5.** Core e EAs são escritos em MQL5.
 - **Renko é construído em casa** — nenhum indicador de caixa-preta entra no caminho crítico.
+- **Hedging-only (v1).** O framework opera exclusivamente em contas *hedging*. Conta *netting*/*exchange* é detectada na borda e **recusada** com popup explicativo (ADR-029) — porque o rastreamento por `positionId`, partial close e auto-detach assumem o modelo hedging, e netting quebraria isso em silêncio (eixo 2 do V5). Suporte a netting fica para fork futuro.
 - **Nomenclatura:** classes prefixadas com `CMks` (ex: `CMksRenkoBuilder`). Pasta de includes: `MQL5/Include/MKS-ULTIMATE/`. Versão única em `Core/Version.mqh`.
 - **SemVer** para versionamento do framework. Primeira release-alvo: `6.0.0`.
 - **Conventional Commits** para mensagens de commit (`feat:`, `fix:`, `chore:`, `docs:`, `refactor:`, `test:`).
