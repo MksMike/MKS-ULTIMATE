@@ -228,9 +228,21 @@ public:
                        "ISymbol ou IAccount nulo", "");
          return false;
       }
+      m_marginMode = m_account.MarginMode();
+      // ADR-029: v1 é hedging-only. Netting/exchange usam posição líquida
+      // por símbolo — positionId não mapeia 1:1 para posição, e Close /
+      // partial / auto-detach dessincronizariam em silêncio (eixo 2 do V5).
+      // Recusa estrutural aqui (camada única que lê o margin mode); o popup
+      // é decisão da borda (EA). Suporte a netting fica para fork futuro.
+      if(m_marginMode != ACCOUNT_MARGIN_MODE_RETAIL_HEDGING)
+      {
+         MKS_SET_ERROR(err, MKS_ERR_BROKER_NETTING_UNSUPPORTED,
+                       "conta não-hedging — framework v1 suporta apenas hedging",
+                       StringFormat("marginMode=%d", (int)m_marginMode));
+         return false;
+      }
       m_effectiveFilling     = PickInitialFilling();
       m_fillingFallbackDone  = false;
-      m_marginMode           = m_account.MarginMode();
       m_initialized          = true;
       return true;
    }

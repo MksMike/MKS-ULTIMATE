@@ -31,6 +31,7 @@ enum ENUM_MKS_ERROR_CODE
    MKS_ERR_BROKER_INVALID_FILL = 201,      // todos os filling modes falharam (caso patológico)
    MKS_ERR_BROKER_RETRY_EXHAUSTED = 202,   // tentativas esgotadas em retcode retryable
    MKS_ERR_BROKER_NOT_INITIALIZED = 203,   // Send/Close chamado antes de Init
+   MKS_ERR_BROKER_NETTING_UNSUPPORTED = 204, // conta netting/exchange — v1 é hedging-only (ADR-029)
 
    //--- Trade: faixa 300–399 — ver ADR-009, ADR-019 ---
    MKS_ERR_TRADE_SIZER_INVALID_PARAM = 300, // configuração do sizer inválida (riskPct<=0, fixedLots<=0)

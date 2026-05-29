@@ -366,6 +366,31 @@ int OnInit()
       return INIT_PARAMETERS_INCORRECT;
    }
 
+   // GUARD: framework v1 é hedging-only (ADR-029). Conta netting/exchange
+   // tem posição líquida por símbolo — rastreamento por positionId, partial
+   // close e auto-detach dessincronizariam em silêncio (eixo 2 do V5).
+   // Fail-fast aqui (antes de criar Custom Symbol/arquivos), com popup
+   // explicando. O CMksMt5Broker.Init também recusa estruturalmente (backstop
+   // que todo EA de trade herda). Vale em tester e live.
+   {
+      ENUM_ACCOUNT_MARGIN_MODE mm =
+         (ENUM_ACCOUNT_MARGIN_MODE)AccountInfoInteger(ACCOUNT_MARGIN_MODE);
+      if(mm != ACCOUNT_MARGIN_MODE_RETAIL_HEDGING)
+      {
+         g_logger.Error("ColorReversal",
+            "conta não-hedging — framework suporta apenas contas HEDGING",
+            StringFormat("\"marginMode\":%d,\"hint\":\"use conta/corretora HEDGING\"",
+                         (int)mm));
+         Alert("MKS-ULTIMATE: conta NETTING/EXCHANGE detectada. ",
+               "O framework v6 suporta apenas contas HEDGING — o EA nao vai operar. ",
+               "Use uma conta/corretora com HEDGING (na Exness, um tipo de conta com hedging).");
+         Print("ColorReversal: ERRO — conta nao-hedging (marginMode=", mm,
+               "). MKS-ULTIMATE suporta apenas HEDGING. Troque para conta/corretora hedging.");
+         Cleanup();
+         return INIT_PARAMETERS_INCORRECT;
+      }
+   }
+
    g_logger.Info("ColorReversal", "starting",
       StringFormat("\"magic\":%I64d,\"S\":%.4f,\"slPts\":%.2f,\"lotMode\":\"%s\","
                    "\"fixedLots\":%.4f,\"riskPct\":%.4f,"
