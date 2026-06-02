@@ -15,6 +15,12 @@
 
 ## 1. ⚠️ ESTADO DE PRODUÇÃO E ALINHAMENTO (leia primeiro)
 
+> **NOTA (2026-06-02) — reversão do diagnóstico do CS (este checkpoint é histórico; o texto abaixo é preservado).** Três coisas registradas aqui foram revertidas/refutadas depois:
+>
+> 1. **Não é "bug de container incondicional do MT5 na virada de dia" (REFUTADO).** O V5 usava o **mesmo** `CustomRatesUpdate` e atravessava meia-noites de server **sem morrer**. As causas reais eram **auto-infligidas**: CS criado **sem sessões 24/7** (causa-raiz — MT5 recusa o update na virada de dia; o V5 setava 24/7), specs reaplicadas a cada `OnInit` apagando o histórico no re-attach, e sink sem recovery. A corrupção citada no fórum é **condicional a múltiplos custom symbols** (sem repro com CS único). "Independente de barra-no-futuro" e "`CustomRatesReplace`/`CustomTicksAdd` compartilham o container bugado" eram conjectura sem fonte.
+> 2. **Decisão REVERTIDA — NÃO aposentar o CS** (linha 25 abaixo / próximos passos §4). ADR-031 passa a significar **"manter+corrigir o CS"** (ainda não é ADR escrita). ADR-020/021/023/023-A **não** são superseded; o cap da ADR-023-A fica como higiene.
+> 3. **GATE:** 4 fixes aplicados (sessões 24/7; specs só na criação; recovery no sink; marcador em `sink.lastBarTime`), compilam 0/0; **0 `CS UPDATE FAIL` em 06-02** nos restarts confirma o fix do re-attach; sobrevivência à meia-noite (06-02→06-03) **pendente de dado**. A moldura "CS quebrado é VISUAL, não trading; `.mksbk`/audit são a verdade" **continua correta**. Detalhe na nota REVERSÃO 2026-06-02 da ADR-023-A (`ARCHITECTURE.md`).
+
 ### Produção: o que está rodando e o que quebrou
 - **`ColorReversal.mq5` está rodando LIVE agora** (demo Exness, XAUUSDm) — o log da sessão `20260529T153935` estava com lock de escrita no momento deste checkpoint.
 - **O Custom Symbol `XAUUSDm.MKSCR_1` está visualmente quebrado** — gaps no eixo de tempo + bricks desalinhados (ver imagem reportada, 29/05 ~21:45–21:57).
