@@ -77,6 +77,10 @@ enum ENUM_MKS_ERROR_CODE
    // Reservado-por-comentário em vez de declarado no enum agora porque
    // ADR-012 §Consequências proíbe fixar número no vazio: o consumidor
    // que exige o código entra junto com o número no slice que o materializa.
+
+   //--- Sensors: faixa 900–999 — ver ADR-025 ---
+   // Sem códigos declarados ainda. ADR-025 §Consequências reivindica a faixa;
+   // primeiro código entra junto com o primeiro consumidor concreto (Caixote).
 };
 
 struct MksError
