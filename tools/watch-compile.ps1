@@ -1,8 +1,10 @@
 # Watcher de compile incremental para MKS-ULTIMATE.
 #
 # Constrói o grafo reverso de #include uma vez no startup. Em cada save
-# de .mqh em Core/ ou .mq5 em Scripts/MKS-ULTIMATE/, identifica os .mq5
-# afetados e os compila via MetaEditor64.exe headless.
+# de .mqh (Include/) ou .mq5 (Scripts/Indicators/Experts/Services de
+# MKS-ULTIMATE), identifica os .mq5 afetados e os compila via
+# MetaEditor64.exe headless. Resolve includes angle (<MKS-ULTIMATE/...>)
+# e quote ("..." relativo ao diretório do arquivo).
 #
 # Uso: powershell -ExecutionPolicy Bypass -File tools\watch-compile.ps1
 #      Ctrl+C para sair.
@@ -18,6 +20,8 @@ $repoRoot       = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $includeRoot    = Join-Path $repoRoot "MQL5\Include\MKS-ULTIMATE"
 $scriptsRoot    = Join-Path $repoRoot "MQL5\Scripts\MKS-ULTIMATE"
 $indicatorsRoot = Join-Path $repoRoot "MQL5\Indicators\MKS-ULTIMATE"
+$expertsRoot    = Join-Path $repoRoot "MQL5\Experts\MKS-ULTIMATE"
+$servicesRoot   = Join-Path $repoRoot "MQL5\Services\MKS-ULTIMATE"
 
 if (-not (Test-Path -LiteralPath $Editor)) {
   Write-Host "MetaEditor não encontrado em: $Editor" -ForegroundColor Red
@@ -28,11 +32,21 @@ function Get-IncludesFromFile([string]$file) {
   if (-not (Test-Path -LiteralPath $file)) { return @() }
   $content = Get-Content -LiteralPath $file -Raw -ErrorAction SilentlyContinue
   if ([string]::IsNullOrEmpty($content)) { return @() }
-  $includeMatches = [regex]::Matches($content, '#include\s*<MKS-ULTIMATE/([^>]+)>')
   $result = @()
-  foreach ($m in $includeMatches) {
+  # Angle-bracket: #include <MKS-ULTIMATE/...> — resolve relativo ao includeRoot.
+  foreach ($m in [regex]::Matches($content, '#include\s*<MKS-ULTIMATE/([^>]+)>')) {
     $rel = $m.Groups[1].Value -replace '/', '\'
     $result += (Join-Path $includeRoot $rel)
+  }
+  # Quote-style: #include "..." — resolve relativo ao diretório do próprio
+  # arquivo (semântica MQL5). Captura casos como Asserts.mqh -> TestRunner.mqh,
+  # cuja edição antes não recompilava nenhum teste consumidor.
+  $fileDir = [System.IO.Path]::GetDirectoryName($file)
+  foreach ($m in [regex]::Matches($content, '#include\s*"([^"]+)"')) {
+    $rel = $m.Groups[1].Value -replace '/', '\'
+    $candidate = Join-Path $fileDir $rel
+    $resolved = Resolve-Path -LiteralPath $candidate -ErrorAction SilentlyContinue
+    if ($resolved) { $result += $resolved.Path } else { $result += $candidate }
   }
   return $result
 }
@@ -53,7 +67,7 @@ function Get-IncludeClosure([string]$entryFile) {
 }
 
 function Get-ReverseMap {
-  $entryRoots = @($scriptsRoot, $indicatorsRoot) | Where-Object { Test-Path -LiteralPath $_ }
+  $entryRoots = @($scriptsRoot, $indicatorsRoot, $expertsRoot, $servicesRoot) | Where-Object { Test-Path -LiteralPath $_ }
   $files = $entryRoots | ForEach-Object {
     Get-ChildItem -Path $_ -Recurse -Filter "*.mq5" -ErrorAction SilentlyContinue
   }
@@ -119,7 +133,7 @@ function Invoke-Compile([string]$mq5File) {
   }
 }
 
-$watchRoots = @($includeRoot, $scriptsRoot, $indicatorsRoot) | Where-Object { Test-Path -LiteralPath $_ }
+$watchRoots = @($includeRoot, $scriptsRoot, $indicatorsRoot, $expertsRoot, $servicesRoot) | Where-Object { Test-Path -LiteralPath $_ }
 
 $lastSeen = @{}
 foreach ($p in $watchRoots) {
