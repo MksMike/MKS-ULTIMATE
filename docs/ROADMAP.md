@@ -280,8 +280,8 @@ Este documento define **o que construir e em que ordem**. Cada fase tem entregá
 - `Core/Log/CMksLogger.mqh` — logger estruturado
 - Formato: chave=valor ou JSON-line, não `Print("texto: " + (string)x)`
 - Níveis: TRACE, DEBUG, INFO, WARN, ERROR
-- Output plugável: arquivo, MT5 journal, stdout (backtest)
-- Contexto automático: timestamp, módulo, símbolo, ticket, ID de sessão
+- Output dual (ADR-007): `Print` no journal/stdout + arquivo de sessão opcional. (O "plugável: arquivo/journal/stdout" originalmente previsto virou **destino dual fixo** — não há mecanismo de sink de log plugável; ver a Nota da Fase 8 e ADR-007.)
+- Contexto automático: timestamp ISO 8601 UTC, módulo, e header de sessão com proveniência (broker/account/symbol/digits/sessionStartMsc). Campos livres (ex.: `ticket`) entram via `ctxJson` por chamada — **não** são injetados automaticamente.
 
 **Critério de saída:**
 - Logs de backtest e live comparáveis linha-a-linha

@@ -1820,6 +1820,25 @@ A ADR-024 não é alterada; esta nota registra o caveat técnico descoberto na a
 
 ---
 
+**Nota de esclarecimento — códigos `MKS_ERR_TICKFILE_*` nunca materializados; usar os `MKS_ERR_DATA_*` reais** (2026-06-02)
+
+A §Consequências desta ADR lista códigos `MKS_ERR_TICKFILE_*` (800–810) como provisórios, e a "Observação" logo abaixo adiava a renumeração para um "slice 24c". Esse slice **nunca materializou esses nomes**: o que entrou no `Error.mqh` (via ADR-012 e os slices 24b/24d) foi a família **`MKS_ERR_DATA_*`**. Os símbolos `MKS_ERR_TICKFILE_*` **não existem no código** — quem ler esta ADR para tratar erros do `.mkstick`/`.mksbk` deve usar os reais. Mapeamento (achado M5 da auditoria 2026-06-02):
+
+| Nome na ADR-024 (inexistente no código) | Código real em `Error.mqh` |
+|---|---|
+| `MKS_ERR_TICKFILE_INVALID_HEADER` = 800 | `MKS_ERR_DATA_INVALID_MAGIC` = 801 (magic) + `MKS_ERR_DATA_HEADER_INVALID` = 803 (header) |
+| `MKS_ERR_TICKFILE_PROVENANCE_MISMATCH` = 801 | **808** reservado-por-comentário (broker/account WARN-flag, não declarado — ver nota ADR-012) |
+| `MKS_ERR_TICKFILE_REOPEN_INCOMPATIBLE` = 802 | `MKS_ERR_DATA_UNSUPPORTED_VERSION` = 802 |
+| `MKS_ERR_TICKFILE_SYMBOL_MISMATCH` = 803 | `MKS_ERR_DATA_SYMBOL_MISMATCH` = **807** |
+| `MKS_ERR_TICKFILE_SEQ_DISCONTINUITY` = 804 | `MKS_ERR_DATA_SEQ_DISCONTINUITY` = **810** |
+| `MKS_ERR_TICKFILE_IO` = 810 | `MKS_ERR_DATA_FILE_IO` = **800** |
+
+Existem ainda `MKS_ERR_DATA_TRUNCATED`=804, `_STATE_INVALID`=805, `_FILE_EXISTS`=806, `_RECORDER_INIT_FAILED`=809 e `_MULTI_PROVENANCE_MISMATCH`=811. A nota da ADR-012 (2026-05-25) já citava os números reais corretos; só o corpo da ADR-024 ficou para trás.
+
+A ADR-024 não é alterada; esta nota registra a reconciliação dos nomes provisórios contra os códigos reais materializados.
+
+---
+
 ### ADR-008: Tratamento de reabertura de mercado (gap de fim-de-semana) no RenkoBuilder
 
 **Data:** 2026-05-23
