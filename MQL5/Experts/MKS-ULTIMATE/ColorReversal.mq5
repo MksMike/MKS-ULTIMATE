@@ -72,7 +72,7 @@ input int    InpThresholdLimit      = 20;    // K (ADR-011)
 
 input group "=== Estratégia ==="
 input long   InpMagicNumber         = 527001; // Identificador único desta estratégia
-input double InpSlPoints            = 30.0;  // SL fixo em pontos do símbolo
+input double InpSlPoints            = 3000.0; // SL fixo em pontos do símbolo. Default empírico (Exness XAU, 06-02: 30 causava INVALID_STOPS 10016, 3000 funcionava). OnInit valida contra o stops level do broker (E1.1).
 input string InpComment             = "ColorReversal"; // Comentário das ordens
 
 input group "=== Sizing ==="
@@ -579,10 +579,31 @@ int OnInit()
    g_snapshot.Init();
 
    //--- 9. Risk Manager (3 camadas) -------------------------------+
+   // E1.1 (auditoria 2026-06-02): valida o SL contra o stops level do
+   // broker e alimenta o mesmo mínimo no RiskManager (rtp.minSlPoints),
+   // de modo que backtest e live rejeitem o MESMO SL muito-próximo — em
+   // vez de o live levar INVALID_STOPS (10016) e o backtest preencher
+   // (divergência eixo 2). Fail-fast com Alert (como a guarda hedging-only)
+   // para o operador corrigir o input antes de operar. stopsLevel=0 (comum
+   // em XAU/Exness) desliga a checagem — broker-agnóstico por construção.
+   int stopsLevelPts = g_iSymbol.StopsLevel();
+   if(InpSlPoints > 0.0 && InpSlPoints < (double)stopsLevelPts)
+   {
+      g_logger.Error("ColorReversal", "InpSlPoints abaixo do stops level do broker",
+         StringFormat("\"slPoints\":%.1f,\"stopsLevel\":%d", InpSlPoints, stopsLevelPts));
+      Alert(StringFormat(
+         "MKS ColorReversal: InpSlPoints=%.0f abaixo do stops level do broker (%d pontos). "
+         "Ajuste InpSlPoints para >= %d e reanexe o EA.",
+         InpSlPoints, stopsLevelPts, stopsLevelPts));
+      Cleanup();
+      return INIT_PARAMETERS_INCORRECT;
+   }
+
    CMksRiskTradeParams rtp;
    rtp.requireSl       = InpRequireSl;
    rtp.requireTp       = InpRequireTp;
    rtp.maxLotsPerTrade = InpMaxLotsPerTrade;
+   rtp.minSlPoints     = (double)stopsLevelPts; // E1.1: gate simétrico bt/live
 
    CMksRiskStrategyParams rsp;
    rsp.maxOpenPositions = InpMaxOpenPositions;

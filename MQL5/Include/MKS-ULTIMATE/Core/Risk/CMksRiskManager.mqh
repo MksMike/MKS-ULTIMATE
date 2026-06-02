@@ -40,17 +40,26 @@
 //            trailing/manage e nem sempre tem valor fixo na entrada.
 // maxLotsPerTrade: 0 = sem limite. Quando >0, qualquer req.lots acima
 //                  é rejeitada antes mesmo de o sizer ser consultado.
+// minSlPoints:     0.0 = sem checagem. Quando >0, rejeita req.slPoints
+//                  abaixo desse mínimo (em pontos do símbolo). O
+//                  composition root o popula com ISymbol.StopsLevel(),
+//                  de modo que backtest e live rejeitem o MESMO SL
+//                  muito-próximo — em vez de o live levar INVALID_STOPS
+//                  (10016) e o backtest preencher a mesma ordem (eixo 2).
+//                  Ver auditoria 2026-06-02 / ROADMAP-CORE-HARDENING E1.1.
 struct CMksRiskTradeParams
 {
    bool   requireSl;
    bool   requireTp;
    double maxLotsPerTrade;
+   double minSlPoints;
 
    CMksRiskTradeParams()
    {
       requireSl       = true;
       requireTp       = false;
       maxLotsPerTrade = 0.0;
+      minSlPoints     = 0.0;
    }
 };
 
@@ -196,6 +205,13 @@ public:
                                     m_params.maxLotsPerTrade));
          return false;
       }
+      if(m_params.minSlPoints < 0.0)
+      {
+         MKS_SET_ERROR(err, MKS_ERR_RISK_INVALID_PARAM,
+                       "minSlPoints < 0",
+                       StringFormat("minSlPoints=%.4f", m_params.minSlPoints));
+         return false;
+      }
       if(m_stratParams.maxOpenPositions < 0)
       {
          MKS_SET_ERROR(err, MKS_ERR_RISK_INVALID_PARAM,
@@ -280,6 +296,23 @@ public:
                        "SL obrigatório não informado",
                        StringFormat("slPoints=%.4f", req.slPoints));
          LogRejection("sl_missing", req, err);
+         return false;
+      }
+
+      // 1.5 SL abaixo do stops level do símbolo (E1.1 — auditoria 2026-06-02).
+      // Gate SIMÉTRICO backtest/live: evita que o live receba INVALID_STOPS
+      // (10016) enquanto o backtest preencheria a mesma ordem (divergência
+      // eixo 2). minSlPoints=0 (default) desliga a checagem. O caso "sem SL"
+      // (slPoints<=0) é tratado em (1); aqui só comparamos SL presente.
+      if(m_params.minSlPoints > 0.0 &&
+         req.slPoints > 0.0 &&
+         req.slPoints < m_params.minSlPoints)
+      {
+         MKS_SET_ERROR(err, MKS_ERR_RISK_REJECTED_SL_BELOW_STOPS,
+                       "SL abaixo do stops level mínimo do símbolo",
+                       StringFormat("slPoints=%.4f minSlPoints=%.4f",
+                                    req.slPoints, m_params.minSlPoints));
+         LogRejection("sl_below_stops_level", req, err);
          return false;
       }
 

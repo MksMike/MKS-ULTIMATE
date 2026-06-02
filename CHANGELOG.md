@@ -6,6 +6,21 @@ O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/) e es
 
 ## [Não lançado]
 
+### Added
+- **Auditoria completa do projeto (2026-06-02).** Auditoria multi-agente das 10 dimensões (paridade, renko, custom-symbol, indicadores, broker/custo, trade/risk, estratégia/EA, testes, doc↔código, UX/processo) com leitura integral do core e verificação adversária de cada achado alto/médio. **58 achados** (4 altos, 9 médios, 45 baixos/cosméticos; 1 refutado). Veredito: core estruturalmente sólido (4 eixos do V5 fechados no código), mas **paridade mais estreita que os docs afirmam** (provada só em `fillDays=0`/stream de bricks; decisão→equity nunca replayada).
+  - `docs/CHECKPOINT-2026-06-02-auditoria.md` — **novo**: relatório completo (método, veredito, achados por severidade, positivos, refutado).
+  - `docs/ROADMAP-CORE-HARDENING.md` — **novo**: plano de fechamento do core em 8 fases (E1–E8), cada item rastreando um achado. **E1–E5 gate de estratégias; E7+E8 gate de indicadores.**
+  - `docs/ROADMAP.md` — **Fase 9.5** (fechamento/endurecimento do core) inserida como gate entre Fase 9 e Fase 10; Fase 10 marcada bloqueada por E1–E5.
+  - `docs/CHECKPOINTS.md` — índice atualizado.
+
+### Fixed
+- **E1.1 — SL validado contra o stops level do broker (achado H3 da auditoria 2026-06-02).** O default `InpSlPoints=30` causava `INVALID_STOPS` (10016) em produção (06-02), e o broker montava o SL sem nunca consultar `SYMBOL_TRADE_STOPS_LEVEL` (apesar de `ISymbol::StopsLevel()` já existir). A guarda foi colocada no **RiskManager** (gate simétrico backtest/live), não no broker — assim o backtest rejeita o MESMO SL muito-próximo que o live rejeitaria, evitando divergência (eixo 2).
+  - `MQL5/Include/MKS-ULTIMATE/Core/Types/Error.mqh` — código `MKS_ERR_RISK_REJECTED_SL_BELOW_STOPS = 410` (faixa Risk).
+  - `MQL5/Include/MKS-ULTIMATE/Core/Risk/CMksRiskManager.mqh` — `CMksRiskTradeParams.minSlPoints` (0 = sem checagem); `CheckOrder` rejeita `slPoints < minSlPoints` (passo 1.5, após SL-missing); `Validate` recusa `minSlPoints < 0`.
+  - `MQL5/Experts/MKS-ULTIMATE/ColorReversal.mq5` — `OnInit` lê `g_iSymbol.StopsLevel()`, popula `rtp.minSlPoints` e faz **fail-fast** com `Alert` (informando o mínimo) se `InpSlPoints` < stops level; default de `InpSlPoints` corrigido `30 → 3000` (empírico Exness XAU). `stopsLevel=0` desliga a checagem (broker-agnóstico).
+  - `MQL5/Scripts/MKS-ULTIMATE/Tests/Test_CMksRiskManager.mq5` — **6 testes novos** (rejeição, fronteira `==`, acima, default-off, precedência do SL-missing, `Validate` negativo).
+  - **Compila 0/0** no MT5 (ColorReversal + Test_CMksRiskManager + Test_CMksRiskGatedBroker via MetaEditor64 headless). **⚠️ Execução dos testes no MT5 (GUI) pendente** — confirmar `N/N (0 failed)` antes de declarar E1.1 fechada (Protocolo 1).
+
 ### Changed
 - **Marcadores de trade (ADR-028) com estilo configurável (2026-05-30).** `CMksChartPainter`: setas reduzidas (width 2→1) com borda branca (halo — glyph maior atrás do colorido), linha conectora tracejada (`STYLE_DASH`) e movida para a frente dos bricks (`OBJPROP_BACK` true→false). Cores agora vêm de `MksChartPainterStyle` (POD) injetado via `SetStyle`; `ColorReversal.mq5` expõe os inputs `InpVizArrowBuy/Sell/Border` e `InpVizLineProfit/Loss`. Larguras e estilo da linha ficam como default do struct. Output puro — não toca decisão/execução (paridade preservada); compila 0/0 no MT5. Marcadores são chart-agnósticos: o estilo carrega para qualquer chart-alvo (NB: ADR-031 revertida em 2026-06-02 — o CS é **mantido+corrigido**, não migrado para fora). **⚠️ Halo/dash/z-order pendentes de confirmação visual no chart.**
 

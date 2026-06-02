@@ -944,6 +944,77 @@ void Test_Risk_CheckOrder_AutoUpdateNoOpWithoutSnapshot()
                    "CheckOrder aceita sem snapshot e sem crash");
 }
 
+//==================================================================
+// CheckOrder — SL abaixo do stops level (E1.1, auditoria 2026-06-02)
+//==================================================================
+
+void Test_Risk_Validate_NegativeMinSlPoints()
+{
+   CMksRiskTradeParams p;
+   p.minSlPoints = -1.0;
+   CMksRiskManager risk(p);
+   MksError err;
+   MKS_ASSERT_FALSE(risk.Validate(err), "validate falha com minSlPoints<0");
+   MKS_ASSERT_EQ_INT((int)MKS_ERR_RISK_INVALID_PARAM, (int)err.code,
+                     "code=INVALID_PARAM");
+}
+
+void Test_Risk_CheckOrder_SlBelowStopsRejected()
+{
+   CMksRiskTradeParams p;
+   p.minSlPoints = 50.0;
+   CMksRiskManager risk(p);
+   MksError err;
+   MKS_ASSERT_FALSE(risk.CheckOrder(MakeReq(0.1, 30.0), err),
+                    "check falha com SL abaixo do stops level");
+   MKS_ASSERT_EQ_INT((int)MKS_ERR_RISK_REJECTED_SL_BELOW_STOPS,
+                     (int)err.code, "code=SL_BELOW_STOPS");
+}
+
+void Test_Risk_CheckOrder_SlAtStopsBoundary()
+{
+   CMksRiskTradeParams p;
+   p.minSlPoints = 50.0;
+   CMksRiskManager risk(p);
+   MksError err;
+   MKS_ASSERT_TRUE(risk.CheckOrder(MakeReq(0.1, 50.0), err),
+                   "check ok com SL == stops level (fronteira)");
+   MKS_ASSERT_FALSE(err.HasError(), "sem erro na fronteira");
+}
+
+void Test_Risk_CheckOrder_SlAboveStops()
+{
+   CMksRiskTradeParams p;
+   p.minSlPoints = 50.0;
+   CMksRiskManager risk(p);
+   MksError err;
+   MKS_ASSERT_TRUE(risk.CheckOrder(MakeReq(0.1, 100.0), err),
+                   "check ok com SL acima do stops level");
+}
+
+void Test_Risk_CheckOrder_MinSlZeroMeansNoCheck()
+{
+   CMksRiskTradeParams p; // minSlPoints=0.0 por default
+   CMksRiskManager risk(p);
+   MksError err;
+   MKS_ASSERT_TRUE(risk.CheckOrder(MakeReq(0.1, 1.0), err),
+                   "minSlPoints=0 desliga a checagem (SL=1 passa)");
+}
+
+void Test_Risk_CheckOrder_SlMissingBeforeStopsCheck()
+{
+   // requireSl=true (default) + minSlPoints>0: SL ausente (slPoints=0) deve
+   // cair no código SL_MISSING (passo 1), não no SL_BELOW_STOPS (passo 1.5).
+   CMksRiskTradeParams p;
+   p.minSlPoints = 50.0;
+   CMksRiskManager risk(p);
+   MksError err;
+   MKS_ASSERT_FALSE(risk.CheckOrder(MakeReq(0.1, 0.0), err),
+                    "check falha sem SL");
+   MKS_ASSERT_EQ_INT((int)MKS_ERR_RISK_REJECTED_SL_MISSING,
+                     (int)err.code, "SL_MISSING tem precedência sobre SL_BELOW_STOPS");
+}
+
 //+------------------------------------------------------------------+
 void OnStart()
 {
@@ -956,6 +1027,14 @@ void OnStart()
    MKS_RUN(Test_Risk_CheckOrder_SlPresent);
    MKS_RUN(Test_Risk_CheckOrder_SlMissing);
    MKS_RUN(Test_Risk_CheckOrder_SlMissingButRequireSlFalse);
+
+   // SL abaixo do stops level (E1.1)
+   MKS_RUN(Test_Risk_Validate_NegativeMinSlPoints);
+   MKS_RUN(Test_Risk_CheckOrder_SlBelowStopsRejected);
+   MKS_RUN(Test_Risk_CheckOrder_SlAtStopsBoundary);
+   MKS_RUN(Test_Risk_CheckOrder_SlAboveStops);
+   MKS_RUN(Test_Risk_CheckOrder_MinSlZeroMeansNoCheck);
+   MKS_RUN(Test_Risk_CheckOrder_SlMissingBeforeStopsCheck);
 
    MKS_RUN(Test_Risk_CheckOrder_TpDefaultNotRequired);
    MKS_RUN(Test_Risk_CheckOrder_TpRequiredAndMissing);
