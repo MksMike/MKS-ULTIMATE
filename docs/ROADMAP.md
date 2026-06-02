@@ -319,11 +319,33 @@ Detalhes em `docs/CHECKPOINT-2026-05-27-night.md` e `docs/CHECKPOINT-2026-05-27-
 
 ---
 
-## Fase 10 — Estratégias reais
+## Fase 9.5 — Fechamento e endurecimento do core (gate para a Fase 10)
 
 **Status:** Não iniciada
 
-Cada estratégia vira um projeto separado (EA próprio, documentação própria), usando o framework. Só começa depois da Fase 9 validada.
+**Origem:** a auditoria completa de 2026-06-02 (`docs/CHECKPOINT-2026-06-02-auditoria.md`) mostrou que "Fase concluída" significava, em vários pontos, "código escrito e validado pontualmente" — não "verificado de ponta a ponta". Em particular, a paridade bit-a-bit só está provada no envelope estreito `fillDays=0` comparando o **stream de bricks**; a camada onde o V5 quebrou a conta — decisão→execução→equity — nunca foi comparada live↔replay. Decisão do dono: **deixar o core 100% robusto antes de qualquer estratégia ou indicador novo.**
+
+**Plano detalhado:** `docs/ROADMAP-CORE-HARDENING.md` — 8 fases de endurecimento (E1–E8), cada item rastreando um achado da auditoria:
+- **E1** higiene/destravamento (SL vs stops level, watcher cego, doc↔código, branches) ·
+  **E2** paridade de decisão (runner slice 2, golden real-tick, `fillDays=0` à prova de operador, clock derivado do feed) ·
+  **E3** robustez do motor (testar soft-recovery 105, corrigir deadlock em rampa) ·
+  **E4** eixo 3 completo (comissão/swap no PnL, assert de equity) ·
+  **E5** gestão integrada (TradeManager fim a fim, partial PARTIAL, breaker corretivo) ·
+  **E6** UX/produto (reduzir inputs, unidades, presets, runbook) ·
+  **E7** CS gate empírico (sobrevivência à meia-noite, ADR-031) ·
+  **E8** fundação de indicadores (magnitude-aware, CS vs `IRenkoIndicator`).
+
+**Critério de saída:** **E1–E5** com todos os critérios cumpridos liberam a Fase 10. **E7+E8** liberam novos indicadores. E6 é pré-requisito de operação real.
+
+**Por que importa:** é a regra de ouro aplicada ao próprio core — e a lição do V5 aplicada ao V6: o perigo não é código quebrado, é código que *parece* validado e não está. Esta fase converte cada garantia hoje afirmada numa garantia demonstrada por teste/dado.
+
+---
+
+## Fase 10 — Estratégias reais
+
+**Status:** Não iniciada — **bloqueada pela Fase 9.5 (E1–E5)**
+
+Cada estratégia vira um projeto separado (EA próprio, documentação própria), usando o framework. Só começa depois da Fase 9 validada **e da Fase 9.5 (E1–E5) fechada**.
 
 Não há lista prévia. Estratégias serão decididas conforme oportunidade e estudo.
 
