@@ -25,6 +25,7 @@
 #include <MKS-ULTIMATE/Core/Interfaces/ITradeVisualizer.mqh>
 #include <MKS-ULTIMATE/Core/Interfaces/ILogger.mqh>
 #include <MKS-ULTIMATE/Core/Types/OrderRequest.mqh>
+#include <MKS-ULTIMATE/Core/Output/CMksCustomSymbolSink.mqh>
 
 // Estilo visual dos marcadores de trade. POD configurável pelo composition
 // root (inputs do EA). Defaults reproduzem o visual legado, exceto pelo que
@@ -69,6 +70,8 @@ private:
    int      m_digits;
    bool     m_enabled;        // false em backtest não-visual
    ILogger *m_logger;         // opcional — diagnóstico de desenho
+   CMksCustomSymbolSink *m_sink; // opcional — fonte do slot REAL da barra do
+                                 // CS (lastBarTime). NULL no tester (sem CS).
 
    MksChartPainterStyle m_style; // cores/estilo (default no struct; EA injeta via SetStyle)
 
@@ -117,18 +120,20 @@ private:
       ArrayResize(m_entSide,  last);
    }
 
-   // Tempo de ancoragem do marcador. No chart-alvo, a barra mais recente
-   // (index 0) é o brick que disparou o trade — o CSSink processa o brick
-   // ANTES da estratégia na mesma OnBrickClose (ordem do multiSink), então
-   // iTime(...,0) devolve exatamente a barra desse brick. Isso resolve o
-   // descasamento: o CS usa timeline híbrida com bump (ADR-023), e o tempo
-   // real do tick (timeMsc) diverge das barras do CS — ancorar no tempo
-   // real jogava o marcador atrás das barras (fora da tela). Fallback ao
-   // tempo real se a série do símbolo ainda não estiver disponível.
+   // Tempo de ancoragem do marcador.
+   // LIVE (CS): usa o slot EXATO que o CSSink atribuiu ao último brick fechado
+   // (m_sink.lastBarTime). No multiSink o CSSink processa o brick ANTES da
+   // estratégia, então quando MarkEntry/MarkExit é chamado, lastBarTime já é a
+   // barra do brick que disparou o trade. Antes usávamos iTime(CS,0), que
+   // devolve a barra PARCIAL (forming, em nextBarTime, um slot à frente) e,
+   // com a deriva da timeline híbrida (ADR-023), jogava o marcador numa
+   // barra-fantasma no futuro (o "congelamento" reportado).
+   // TESTER (m_sink NULL): tempo real do tick — no chart M1 real o tempo do
+   // tick mapeia direto na barra correta.
    datetime AnchorTime(long timeMsc) const
    {
-      datetime barT = iTime(ChartSymbol(m_chartId), PERIOD_M1, 0);
-      if(barT > 0) return barT;
+      if(m_sink != NULL && m_sink.lastBarTime > 0)
+         return m_sink.lastBarTime;
       return (datetime)(timeMsc / 1000);
    }
 
@@ -188,6 +193,7 @@ public:
       m_digits  = digits;
       m_enabled = enabled;
       m_logger  = logger;
+      m_sink    = NULL;
       // m_style usa os defaults do próprio struct; EA sobrescreve via SetStyle.
 
       ArrayResize(m_entId, 0);
@@ -199,6 +205,13 @@ public:
    // Injeta cores/estilo. Chamar logo após construir, antes de qualquer
    // desenho. Sem efeito sobre objetos já criados — só sobre os próximos.
    void SetStyle(const MksChartPainterStyle &s) { m_style = s; }
+
+   // Injeta o CS sink para ancorar marcadores no slot EXATO que o sink
+   // atribuiu ao último brick fechado (lastBarTime), em vez de iTime(CS,0) —
+   // que devolve a barra PARCIAL (forming, em nextBarTime, um slot à frente) e,
+   // quando a timeline do CS deriva, joga o marcador numa barra-fantasma no
+   // futuro. NULL (tester, sem CS) → ancora no tempo real do tick.
+   void SetSink(CMksCustomSymbolSink *sink) { m_sink = sink; }
 
    //--- ITradeVisualizer overrides ---------------------------------+
 

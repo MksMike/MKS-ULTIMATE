@@ -248,10 +248,15 @@ bool EnsureCustomSymbolReady(const string &cs, ISymbol *src, MksError &err)
       return false;
    }
    string srcName = src.Name();
-   bool exists = (SymbolInfoInteger(cs, SYMBOL_CUSTOM) == 1);
+   bool exists  = (SymbolInfoInteger(cs, SYMBOL_CUSTOM) == 1);
+   bool created = false;
    if(!exists)
    {
-      if(!CustomSymbolCreate(cs, "MKS-ULTIMATE", srcName))
+      if(CustomSymbolCreate(cs, "MKS-ULTIMATE", srcName))
+      {
+         created = true;
+      }
+      else
       {
          int lastErr = GetLastError();
          if(lastErr != 5304) // 5304 = símbolo já existe (race)
@@ -262,18 +267,37 @@ bool EnsureCustomSymbolReady(const string &cs, ISymbol *src, MksError &err)
                                        cs, srcName, lastErr));
             return false;
          }
+         // 5304: já existe (race) — trata como existente, não reescreve specs.
       }
    }
 
-   CustomSymbolSetInteger(cs, SYMBOL_DIGITS,        src.Digits());
-   CustomSymbolSetInteger(cs, SYMBOL_CHART_MODE,    (long)SYMBOL_CHART_MODE_BID);
-   CustomSymbolSetDouble (cs, SYMBOL_POINT,                src.Point());
-   CustomSymbolSetDouble (cs, SYMBOL_TRADE_TICK_SIZE,      src.TickSize());
-   CustomSymbolSetDouble (cs, SYMBOL_TRADE_TICK_VALUE,     src.TickValue());
-   CustomSymbolSetDouble (cs, SYMBOL_TRADE_CONTRACT_SIZE,  src.ContractSize());
-   CustomSymbolSetString (cs, SYMBOL_CURRENCY_BASE,   src.BaseCurrency());
-   CustomSymbolSetString (cs, SYMBOL_CURRENCY_PROFIT, src.ProfitCurrency());
-   CustomSymbolSetString (cs, SYMBOL_CURRENCY_MARGIN, src.MarginCurrency());
+   // Specs do símbolo base SÓ na criação genuína. Reaplicá-las a cada OnInit
+   // APAGA o histórico do CS — era uma das causas da "morte" do CS (toda
+   // re-anexação do EA zerava a série). O V5 setava specs uma única vez.
+   if(created)
+   {
+      CustomSymbolSetInteger(cs, SYMBOL_DIGITS,        src.Digits());
+      CustomSymbolSetInteger(cs, SYMBOL_CHART_MODE,    (long)SYMBOL_CHART_MODE_BID);
+      CustomSymbolSetDouble (cs, SYMBOL_POINT,                src.Point());
+      CustomSymbolSetDouble (cs, SYMBOL_TRADE_TICK_SIZE,      src.TickSize());
+      CustomSymbolSetDouble (cs, SYMBOL_TRADE_TICK_VALUE,     src.TickValue());
+      CustomSymbolSetDouble (cs, SYMBOL_TRADE_CONTRACT_SIZE,  src.ContractSize());
+      CustomSymbolSetString (cs, SYMBOL_CURRENCY_BASE,   src.BaseCurrency());
+      CustomSymbolSetString (cs, SYMBOL_CURRENCY_PROFIT, src.ProfitCurrency());
+      CustomSymbolSetString (cs, SYMBOL_CURRENCY_MARGIN, src.MarginCurrency());
+   }
+
+   // Sessões 24/7 nos 7 dias, SEMPRE (idempotente; NÃO apaga histórico).
+   // Sem isto o CS herda do clone as sessões reais do XAUUSDm (pausa diária +
+   // fim de semana) e o MT5 recusa CustomRatesUpdate na virada de dia do
+   // server (-1, GetLastError()=0) — a causa-raiz da morte do CS à meia-noite.
+   // O V5 fazia exatamente isto e sobrevivia. Setar sempre também retrofita
+   // sessão em CS já existentes criados por builds antigos sem ela.
+   for(int d = 0; d < 7; d++)
+   {
+      CustomSymbolSetSessionQuote(cs, (ENUM_DAY_OF_WEEK)d, 0, 0, 86400);
+      CustomSymbolSetSessionTrade(cs, (ENUM_DAY_OF_WEEK)d, 0, 0, 86400);
+   }
 
    if(!SymbolSelect(cs, true))
    {

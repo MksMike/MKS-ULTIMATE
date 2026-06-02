@@ -34,12 +34,19 @@
 // dispara a timeline pro futuro sem limite — o que AMPLIFICA, mas não causa
 // sozinho, o bug de plataforma do MT5.
 //
-// ATENÇÃO (correção 2026-05-30): CustomRatesUpdate tem um bug conhecido e
-// não-corrigido que corrompe o container do Custom Symbol na VIRADA DE DIA do
-// server (independe de barra-no-futuro; apaga a série inteira; retorna -1 com
-// GetLastError()=0). O cap reduz o gatilho auto-infligido (futuro), mas NÃO
-// elimina esse bug. A correção estrutural é aposentar o CS do caminho de
-// visualização (renko brick-native em indicador/objetos — ADR em decisão).
+// NOTA (revisado 2026-05-30): a "morte" do CS na virada de dia era
+// majoritariamente AUTO-INFLIGIDA, não um bug incondicional do MT5 (o V5 usava
+// o mesmo CustomRatesUpdate e sobrevivia à meia-noite). Causas, todas no
+// composition root (EnsureCustomSymbolReady):
+//   1) CS criado SEM sessões 24/7 → o MT5 recusa CustomRatesUpdate na virada
+//      de dia do server (-1, GetLastError()=0). Causa-raiz. O V5 setava
+//      sessões 24/7 nos 7 dias.
+//   2) spec-setters (DIGITS/POINT/TICK/...) reaplicados a cada OnInit apagavam
+//      a série a cada re-anexação do EA. Agora só rodam na criação.
+// O cap abaixo fica como HIGIENE (limita a deriva do bump), não como cura. Há
+// uma fragilidade de plataforma reportada no fórum, mas CONDICIONAL a vários
+// CS cruzando a virada (não reproduzida com um único CS). OnBrickClose tem
+// recovery (re-seleciona + 1 retry) espelhando o HealthCheck do V5.
 class CMksCustomSymbolSink : public IRenkoSink
 {
 public:
@@ -138,8 +145,19 @@ public:
       int n = CustomRatesUpdate(csName, rates);
       if(n < 0)
       {
+         // Recovery (espelha o HealthCheck do V5): a série pode ter sido
+         // recusada/corrompida. Re-seleciona o símbolo e tenta UMA vez. A
+         // causa-raiz (sessões 24/7) é tratada na criação do CS; isto é
+         // defesa-em-profundidade, não substituto.
+         if(SymbolSelect(csName, true))
+            n = CustomRatesUpdate(csName, rates);
+      }
+      if(n < 0)
+      {
          updateFailures++;
-         PrintFormat("CS UPDATE FAIL: lastErr=%d", GetLastError());
+         if(updateFailures == 1 || (updateFailures % 500) == 0)
+            PrintFormat("CS UPDATE FAIL (#%d): lastErr=%d",
+                        updateFailures, GetLastError());
       }
       else
       {
