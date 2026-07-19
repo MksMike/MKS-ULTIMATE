@@ -83,6 +83,32 @@ public:
       return false;
    }
 
+   // Percorre as posições da conta contando só as do escopo até chegar
+   // à index-ésima. MatchesScope já selecionou a posição via
+   // PositionGetTicket, então os PositionGet* subsequentes leem dela.
+   // O(N) por chamada — aceitável (N << 10, chamado só no OnInit).
+   bool PositionAt(const int index, ulong &positionId,
+                   ENUM_MKS_ORDER_SIDE &side, double &lots) const override
+   {
+      if(index < 0) return false;
+      int total = PositionsTotal();
+      int hits  = 0;
+      for(int i = 0; i < total; i++)
+      {
+         if(!MatchesScope(i)) continue;
+         if(hits == index)
+         {
+            positionId = (ulong)PositionGetInteger(POSITION_TICKET);
+            side = (PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY)
+                      ? MKS_ORDER_BUY : MKS_ORDER_SELL;
+            lots = PositionGetDouble(POSITION_VOLUME);
+            return true;
+         }
+         hits++;
+      }
+      return false;
+   }
+
    string Symbol() const { return m_symbol; }
    long   Magic()  const { return m_magic; }
 };

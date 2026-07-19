@@ -11,7 +11,10 @@
 //|                   próprio para coexistir com outras estratégias.
 //|                   Auto-detach: consulta IPositionBook a cada brick
 //|                   antes de decidir; se posição "atual" sumiu do
-//|                   broker, zera estado interno.
+//|                   broker, zera estado interno. Reconciliação de
+//|                   restart: AdoptPosition religa órfã de sessão
+//|                   anterior; FlattenForSafety fecha a posição fora
+//|                   do fluxo de flip (halt de stream, M19).
 //|                   ROADMAP Fase 9. Estratégia deliberadamente simples
 //|                   — alvo é exercitar todas as peças do core, não ser
 //|                   lucrativa.
@@ -276,6 +279,57 @@ public:
    // primeiro flip live decide corretamente.
    void SetWarmup(bool v) { m_warmup = v; }
    bool IsWarmup() const  { return m_warmup; }
+
+   // Adota posição deixada aberta por sessão anterior (mesmo symbol+
+   // magic). Restaura o vínculo interno como se esta instância a
+   // tivesse aberto: flips futuros a fecham, auto-detach a monitora.
+   // Sem adoção, a órfã nunca é gerenciada e, com maxOpenPositions=1,
+   // bloqueia todo Send novo via 405 — EA mudo até o SL bater.
+   // Chamada pelo composition root no OnInit (M10, auditoria
+   // 2026-07-19 — invariante 5 do V5-POSTMORTEM aplicado a posições:
+   // reconstrução de estado é completa ou não acontece).
+   void AdoptPosition(const ulong positionId, const ENUM_MKS_ORDER_SIDE side,
+                      const double lots)
+   {
+      m_currentPositionId = positionId;
+      m_currentSide       = side;
+      m_currentLots       = lots;
+      LogWarn("posição órfã adotada",
+              StringFormat("\"pid\":%I64u,\"side\":\"%s\",\"lots\":%.4f",
+                           positionId,
+                           (side == MKS_ORDER_BUY ? "BUY" : "SELL"), lots));
+   }
+
+   // Fecha imediatamente a posição corrente, fora do fluxo de flip.
+   // Usada pelo composition root quando o stream halta (M19): EA cego
+   // não gerencia posição, e segurá-la só com o SL distante é risco
+   // silencioso. Diferente do CloseCurrentIfAny, MANTÉM o vínculo em
+   // falha — não há entrada nova vindo, e auto-detach/operador ainda
+   // precisam enxergar a posição. Sem marcador de visualização (não há
+   // brick aqui); o log carrega o evento.
+   // true = fechou (ou não havia posição); false = Close falhou.
+   bool FlattenForSafety(const string &reason)
+   {
+      if(m_currentPositionId == 0) return true;
+      m_metrics.closesAttempted++;
+      ulong closingId = m_currentPositionId;
+      MksExecutionResult r = m_broker.Close(m_currentPositionId, m_currentLots);
+      if(r.status == MKS_EXEC_FILLED)
+      {
+         m_metrics.closesFilled++;
+         m_currentPositionId = 0;
+         m_currentLots       = 0.0;
+         LogWarn("posição fechada por segurança (flatten)",
+                 StringFormat("\"pid\":%I64u,\"price\":%.5f,\"reason\":\"%s\"",
+                              closingId, r.fillPrice, reason));
+         return true;
+      }
+      m_metrics.closesRejected++;
+      LogWarn("flatten FALHOU — posição segue aberta",
+              StringFormat("\"pid\":%I64u,\"status\":%d,\"retcode\":%d,\"reason\":\"%s\"",
+                           closingId, (int)r.status, r.brokerRetcode, reason));
+      return false;
+   }
 
    //--- IRenkoSink overrides ---------------------------------------+
 

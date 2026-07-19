@@ -7,7 +7,9 @@
 //|                   ação), brick repetido (sem ação), flip BULL→BEAR
 //|                   (close+open SELL), flip BEAR→BULL (close+open
 //|                   BUY), múltiplos flips em sequência, auto-detach
-//|                   via IPositionBook, métricas agregadas.
+//|                   via IPositionBook, métricas agregadas, adoção de
+//|                   posição órfã no restart (M10) e FlattenForSafety
+//|                   no halt de stream (M19).
 //| @depends_on     : Strategy/CMksColorReversalStrategy.mqh,
 //|                   Core/Trade/CMksFixedLotSizer.mqh,
 //|                   Core/Testing/Asserts.mqh,
@@ -426,6 +428,139 @@ void Test_CR_WarmupTracksDirectionNoTrades()
                      "pós-warm-up: abre BUY (flip p/ BULL)");
 }
 
+//==================================================================
+// Reconciliação de restart (M10, auditoria 2026-07-19) — adoção de
+// posição órfã deixada por sessão anterior
+//==================================================================
+
+void Test_CR_AdoptPositionRestoresLink()
+{
+   CMksRecordingBroker br;
+   CMksFakeSymbol sym;
+   CMksFixedLotSizer sizer(GetPointer(sym), FIXED_LOTS);
+   CMksFakePositionBook book;
+   CMksColorReversalStrategy strat(GetPointer(br), GetPointer(sizer),
+                                    GetPointer(sym), SL_POINTS, MAGIC,
+                                    NULL, GetPointer(book));
+
+   // Fluxo do composition root: órfã no book → PositionAt → adoção.
+   book.AddPosition(777, MKS_ORDER_SELL, 0.25);
+   MKS_ASSERT_EQ_INT(1, book.OpenCount(), "AddPosition conta no OpenCount");
+
+   ulong               pid  = 0;
+   ENUM_MKS_ORDER_SIDE side = MKS_ORDER_BUY;
+   double              lots = 0.0;
+   MKS_ASSERT_TRUE(book.PositionAt(0, pid, side, lots), "book expõe a órfã");
+   MKS_ASSERT_EQ_ULONG(777, pid, "pid da órfã via PositionAt");
+   MKS_ASSERT_FALSE(book.PositionAt(1, pid, side, lots),
+                    "índice além do range retorna false");
+
+   strat.AdoptPosition(pid, side, lots);
+   MKS_ASSERT_TRUE(strat.HasOpenPosition(), "adoção restaura vínculo");
+   MKS_ASSERT_EQ_ULONG(777, strat.CurrentPositionId(), "pid adotado");
+   MKS_ASSERT_EQ_INT((int)MKS_ORDER_SELL, (int)strat.CurrentSide(), "side adotado");
+   MKS_ASSERT_NEAR_DOUBLE(0.25, strat.CurrentLots(), CR_TOL, "lots adotados");
+}
+
+void Test_CR_AdoptedPositionClosedOnFlip()
+{
+   CMksRecordingBroker br;
+   CMksFakeSymbol sym;
+   CMksFixedLotSizer sizer(GetPointer(sym), FIXED_LOTS);
+   CMksColorReversalStrategy strat(GetPointer(br), GetPointer(sizer),
+                                    GetPointer(sym), SL_POINTS, MAGIC);
+
+   // Órfã SELL adotada; o mercado segue BEAR e depois flippa p/ BULL.
+   strat.AdoptPosition(777, MKS_ORDER_SELL, 0.25);
+   strat.OnBrickClose(MakeBrick(MKS_BRICK_BEAR, 2003.0, 2000.0)); // 1o: registra dir
+   strat.OnBrickClose(MakeBrick(MKS_BRICK_BULL, 2000.0, 2003.0)); // flip
+
+   MKS_ASSERT_EQ_INT(1, br.CloseCount(), "flip fecha a órfã adotada");
+   MKS_ASSERT_EQ_ULONG(777, br.LastClose().positionId, "Close no pid adotado");
+   MKS_ASSERT_NEAR_DOUBLE(0.25, br.LastClose().lots, CR_TOL,
+                          "Close com os lots adotados");
+   MKS_ASSERT_EQ_INT(1, br.SendCount(), "flip abre a nova (BUY)");
+   MKS_ASSERT_EQ_INT((int)MKS_ORDER_BUY, (int)strat.CurrentSide(),
+                     "nova posição na direção do flip");
+}
+
+void Test_CR_AdoptedPositionAutoDetach()
+{
+   CMksRecordingBroker br;
+   CMksFakeSymbol sym;
+   CMksFixedLotSizer sizer(GetPointer(sym), FIXED_LOTS);
+   CMksFakePositionBook book;
+   CMksColorReversalStrategy strat(GetPointer(br), GetPointer(sizer),
+                                    GetPointer(sym), SL_POINTS, MAGIC,
+                                    NULL, GetPointer(book));
+
+   // Órfã adotada morre no SL antes do 1o brick → auto-detach limpa.
+   strat.AdoptPosition(777, MKS_ORDER_SELL, 0.25);
+   book.MarkClosed(777);
+   strat.OnBrickClose(MakeBrick(MKS_BRICK_BEAR, 2003.0, 2000.0));
+
+   MKS_ASSERT_FALSE(strat.HasOpenPosition(), "auto-detach limpou a adotada");
+   MKS_ASSERT_EQ_LONG(1, strat.Metrics().autoDetected, "autoDetected == 1");
+   MKS_ASSERT_EQ_INT(0, br.CloseCount(), "sem Close (posição já sumiu)");
+}
+
+//==================================================================
+// FlattenForSafety (M19, auditoria 2026-07-19) — halt de stream
+//==================================================================
+
+void Test_CR_FlattenClosesAndClears()
+{
+   CMksRecordingBroker br;
+   CMksFakeSymbol sym;
+   CMksFixedLotSizer sizer(GetPointer(sym), FIXED_LOTS);
+   CMksColorReversalStrategy strat(GetPointer(br), GetPointer(sizer),
+                                    GetPointer(sym), SL_POINTS, MAGIC);
+
+   strat.OnBrickClose(MakeBrick(MKS_BRICK_BULL, 2000.0, 2003.0)); // 1o
+   strat.OnBrickClose(MakeBrick(MKS_BRICK_BEAR, 2003.0, 2000.0)); // flip → abre
+   MKS_ASSERT_TRUE(strat.HasOpenPosition(), "pré-condição: posição aberta");
+   ulong pid = strat.CurrentPositionId();
+
+   MKS_ASSERT_TRUE(strat.FlattenForSafety("teste"), "flatten retorna true");
+   MKS_ASSERT_FALSE(strat.HasOpenPosition(), "flatten limpa o vínculo");
+   MKS_ASSERT_EQ_INT(1, br.CloseCount(), "1 Close no flatten");
+   MKS_ASSERT_EQ_ULONG(pid, br.LastClose().positionId, "Close no pid corrente");
+   MKS_ASSERT_EQ_LONG(1, strat.Metrics().closesFilled, "closesFilled == 1");
+}
+
+void Test_CR_FlattenFailureKeepsLink()
+{
+   CMksRecordingBroker br;
+   CMksFakeSymbol sym;
+   CMksFixedLotSizer sizer(GetPointer(sym), FIXED_LOTS);
+   CMksColorReversalStrategy strat(GetPointer(br), GetPointer(sizer),
+                                    GetPointer(sym), SL_POINTS, MAGIC);
+
+   strat.OnBrickClose(MakeBrick(MKS_BRICK_BULL, 2000.0, 2003.0));
+   strat.OnBrickClose(MakeBrick(MKS_BRICK_BEAR, 2003.0, 2000.0));
+   ulong pid = strat.CurrentPositionId();
+
+   // Diferente do CloseCurrentIfAny (flip), falha aqui MANTÉM o vínculo:
+   // não há entrada nova vindo, e auto-detach/operador precisam enxergar.
+   br.SetNextCloseStatus(MKS_EXEC_ERROR);
+   MKS_ASSERT_FALSE(strat.FlattenForSafety("teste"), "flatten falho → false");
+   MKS_ASSERT_TRUE(strat.HasOpenPosition(), "vínculo mantido na falha");
+   MKS_ASSERT_EQ_ULONG(pid, strat.CurrentPositionId(), "pid preservado");
+   MKS_ASSERT_EQ_LONG(1, strat.Metrics().closesRejected, "closesRejected == 1");
+}
+
+void Test_CR_FlattenNoPositionIsNoop()
+{
+   CMksRecordingBroker br;
+   CMksFakeSymbol sym;
+   CMksFixedLotSizer sizer(GetPointer(sym), FIXED_LOTS);
+   CMksColorReversalStrategy strat(GetPointer(br), GetPointer(sizer),
+                                    GetPointer(sym), SL_POINTS, MAGIC);
+
+   MKS_ASSERT_TRUE(strat.FlattenForSafety("teste"), "sem posição → true");
+   MKS_ASSERT_EQ_INT(0, br.CloseCount(), "sem posição → nenhum Close");
+}
+
 //+------------------------------------------------------------------+
 void OnStart()
 {
@@ -449,6 +584,14 @@ void OnStart()
    MKS_RUN(Test_CR_VisualizerParityOnVsOff);
 
    MKS_RUN(Test_CR_WarmupTracksDirectionNoTrades);
+
+   MKS_RUN(Test_CR_AdoptPositionRestoresLink);
+   MKS_RUN(Test_CR_AdoptedPositionClosedOnFlip);
+   MKS_RUN(Test_CR_AdoptedPositionAutoDetach);
+
+   MKS_RUN(Test_CR_FlattenClosesAndClears);
+   MKS_RUN(Test_CR_FlattenFailureKeepsLink);
+   MKS_RUN(Test_CR_FlattenNoPositionIsNoop);
 
    g_mksTestRunner.Summary();
 }

@@ -714,6 +714,52 @@ int OnInit()
    // Strategy é IRenkoSink → vai no multiSink junto com writer/CS/audit.
    g_multiSink.Add(g_strategy);
 
+   //--- 12.5 Reconciliação de posição órfã (M10, auditoria 2026-07-19) +
+   // Sessão anterior pode ter deixado posição aberta (recompile, reboot
+   // de VPS, mudança de input). O estado da estratégia nasce vazio; sem
+   // adoção a órfã nunca é gerenciada e, com maxOpenPositions=1, o book
+   // a conta e todo Send novo leva 405 — EA mudo até o SL bater.
+   // Invariante 5 do V5-POSTMORTEM: reconstrução de estado é completa
+   // ou não acontece. No tester o book está sempre vazio no OnInit —
+   // mesmo caminho de código, no-op (sem bifurcação).
+   int orphanCount = g_book.OpenCount();
+   if(orphanCount > 1)
+   {
+      // Duas+ posições no escopo symbol+magic: estado que esta
+      // estratégia (1 posição por vez) não sabe reconstruir. Fail-fast
+      // barulhento — mesmo padrão da guarda hedging-only (ADR-029).
+      Alert(StringFormat(
+         "ColorReversal: %d posicoes abertas em %s (magic %d) — a estrategia "
+         "gerencia no maximo 1. Feche/ajuste manualmente e reanexe o EA.",
+         orphanCount, g_symbol, (int)InpMagicNumber));
+      g_logger.Error("ColorReversal", "múltiplas posições órfãs — abortando",
+         StringFormat("\"count\":%d", orphanCount));
+      Cleanup();
+      return INIT_FAILED;
+   }
+   if(orphanCount == 1)
+   {
+      ulong               orphanId   = 0;
+      ENUM_MKS_ORDER_SIDE orphanSide = MKS_ORDER_BUY;
+      double              orphanLots = 0.0;
+      if(g_book.PositionAt(0, orphanId, orphanSide, orphanLots))
+      {
+         g_strategy.AdoptPosition(orphanId, orphanSide, orphanLots);
+         Alert(StringFormat(
+            "ColorReversal: posicao orfa %I64u (%s %.2f lots) adotada — "
+            "sera gerenciada normalmente (flip fecha, SL protege).",
+            orphanId, (orphanSide == MKS_ORDER_BUY ? "BUY" : "SELL"),
+            orphanLots));
+      }
+      else
+      {
+         // Book mudou entre OpenCount e PositionAt (SL bateu no meio do
+         // OnInit) — segue sem adoção; auto-detach cobre o resto.
+         g_logger.Warn("ColorReversal",
+            "órfã sumiu entre OpenCount e PositionAt — seguindo sem adoção", "");
+      }
+   }
+
    //--- 13. Builder -----------------------------------------------+
    g_builder = new CMksRenkoBuilder(geom, g_brickSizer, g_multiSink,
                                      InpInvalidTickLimit, InpThresholdLimit);
@@ -843,6 +889,27 @@ void IngestOne(const MksTick &tick)
          g_auditSink.RecordStreamHalted(tick.seq, InpInvalidTickLimit);
       g_logger.Error("ColorReversal", "tick stream corrupt — halted",
          StringFormat("\"err\":\"%s\"", MksJsonEscape(err.ToString())));
+
+      // M19 (auditoria 2026-07-19): halt de stream com posição aberta.
+      // EA cego não gerencia posição — a única saída seria o SL
+      // distante, sem ninguém olhando. Flatten + Alert; se o Close
+      // falhar, Alert exige intervenção manual (posição segue aberta,
+      // vínculo mantido pelo FlattenForSafety).
+      if(g_strategy != NULL && g_strategy.HasOpenPosition())
+      {
+         ulong haltPid = g_strategy.CurrentPositionId();
+         if(g_strategy.FlattenForSafety("tick stream corrupt (104)"))
+            Alert(StringFormat(
+               "ColorReversal: stream de ticks corrompido — EA PARADO. "
+               "Posicao %I64u fechada por seguranca.", haltPid));
+         else
+            Alert(StringFormat(
+               "ColorReversal: stream corrompido — EA PARADO e o Close da "
+               "posicao %I64u FALHOU. Feche manualmente AGORA.", haltPid));
+      }
+      else
+         Alert("ColorReversal: stream de ticks corrompido — EA parado "
+               "(sem posicao aberta).");
    }
 }
 
