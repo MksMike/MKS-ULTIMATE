@@ -21,7 +21,9 @@ private:
    int    m_failedAssertions;
    int    m_passedTests;
    int    m_failedTests;
-   int    m_testFailedAtStart; // baseline para detectar falha do teste corrente
+   int    m_emptyTests;         // testes que rodaram SEM nenhuma assertion (M20)
+   int    m_testFailedAtStart;  // baseline de falhas para detectar falha do teste
+   int    m_assertionsAtStart;  // baseline de assertions para detectar teste vazio
    string m_currentTest;
    bool   m_inTest;
 
@@ -32,17 +34,20 @@ public:
       m_failedAssertions  = 0;
       m_passedTests       = 0;
       m_failedTests       = 0;
+      m_emptyTests        = 0;
       m_testFailedAtStart = 0;
+      m_assertionsAtStart = 0;
       m_currentTest       = "";
       m_inTest            = false;
    }
 
-   //--- Início do escopo de um teste. Captura baseline para saber se
-   //--- alguma assertion entre Begin e End falhou.
+   //--- Início do escopo de um teste. Captura baselines para saber se
+   //--- alguma assertion entre Begin e End falhou E se alguma rodou.
    void Begin(const string testName)
    {
       m_currentTest       = testName;
       m_testFailedAtStart = m_failedAssertions;
+      m_assertionsAtStart = m_passedAssertions + m_failedAssertions;
       m_inTest            = true;
    }
 
@@ -50,8 +55,20 @@ public:
    {
       if(m_inTest)
       {
-         if(m_failedAssertions > m_testFailedAtStart) m_failedTests++;
-         else                                         m_passedTests++;
+         int assertionsInTest = (m_passedAssertions + m_failedAssertions)
+                                - m_assertionsAtStart;
+         if(assertionsInTest == 0)
+         {
+            // Teste sem NENHUMA assertion: cobertura fantasma (refactor que
+            // apagou asserts, early-return, MKS_RUN de função vazia). NÃO
+            // conta como passado — "suíte verde sem cobertura" é a classe
+            // que o projeto teme (M20, auditoria 2026-07-19).
+            m_emptyTests++;
+            PrintFormat("EMPTY [%s] teste sem nenhuma assertion (cobertura fantasma)",
+                        m_currentTest);
+         }
+         else if(m_failedAssertions > m_testFailedAtStart) m_failedTests++;
+         else                                              m_passedTests++;
       }
       m_inTest      = false;
       m_currentTest = "";
@@ -75,17 +92,32 @@ public:
       const int totalAssertions = m_passedAssertions + m_failedAssertions;
       const int totalTests      = m_passedTests + m_failedTests;
       Print("");
-      PrintFormat("=== %d/%d assertions in %d tests (%d failed) ===",
-                  m_passedAssertions, totalAssertions,
-                  totalTests, m_failedTests);
-      if(m_failedAssertions > 0)
-         Alert(StringFormat("MKS Tests: %d FAILED", m_failedAssertions));
+      if(m_emptyTests > 0)
+         PrintFormat("=== %d/%d assertions in %d tests (%d failed, %d EMPTY) ===",
+                     m_passedAssertions, totalAssertions,
+                     totalTests, m_failedTests, m_emptyTests);
+      else
+         PrintFormat("=== %d/%d assertions in %d tests (%d failed) ===",
+                     m_passedAssertions, totalAssertions,
+                     totalTests, m_failedTests);
+      // Alerta em QUALQUER condição de falha — incl. suíte vazia (nenhum
+      // teste rodou) e testes sem assertion (M20). Antes só alertava em
+      // failedAssertions>0, deixando suíte vazia/fantasma passar calada.
+      if(totalTests == 0 && m_emptyTests == 0)
+         Alert("MKS Tests: NENHUM teste rodou (suíte vazia)");
+      else if(m_failedAssertions > 0 || m_failedTests > 0)
+         Alert(StringFormat("MKS Tests: %d assertion(s), %d test(s) FAILED",
+                            m_failedAssertions, m_failedTests));
+      else if(m_emptyTests > 0)
+         Alert(StringFormat("MKS Tests: %d teste(s) SEM ASSERTION (cobertura fantasma)",
+                            m_emptyTests));
    }
 
    int    PassedAssertions() const { return m_passedAssertions; }
    int    FailedAssertions() const { return m_failedAssertions; }
    int    PassedTests()      const { return m_passedTests; }
    int    FailedTests()      const { return m_failedTests; }
+   int    EmptyTests()       const { return m_emptyTests; }
    string CurrentTest()      const { return m_currentTest; }
 };
 

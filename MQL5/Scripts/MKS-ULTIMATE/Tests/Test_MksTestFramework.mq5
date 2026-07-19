@@ -39,6 +39,10 @@ string g_capturedTestName = "";
 void TestSmokeStringification()
 {
    g_capturedTestName = g_mksTestRunner.CurrentTest();
+   // Assertion legítima (evita o guard de teste-vazio do M20): CurrentTest
+   // está populado DURANTE a execução via MKS_RUN(#funcName).
+   MKS_ASSERT_TRUE(g_mksTestRunner.CurrentTest() == "TestSmokeStringification",
+                   "CurrentTest populado durante a execução do teste");
 }
 
 //+------------------------------------------------------------------+
@@ -123,8 +127,11 @@ void OnStart()
    PrintFormat("=== Smoke test meta: %d/%d checks ok ===",
                g_metaPass, g_metaPass + g_metaFail);
 
-   //--- Exibe o Summary padrão do runner para inspeção visual --------+
-   g_mksTestRunner.Summary();
+   // NÃO chamamos g_mksTestRunner.Summary() aqui: a Phase 5 poluiu o
+   // runner com uma falha SINTÉTICA de propósito (para testar o caminho
+   // de falha), então o Summary do runner alertaria "FAILED" num run
+   // saudável (N2, auditoria 2026-07-19). O veredito honesto deste
+   // smoke test é o g_metaPass/g_metaFail acima.
 
    if(g_metaFail > 0)
       Alert(StringFormat("Smoke test do framework: %d META-FALHAS", g_metaFail));
