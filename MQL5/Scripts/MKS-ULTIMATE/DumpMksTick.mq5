@@ -174,7 +174,6 @@ void OnStart()
    long   largestGapMsc = 0;
    long   prevTimeMsc = 0;
    long   uniqueTimestamps = 0;
-   ulong  prevSeq = 0;
    long   seqGaps = 0;
    long   ticksWithLast = 0;
    long   ticksWithVolume = 0;
@@ -217,7 +216,6 @@ void OnStart()
          if(dt > 0) uniqueTimestamps++;
       }
       prevTimeMsc = t.timeMsc;
-      prevSeq = t.seq;
 
       // Imprime primeiros
       if(i < firstN)
@@ -227,10 +225,15 @@ void OnStart()
       if(printAll && i >= firstN && i < n - lastN)
          PrintFormat("  [%I64d] %s", i, FormatTick(t, digits));
 
-      // Buffer dos últimos N (sempre atualiza)
-      lastBuf[lastBufHead] = t;
-      lastBufHead = (lastBufHead + 1) % lastN;
-      if(lastBufCount < lastN) lastBufCount++;
+      // Buffer dos últimos N (sempre atualiza). Guarda contra lastN=0
+      // (InpPrintLastN=0 → sem seção "últimos"; evita divisão por zero
+      // em `% lastN`, que crashava o script no 1º tick).
+      if(lastN > 0)
+      {
+         lastBuf[lastBufHead] = t;
+         lastBufHead = (lastBufHead + 1) % lastN;
+         if(lastBufCount < lastN) lastBufCount++;
+      }
    }
 
    //--- Últimos N ---

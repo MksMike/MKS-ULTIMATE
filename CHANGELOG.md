@@ -6,6 +6,19 @@ O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/) e es
 
 ## [Não lançado]
 
+### Removed
+- **E0.7 — limpeza da auditoria 2026-07-19 (código morto e redundante).**
+  - `MQL5/Scripts/MKS-ULTIMATE/ValidateRenkoBuilder.mq5` — **deletado** (0 asserts, nem inclui Asserts.mqh; os 6 cenários têm asserts reais em `Test_CMksRenkoBuilder` — puro falso senso de cobertura, M6).
+  - `reference/V5/MKS-Dashboard.mq5`, `MKS-Dashboard2.mq5` — **deletados** (0 bytes); `reference/V5/V5-Dashboard2.mq5` — **deletado** (byte-idêntico a `V5-Dashboard.mq5`, que fica).
+  - `DumpMksTick.mq5` — removido `prevSeq` (atribuído, nunca lido) + **corrigido div-por-zero** quando `InpPrintLastN=0` (crashava no 1º tick em `% lastN`).
+  - `ColorReversal.mq5` — removido `InpComment` (input morto; a estratégia hardcoda `"ColorReversal"`).
+  - **Não deletado (flag ao dono):** a branch remota `origin/claude/check-ultimate-access-5kshn` tem um commit ÚNICO não mergeado (`73a93f6`, "docs: audit 2026-05-25"); deletar é outward-facing e perderia esse commit — decisão do dono. `g_nextBarTime`/`m_magic`/`g_clock` (cosméticos) diferidos.
+
+### Added
+- **E0.6 — segurança operacional pós-incidente das junctions (2026-07-19).**
+  - `docs/CHEATSHEET.md §9.6` — runbook "Desinstalar/atualizar o MT5 com segurança": remover as 5 junctions com `rmdir` ANTES de desinstalar (a desinstalação atravessa junction viva e apaga o alvo no repo). `§9.7` — backup dos dados de captura.
+  - `tools/backup-captures.ps1` — **novo**: robocopy dos `.mkstick`/`.mksbk`/`.log` de `MQL5\Files\MKS-ULTIMATE\` (gitignorado, dentro do terminal) para fora da árvore do terminal (default `C:\dev\MKS-DATA`, `-Dest` configurável). Não espelha-deletando (preserva capturas antigas). Sintaxe validada; não agendado (Task Scheduler fica a critério do dono).
+
 ### Fixed
 - **Testes de auto-trigger do SimulatedBroker assumiam `point=1.0` sem setá-lo (achado novo, exposto ao rodar a suíte no MT5 em 2026-07-19).** `Test_AutoTriggerSlBuy`, `Test_AutoTriggerStaysOpenWhenNoHit` e `Test_AutoTriggerHalfSpreadBidProxy` usavam aritmética de preço inteiro (SL 10 pts = 1990, fill+halfSpread = 2005), mas o `CMksFakeSymbol` tem `point=0.01` por default (XAU) desde a criação do mock — deixando SL/TP 100× mais perto e disparando cedo (SL absoluto 1999.95 em vez de 1995). Falhas **pré-existentes** (não do E0.3 — o backstop novo é inerte com `minSlPoints=0`, e a suíte não rodava no MT5 há tempo), reveladas pela verificação empírica. Fix: os testes de auto-trigger passam a chamar `sym.SetPoint(1.0)` explicitamente, casando a aritmética com a intenção. É a classe "cobertura fantasma" que o M20 combate — um instrumento de confiança que estava vermelho e ninguém via.
   - `Test_CMksSimulatedBroker.mq5` — `SetPoint(1.0)` nos 5 testes de auto-trigger (3 corrigem falha + 2 por consistência). A verdade da produção (`slPrice = fillPrice − slPoints·point`) já estava correta; o defeito era só nos testes.

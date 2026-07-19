@@ -75,7 +75,6 @@ input int    InpThresholdLimit      = 20;    // K (ADR-011)
 input group "=== Estratégia ==="
 input long   InpMagicNumber         = 527001; // Identificador único desta estratégia
 input double InpSlPoints            = 3000.0; // SL fixo em pontos do símbolo (=10 bricks em XAU/S=3.0). OnInit recusa anexar se < piso mínimo = max(InpMinSlFloorPts, InpMinSlBricks·brickSize) — E0.3/M12.
-input string InpComment             = "ColorReversal"; // Comentário das ordens
 
 input group "=== Sizing ==="
 enum ENUM_CR_LOT_MODE

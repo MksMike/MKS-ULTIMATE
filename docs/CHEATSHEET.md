@@ -472,6 +472,35 @@ mklink /J MKS-ULTIMATE C:\dev\MKS-ULTIMATE\MQL5\Include\MKS-ULTIMATE
 # Repetir para Experts, Services, Scripts, Indicators
 ```
 
+### 9.6 Desinstalar/atualizar o MT5 com SEGURANÇA (⚠️ incidente 2026-07-19)
+
+**PERIGO:** desinstalar o MT5 (ou deixar o uninstaller/Explorer apagar a pasta `MQL5\`) **com as junctions vivas ATRAVESSA as junctions e apaga os arquivos-alvo no repo** — foi o que aconteceu em 2026-07-19 (recuperado via `git checkout HEAD -- MQL5/`; só o git salvou). **Sempre remova as 5 junctions ANTES de desinstalar.** Remover a junction (`rmdir`) NÃO apaga os arquivos do repo — só corta o atalho.
+
+```powershell
+# 1. ANTES de desinstalar: remover as 5 junctions do lado do terminal.
+$mql5 = "$env:APPDATA\MetaQuotes\Terminal\<HASH>\MQL5"
+foreach ($t in 'Include','Experts','Services','Scripts','Indicators') {
+  $link = Join-Path $mql5 "$t\MKS-ULTIMATE"
+  if (Test-Path $link) { cmd /c rmdir "$link" }   # rmdir remove a junction, não o alvo
+}
+# 2. Confirmar que o repo segue intacto:  git -C C:\dev\MKS-ULTIMATE status
+# 3. Agora sim desinstalar/atualizar o MT5.
+# 4. Após reinstalar: recriar as junctions (§9.5) — se o path de instalação
+#    for o mesmo, o HASH do Terminal é o MESMO.
+```
+
+Regra geral: **commit + push antes de qualquer mexida no terminal** — trabalho não commitado morre junto.
+
+### 9.7 Backup dos dados de captura (insubstituíveis)
+
+Os `.mkstick`/`.mksbk`/`.log` vivem só em `MQL5\Files\MKS-ULTIMATE\` (fora do repo, gitignorado) — o tick feed não se recaptura. Backup para fora da árvore do terminal:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File C:\dev\MKS-ULTIMATE\tools\backup-captures.ps1
+# Default: copia para C:\dev\MKS-DATA. Ajuste com -Dest <path> (ex.: uma pasta OneDrive/nuvem).
+# Para agendar diário: Task Scheduler → nova tarefa → aponta para o comando acima.
+```
+
 ---
 
 ## 10. Links rápidos
