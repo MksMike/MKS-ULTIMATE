@@ -6,6 +6,9 @@ O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/) e es
 
 ## [Não lançado]
 
+### Added
+- **Resgate do doc de auditoria detalhada de 25/05 antes de aposentar a branch zumbi (2026-07-19).** A branch remota `claude/check-ultimate-access-5kshn` (rodada automática de 25/05, congelada em `45c3a67`, ~82k linhas atrás de main) tinha 1 commit único: `docs/AUDITORIA-2026-05-25.md` (288 linhas, auditoria arquivo-por-arquivo) que nunca subira para main — só o resumo (`CHECKPOINT-2026-05-25-audit.md`) estava versionado. Doc resgatado para main com nota de "documento histórico" (achados já tratados via ADRs/E1/E0) + referência cruzada no índice `CHECKPOINTS.md`. Branch zumbi deletada após o resgate (nada perdido).
+
 ### Removed
 - **E0.7 — limpeza da auditoria 2026-07-19 (código morto e redundante).**
   - `MQL5/Scripts/MKS-ULTIMATE/ValidateRenkoBuilder.mq5` — **deletado** (0 asserts, nem inclui Asserts.mqh; os 6 cenários têm asserts reais em `Test_CMksRenkoBuilder` — puro falso senso de cobertura, M6).
