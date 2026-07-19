@@ -2350,7 +2350,10 @@ O `CMksStressLabBroker` passa a **governar a superfície de fill inteira**, com 
 
 ## 4. Decisões pendentes
 
-Nenhuma decisão arquitetural formal pendente neste momento. Decisões novas são registradas formalmente quando forem enfrentadas, não antes — decidir arquitetura no vazio produz decisões erradas.
+- **ADR-031 — manter+corrigir o Custom Symbol** (referenciada nas notas da ADR-023-A, ainda **não escrita como seção própria**). Entregável E7.3 do `docs/ROADMAP-CORE-HARDENING.md`: redigir formalmente com o dado do gate empírico (sobrevivência à virada de dia). Bloqueada por E7.1 (gate empírico pendente de dado).
+- **Termo spread-aware dinâmico do piso de SL** — a fórmula por-tick (que fecha a cauda residual do M12) foi deliberadamente **diferida ao E2** (precisa do runner de replay + spread por-tick no simulador). Decisão de shipar o piso estático de brick agora (E0.3) tomada com o dono em 2026-07-19; o termo dinâmico é decisão arquitetural em aberto para o E2.
+
+Outras decisões novas são registradas formalmente quando forem enfrentadas, não antes — decidir arquitetura no vazio produz decisões erradas.
 
 ## 5. Convenções de nomenclatura
 

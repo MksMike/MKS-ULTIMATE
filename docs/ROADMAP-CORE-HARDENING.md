@@ -31,8 +31,10 @@ Referência cruzada: os IDs entre colchetes (ex.: `[H1]`, `[M9]`, `[cs-recovery-
 
 ## Fase E1 — Higiene imediata e destravamento
 
-**Status:** Não iniciada
+**Status:** Concluída (E1.1–E1.4) — E1.1 corrigido e estendido pela Fase E0 (ver nota).
 **Bloqueia:** operação real (E1.1) e a confiança nas demais fases.
+
+**Nota (sync 2026-07-19):** E1.1–E1.4 commitados (`e853833`, `88507bd`, `d60b3c1`, merge de branches). **Desvios registrados:** o gate de SL do E1.1 foi posto no **RiskManager** (código 410, faixa 4xx — gate simétrico bt/live), não no broker (faixa 2xx) como a letra pedia — melhor para paridade. A auditoria de 2026-07-19 (`docs/CHECKPOINT-2026-07-19-auditoria.md`, achado M12) mostrou que esse gate era **no-op na Exness (StopsLevel=0)** e que o SimulatedBroker aceitava qualquer SL. A **Fase E0** (correções imediatas do mesmo checkpoint) reancorou o piso de SL em **bricks** (fail-closed, fonte única no RiskManager), tirou StopsLevel do número de runtime (só fail-fast de anexação) e adicionou backstop no sim. FreezeLevel segue fora do piso de placement (é do Modify/trailing, E5). Ver `CHANGELOG.md [Não lançado]` (E0.1–E0.5).
 
 **Por que primeiro:** são itens de baixo risco e alto retorno — destravam a operação, corrigem ferramentas que dão falsa confiança, e limpam divergências doc↔código que confundiriam quem executar as fases seguintes.
 

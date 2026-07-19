@@ -302,7 +302,7 @@ Este documento define **o que construir e em que ordem**. Cada fase tem entregá
 
 Detalhes em `docs/CHECKPOINT-2026-05-27-night.md` e `docs/CHECKPOINT-2026-05-27-demo-live.md`.
 
-**Pendente para fechar a Fase 9 — slice 2 (stress runner):** EA/script que replaya `.mkstick` plugando `CMksColorReversalStrategy` sobre `CMksSimulatedBroker` + `CMksStressLabBroker` (níveis None→Nightmare), agregando via `CMksStressLabReport`. É o que exercita a ADR-027 em pipeline real. **A auditoria de 2026-05-29 levantou 3 furos de credibilidade no StressLab que devem ser fechados ANTES deste runner** — saídas (SL/TP) não estressadas, loop de requote inerte contra o broker simulado, e o teste do report nunca executa o broker. Tratar antes de carimbar a estratégia como "robusta".
+**Pendente para fechar a Fase 9 — slice 2 (stress runner):** EA/script que replaya `.mkstick` plugando `CMksColorReversalStrategy` sobre `CMksSimulatedBroker` + `CMksStressLabBroker` (níveis None→Nightmare), agregando via `CMksStressLabReport`. É o que exercita a ADR-027 em pipeline real. **Os 3 furos de credibilidade do StressLab levantados em 2026-05-29 — saídas (SL/TP) não estressadas, loop de requote inerte, teste do report não executava o broker — foram FECHADOS pela ADR-030 (com testes que provam)**, confirmado pela auditoria de 2026-07-19. Resta só o stress runner em si (= E2.1 do `ROADMAP-CORE-HARDENING.md`).
 
 **Entregáveis:**
 - EA minimalista usando todo o core construído
@@ -312,7 +312,7 @@ Detalhes em `docs/CHECKPOINT-2026-05-27-night.md` e `docs/CHECKPOINT-2026-05-27-
 
 **Critério de saída:**
 - ✅ Paridade backtest/live validada por log-diff — `.log` + `.mksbk` + audit TSV no mesmo formato nos 3 ambientes
-- ⏳ EA sobrevive a stress médio sem quebrar core — **pendente** do slice 2 (stress runner) + correção dos 3 furos do StressLab
+- ⏳ EA sobrevive a stress médio sem quebrar core — **pendente** do slice 2 (stress runner = E2.1); os 3 furos do StressLab já foram fechados (ADR-030)
 - ✅ Zero crash, zero vazamento de handles, zero `_LastError` não tratado — confirmado em tester e demo live
 
 **Por que importa:** Primeira hora da verdade. Se paridade falhar aqui, voltamos e consertamos o core antes de ir adiante.
