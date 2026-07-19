@@ -103,6 +103,7 @@ class CMksSimulatedBroker : public IBroker
 private:
    ISymbol            *m_symbol;
    CMksCostModel      *m_costModel;
+   double              m_minSlPoints;   // E0.3: backstop de piso de SL (0 = off)
    MksSimPosition      m_positions[];
    ulong               m_nextPositionId;
    ulong               m_nextDealId;
@@ -220,10 +221,18 @@ private:
    }
 
 public:
-   CMksSimulatedBroker(ISymbol *symbol, CMksCostModel *costModel)
+   // minSlPoints: backstop de piso de SL (E0.3/M12). Default 0 = desligado
+   // — preserva os sites de teste existentes. NÃO é o mecanismo
+   // autoritativo de paridade (esse é o gate CMksRiskManager); é rede
+   // para uso CRU do sim em testes. No runner de replay/StressLab (E2) o
+   // sim é envolvido num CMksRiskGatedBroker com o MESMO RiskManager e
+   // este backstop recebe o piso final já-computado.
+   CMksSimulatedBroker(ISymbol *symbol, CMksCostModel *costModel,
+                       double minSlPoints = 0.0)
    {
       m_symbol           = symbol;
       m_costModel        = costModel;
+      m_minSlPoints      = minSlPoints;
       m_nextPositionId   = 1;
       m_nextDealId       = 1;
       m_lastMid          = 0.0;
@@ -255,6 +264,14 @@ public:
          return MakeError(MKS_ERR_BROKER_NOT_INITIALIZED);
       if(!request.IsValid())
          return MakeRejected(MKS_ERR_CORE_INVALID_ARGUMENT, m_lastMid);
+
+      // Backstop de piso de SL (E0.3): rejeita SL abaixo do piso, como o
+      // servidor real (10016). MESMO código 410 do gate → registro de
+      // rejeição idêntico bt/live. Só rede para uso cru do sim; a decisão
+      // autoritativa é do CMksRiskManager (ver comentário do construtor).
+      if(m_minSlPoints > 0.0 && request.slPoints > 0.0 &&
+         request.slPoints < m_minSlPoints)
+         return MakeRejected(MKS_ERR_RISK_REJECTED_SL_BELOW_STOPS, m_lastMid);
 
       double point     = m_symbol.Point();
       double fillPrice = m_costModel.FillPriceFor(request.side, m_lastMid, point);

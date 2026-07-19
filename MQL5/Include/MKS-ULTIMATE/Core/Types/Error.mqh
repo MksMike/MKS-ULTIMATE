@@ -50,7 +50,7 @@ enum ENUM_MKS_ERROR_CODE
    MKS_ERR_RISK_REJECTED_DAILY_LOSS = 407,    // snapshot.DayPnLPct <= -maxDailyLossPct (slice 6.3)
    MKS_ERR_RISK_REJECTED_DRAWDOWN = 408,      // snapshot.DrawdownPct >= maxDrawdownPct (slice 6.3)
    MKS_ERR_RISK_REJECTED_MIN_EQUITY = 409,    // snapshot.Equity < minEquityAbs (slice 6.3 circuit breaker)
-   MKS_ERR_RISK_REJECTED_SL_BELOW_STOPS = 410,// req.slPoints < stops level do símbolo (E1.1 — auditoria 2026-06-02; gate simétrico bt/live contra INVALID_STOPS 10016)
+   MKS_ERR_RISK_REJECTED_SL_BELOW_STOPS = 410,// req.slPoints < piso mínimo de SL = max(belt, minSlBricks·brickSize) (E1.1 + E0.3/M12; gate simétrico bt/live contra INVALID_STOPS 10016; StopsLevel só no fail-fast de anexação, FreezeLevel fora)
 
    //--- StressLab 500–599 — ver ADR-009
 

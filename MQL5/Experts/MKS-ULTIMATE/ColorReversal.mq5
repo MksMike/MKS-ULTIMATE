@@ -74,7 +74,7 @@ input int    InpThresholdLimit      = 20;    // K (ADR-011)
 
 input group "=== Estratégia ==="
 input long   InpMagicNumber         = 527001; // Identificador único desta estratégia
-input double InpSlPoints            = 3000.0; // SL fixo em pontos do símbolo. Default empírico (Exness XAU, 06-02: 30 causava INVALID_STOPS 10016, 3000 funcionava). OnInit valida contra o stops level do broker (E1.1).
+input double InpSlPoints            = 3000.0; // SL fixo em pontos do símbolo (=10 bricks em XAU/S=3.0). OnInit recusa anexar se < piso mínimo = max(InpMinSlFloorPts, InpMinSlBricks·brickSize) — E0.3/M12.
 input string InpComment             = "ColorReversal"; // Comentário das ordens
 
 input group "=== Sizing ==="
@@ -91,6 +91,8 @@ input group "=== Risk Manager — Por Trade ==="
 input bool   InpRequireSl           = true;
 input bool   InpRequireTp           = false; // Por design (color reversal não usa TP)
 input double InpMaxLotsPerTrade     = 1.0;
+input int    InpMinSlBricks         = 1;     // Piso de SL em bricks (>=1; mata o M12: StopsLevel=0 não desliga o gate)
+input double InpMinSlFloorPts       = 0.0;   // Belt absoluto opcional do piso, em pontos (0 = só o piso de brick)
 
 input group "=== Risk Manager — Por Estratégia ==="
 input int    InpMaxOpenPositions    = 1;     // Color reversal: máx 1 posição
@@ -581,22 +583,52 @@ int OnInit()
    g_snapshot.Init();
 
    //--- 9. Risk Manager (3 camadas) -------------------------------+
-   // E1.1 (auditoria 2026-06-02): valida o SL contra o stops level do
-   // broker e alimenta o mesmo mínimo no RiskManager (rtp.minSlPoints),
-   // de modo que backtest e live rejeitem o MESMO SL muito-próximo — em
-   // vez de o live levar INVALID_STOPS (10016) e o backtest preencher
-   // (divergência eixo 2). Fail-fast com Alert (como a guarda hedging-only)
-   // para o operador corrigir o input antes de operar. stopsLevel=0 (comum
-   // em XAU/Exness) desliga a checagem — broker-agnóstico por construção.
-   int stopsLevelPts = g_iSymbol.StopsLevel();
-   if(InpSlPoints > 0.0 && InpSlPoints < (double)stopsLevelPts)
+   // E1.1 + E0.3/M12: o piso de SL mínimo é ancorado em BRICKS, computado
+   // dentro do RiskManager (fonte única, via SetSlFloorSource abaixo). O
+   // piso efetivo = max(InpMinSlFloorPts, InpMinSlBricks·brickSizePts) —
+   // função pura de config, idêntica em live/tester/replay: backtest e
+   // live rejeitam o MESMO SL muito-próximo (anti-eixo-2), sem depender do
+   // StopsLevel (que StressLab/tester podem modelar diferente do live).
+   // Com InpMinSlBricks>=1 o piso é sempre >0 → o gate fica SEMPRE ativo,
+   // matando o NO-OP do M12 (StopsLevel=0 desligava o gate na Exness XAU).
+   // StopsLevel entra AQUI só como fail-fast de ANEXAÇÃO (não no número de
+   // runtime): se o piso configurado ficar abaixo do stops level do
+   // broker, recusa anexar pedindo para subir o piso.
+   int    stopsLevelPts = g_iSymbol.StopsLevel();
+   double brickSizePts  = (g_iSymbol.Point() > 0.0)
+                          ? (g_brickSizer.SizePoints() / g_iSymbol.Point()) : 0.0;
+   double configFloor   = MathMax(InpMinSlFloorPts, InpMinSlBricks * brickSizePts);
+
+   if(InpMinSlBricks < 1)
    {
-      g_logger.Error("ColorReversal", "InpSlPoints abaixo do stops level do broker",
-         StringFormat("\"slPoints\":%.1f,\"stopsLevel\":%d", InpSlPoints, stopsLevelPts));
+      Alert("MKS ColorReversal: InpMinSlBricks deve ser >= 1 (piso de SL fail-closed).");
+      g_logger.Error("ColorReversal", "InpMinSlBricks < 1",
+         StringFormat("\"minSlBricks\":%d", InpMinSlBricks));
+      Cleanup();
+      return INIT_PARAMETERS_INCORRECT;
+   }
+   if(configFloor < (double)stopsLevelPts)
+   {
       Alert(StringFormat(
-         "MKS ColorReversal: InpSlPoints=%.0f abaixo do stops level do broker (%d pontos). "
-         "Ajuste InpSlPoints para >= %d e reanexe o EA.",
-         InpSlPoints, stopsLevelPts, stopsLevelPts));
+         "MKS ColorReversal: piso de SL configurado (%.0f pts) abaixo do stops level "
+         "do broker (%d pts). Suba InpMinSlBricks ou InpMinSlFloorPts e reanexe.",
+         configFloor, stopsLevelPts));
+      g_logger.Error("ColorReversal", "piso de SL abaixo do stops level do broker",
+         StringFormat("\"configFloor\":%.1f,\"stopsLevel\":%d", configFloor, stopsLevelPts));
+      Cleanup();
+      return INIT_PARAMETERS_INCORRECT;
+   }
+   if(InpSlPoints > 0.0 && InpSlPoints < configFloor)
+   {
+      // Este é o caso exato do M12: operador setou InpSlPoints abaixo do
+      // piso enforçado (ex.: 30 < 300). Recusa anexar ANTES de qualquer
+      // ordem live — em vez de o gate rejeitar cada Send em runtime.
+      Alert(StringFormat(
+         "MKS ColorReversal: InpSlPoints=%.0f abaixo do piso mínimo enforçado (%.0f pts "
+         "= %d brick(s)). Ajuste InpSlPoints para >= %.0f e reanexe.",
+         InpSlPoints, configFloor, InpMinSlBricks, configFloor));
+      g_logger.Error("ColorReversal", "InpSlPoints abaixo do piso de SL",
+         StringFormat("\"slPoints\":%.1f,\"configFloor\":%.1f", InpSlPoints, configFloor));
       Cleanup();
       return INIT_PARAMETERS_INCORRECT;
    }
@@ -605,7 +637,7 @@ int OnInit()
    rtp.requireSl       = InpRequireSl;
    rtp.requireTp       = InpRequireTp;
    rtp.maxLotsPerTrade = InpMaxLotsPerTrade;
-   rtp.minSlPoints     = (double)stopsLevelPts; // E1.1: gate simétrico bt/live
+   rtp.minSlPoints     = InpMinSlFloorPts; // belt absoluto; piso de brick via SetSlFloorSource
 
    CMksRiskStrategyParams rsp;
    rsp.maxOpenPositions = InpMaxOpenPositions;
@@ -618,6 +650,9 @@ int OnInit()
 
    // Construtor 3-camadas: (tradeP, stratP, acctP, book, snapshot, sizer=NULL, logger=NULL)
    g_risk = new CMksRiskManager(rtp, rsp, rap, g_book, g_snapshot, NULL, g_logger);
+   // E0.3: injeta a fonte do piso de SL em bricks ANTES de Validate (que
+   // checa o wiring fail-closed). Piso = max(belt, InpMinSlBricks·brickSize).
+   g_risk.SetSlFloorSource(g_brickSizer, g_iSymbol, InpMinSlBricks);
    if(!g_risk.Validate(err))
    {
       g_logger.Error("ColorReversal", "risk manager invalid",

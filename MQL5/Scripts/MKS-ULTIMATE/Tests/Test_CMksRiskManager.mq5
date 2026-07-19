@@ -17,6 +17,7 @@
 
 #include <MKS-ULTIMATE/Core/Risk/CMksRiskManager.mqh>
 #include <MKS-ULTIMATE/Core/Trade/CMksFixedLotSizer.mqh>
+#include <MKS-ULTIMATE/Core/RenkoBuilder/CMksFixedBrickSizer.mqh>
 #include <MKS-ULTIMATE/Core/Account/CMksAccountSnapshot.mqh>
 #include <MKS-ULTIMATE/Core/Testing/Asserts.mqh>
 #include <MKS-ULTIMATE/Core/Testing/Mocks/CMksFakeSymbol.mqh>
@@ -1015,6 +1016,126 @@ void Test_Risk_CheckOrder_SlMissingBeforeStopsCheck()
                      (int)err.code, "SL_MISSING tem precedência sobre SL_BELOW_STOPS");
 }
 
+//==================================================================
+// CheckOrder — piso de SL ancorado em bricks (E0.3/M12)
+// FixedBrickSizer(3.0) + Point=0.01 => brickFloor = 1 * 3.0/0.01 = 300.
+// Evita-se a fronteira exata (300) por causa de 3.0/0.01 em IEEE754;
+// usa-se 299 (rejeita) e 301 (aceita) para provar floor ~300 sem
+// depender do último ULP.
+//==================================================================
+
+void Test_Risk_BrickFloor_ActiveWhenStopsLevelZero()
+{
+   CMksFixedBrickSizer sizer(3.0);
+   CMksFakeSymbol sym; // Point=0.01, StopsLevel=0 por default
+   CMksRiskTradeParams p; // minSlPoints (belt) = 0
+   CMksRiskManager risk(p);
+   risk.SetSlFloorSource(GetPointer(sizer), GetPointer(sym), 1);
+
+   MksError err;
+   MKS_ASSERT_FALSE(risk.CheckOrder(MakeReq(0.1, 250.0), err),
+                    "StopsLevel=0 mas floor de brick ativo: SL=250 rejeitado");
+   MKS_ASSERT_EQ_INT((int)MKS_ERR_RISK_REJECTED_SL_BELOW_STOPS, (int)err.code,
+                     "code=SL_BELOW_STOPS");
+   MksError err2;
+   MKS_ASSERT_FALSE(risk.CheckOrder(MakeReq(0.1, 299.0), err2),
+                    "SL=299 (< ~300) rejeitado");
+   MksError err3;
+   MKS_ASSERT_TRUE(risk.CheckOrder(MakeReq(0.1, 301.0), err3),
+                   "SL=301 (> ~300) aceito");
+   MksError err4;
+   MKS_ASSERT_TRUE(risk.CheckOrder(MakeReq(0.1, 350.0), err4),
+                   "SL=350 aceito — o NO-OP do M12 morreu");
+}
+
+void Test_Risk_BrickFloor_ImmuneToStopsLevel()
+{
+   // O piso de runtime NÃO lê StopsLevel (env-leak fechado): variar o
+   // StopsLevel do símbolo não muda a decisão — só o piso de brick vale.
+   int levels[3] = {0, 500, 5000};
+   for(int i = 0; i < 3; i++)
+   {
+      CMksFixedBrickSizer sizer(3.0);
+      CMksFakeSymbol sym;
+      sym.SetStopsLevel(levels[i]);
+      CMksRiskTradeParams p;
+      CMksRiskManager risk(p);
+      risk.SetSlFloorSource(GetPointer(sizer), GetPointer(sym), 1);
+
+      MksError e1;
+      MKS_ASSERT_FALSE(risk.CheckOrder(MakeReq(0.1, 250.0), e1),
+                       StringFormat("StopsLevel=%d: SL=250 sempre rejeitado (floor=300)", levels[i]));
+      MksError e2;
+      MKS_ASSERT_TRUE(risk.CheckOrder(MakeReq(0.1, 350.0), e2),
+                      StringFormat("StopsLevel=%d: SL=350 sempre aceito (floor=300)", levels[i]));
+   }
+}
+
+void Test_Risk_BrickFloor_DeterministicCrossInstance()
+{
+   // Duas instâncias construídas identicamente => mesma decisão de
+   // fronteira (o piso é função pura de config: base da paridade).
+   CMksFixedBrickSizer sizerA(3.0); CMksFakeSymbol symA;
+   CMksFixedBrickSizer sizerB(3.0); CMksFakeSymbol symB;
+   CMksRiskTradeParams p;
+   CMksRiskManager riskA(p); riskA.SetSlFloorSource(GetPointer(sizerA), GetPointer(symA), 1);
+   CMksRiskManager riskB(p); riskB.SetSlFloorSource(GetPointer(sizerB), GetPointer(symB), 1);
+
+   MksError ea1, eb1, ea2, eb2;
+   bool a1 = riskA.CheckOrder(MakeReq(0.1, 299.0), ea1);
+   bool b1 = riskB.CheckOrder(MakeReq(0.1, 299.0), eb1);
+   bool a2 = riskA.CheckOrder(MakeReq(0.1, 301.0), ea2);
+   bool b2 = riskB.CheckOrder(MakeReq(0.1, 301.0), eb2);
+   MKS_ASSERT_TRUE(a1 == b1, "duas instâncias: mesma decisão em SL=299");
+   MKS_ASSERT_TRUE(a2 == b2, "duas instâncias: mesma decisão em SL=301");
+   MKS_ASSERT_FALSE(a1, "SL=299 rejeitado (ambas)");
+   MKS_ASSERT_TRUE(a2,  "SL=301 aceito (ambas)");
+}
+
+void Test_Risk_BrickFloor_WiringFailClosed()
+{
+   CMksFixedBrickSizer sizer(3.0);
+   CMksFakeSymbol sym;
+
+   // Sizer NULL com piso ativo => Validate falha.
+   CMksRiskTradeParams p;
+   CMksRiskManager r1(p);
+   r1.SetSlFloorSource(NULL, GetPointer(sym), 1);
+   MksError e1;
+   MKS_ASSERT_FALSE(r1.Validate(e1), "piso ativo sem brickSizer => inválido");
+   MKS_ASSERT_EQ_INT((int)MKS_ERR_RISK_INVALID_PARAM, (int)e1.code, "code=INVALID_PARAM");
+
+   // Symbol NULL com piso ativo => Validate falha.
+   CMksRiskManager r2(p);
+   r2.SetSlFloorSource(GetPointer(sizer), NULL, 1);
+   MksError e2;
+   MKS_ASSERT_FALSE(r2.Validate(e2), "piso ativo sem symbol => inválido");
+
+   // minBricks negativo => Validate falha.
+   CMksRiskManager r3(p);
+   r3.SetSlFloorSource(GetPointer(sizer), GetPointer(sym), -1);
+   MksError e3;
+   MKS_ASSERT_FALSE(r3.Validate(e3), "minBricks<0 => inválido");
+}
+
+void Test_Risk_BrickFloor_BeltMaxWins()
+{
+   // Belt absoluto (minSlPoints=500) > floor de brick (300) => efetivo 500.
+   CMksFixedBrickSizer sizer(3.0);
+   CMksFakeSymbol sym;
+   CMksRiskTradeParams p;
+   p.minSlPoints = 500.0; // belt
+   CMksRiskManager risk(p);
+   risk.SetSlFloorSource(GetPointer(sizer), GetPointer(sym), 1); // floor de brick 300
+
+   MksError e1;
+   MKS_ASSERT_FALSE(risk.CheckOrder(MakeReq(0.1, 400.0), e1),
+                    "SL=400 rejeitado (belt 500 > brick 300)");
+   MksError e2;
+   MKS_ASSERT_TRUE(risk.CheckOrder(MakeReq(0.1, 600.0), e2),
+                   "SL=600 aceito (acima do belt 500)");
+}
+
 //+------------------------------------------------------------------+
 void OnStart()
 {
@@ -1035,6 +1156,13 @@ void OnStart()
    MKS_RUN(Test_Risk_CheckOrder_SlAboveStops);
    MKS_RUN(Test_Risk_CheckOrder_MinSlZeroMeansNoCheck);
    MKS_RUN(Test_Risk_CheckOrder_SlMissingBeforeStopsCheck);
+
+   // Piso de SL ancorado em bricks (E0.3/M12)
+   MKS_RUN(Test_Risk_BrickFloor_ActiveWhenStopsLevelZero);
+   MKS_RUN(Test_Risk_BrickFloor_ImmuneToStopsLevel);
+   MKS_RUN(Test_Risk_BrickFloor_DeterministicCrossInstance);
+   MKS_RUN(Test_Risk_BrickFloor_WiringFailClosed);
+   MKS_RUN(Test_Risk_BrickFloor_BeltMaxWins);
 
    MKS_RUN(Test_Risk_CheckOrder_TpDefaultNotRequired);
    MKS_RUN(Test_Risk_CheckOrder_TpRequiredAndMissing);

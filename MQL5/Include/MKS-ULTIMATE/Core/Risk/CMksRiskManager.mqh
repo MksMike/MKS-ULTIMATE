@@ -28,6 +28,8 @@
 #include <MKS-ULTIMATE/Core/Types/Error.mqh>
 #include <MKS-ULTIMATE/Core/Interfaces/IPositionSizer.mqh>
 #include <MKS-ULTIMATE/Core/Interfaces/IPositionBook.mqh>
+#include <MKS-ULTIMATE/Core/Interfaces/IBrickSizer.mqh>
+#include <MKS-ULTIMATE/Core/Interfaces/ISymbol.mqh>
 #include <MKS-ULTIMATE/Core/Account/CMksAccountSnapshot.mqh>
 #include <MKS-ULTIMATE/Core/Interfaces/ILogger.mqh>
 
@@ -40,13 +42,18 @@
 //            trailing/manage e nem sempre tem valor fixo na entrada.
 // maxLotsPerTrade: 0 = sem limite. Quando >0, qualquer req.lots acima
 //                  é rejeitada antes mesmo de o sizer ser consultado.
-// minSlPoints:     0.0 = sem checagem. Quando >0, rejeita req.slPoints
-//                  abaixo desse mínimo (em pontos do símbolo). O
-//                  composition root o popula com ISymbol.StopsLevel(),
-//                  de modo que backtest e live rejeitem o MESMO SL
-//                  muito-próximo — em vez de o live levar INVALID_STOPS
-//                  (10016) e o backtest preencher a mesma ordem (eixo 2).
-//                  Ver auditoria 2026-06-02 / ROADMAP-CORE-HARDENING E1.1.
+// minSlPoints:     belt ABSOLUTO opcional do piso de SL, em pontos do
+//                  símbolo (0.0 = sem belt). É apenas UM dos termos do
+//                  piso efetivo: o piso real é
+//                  max(minSlPoints, minSlBricks·brickSizePts), computado
+//                  em EffectiveMinSlPoints() a partir da fonte injetada
+//                  via SetSlFloorSource (E0.3/M12). O termo ancorado em
+//                  bricks é o primário — spread-free e SEMPRE > 0 (mata o
+//                  NO-OP do M12 em que StopsLevel=0 desligava o gate).
+//                  StopsLevel/FreezeLevel NÃO entram no número de runtime
+//                  (evita divergência live/tester); StopsLevel entra só
+//                  como fail-fast de anexação no composition root.
+//                  Ver ROADMAP-CORE-HARDENING E1.1 + auditoria 2026-07-19.
 struct CMksRiskTradeParams
 {
    bool   requireSl;
@@ -126,6 +133,21 @@ private:
    CMksAccountSnapshot   *m_snapshot;
    ILogger               *m_logger;
 
+   // E0.3 (M12): fonte do piso de SL ancorado em bricks. Injetada via
+   // SetSlFloorSource após a construção (não explode os 3 construtores).
+   IBrickSizer           *m_brickSizer;       // sizer do brick (fixed: constante)
+   ISymbol               *m_slSymbol;          // p/ converter price units → pontos
+   int                    m_minSlBricks;       // piso em bricks; 0 = sem piso de brick
+   double                 m_brickFloorCached;  // minSlBricks·brickSizePts, cacheado
+
+   // Piso de SL efetivo em pontos: o maior entre o belt absoluto
+   // (m_params.minSlPoints) e o piso ancorado em bricks. Função pura de
+   // config — idêntico em live/tester/replay (paridade da decisão).
+   double EffectiveMinSlPoints() const
+   {
+      return MathMax(m_params.minSlPoints, m_brickFloorCached);
+   }
+
    void LogRejection(const string &reason,
                      const MksOrderRequest &req,
                      const MksError &err)
@@ -157,6 +179,10 @@ public:
       m_book     = NULL;
       m_snapshot = NULL;
       m_logger   = logger;
+      m_brickSizer       = NULL;
+      m_slSymbol         = NULL;
+      m_minSlBricks      = 0;
+      m_brickFloorCached = 0.0;
       // m_stratParams, m_acctParams via default (sem limites).
    }
 
@@ -173,6 +199,10 @@ public:
       m_book        = book;
       m_snapshot    = NULL;
       m_logger      = logger;
+      m_brickSizer       = NULL;
+      m_slSymbol         = NULL;
+      m_minSlBricks      = 0;
+      m_brickFloorCached = 0.0;
    }
 
    // Construtor completo com camada "Por conta" (slice 6.3).
@@ -193,6 +223,30 @@ public:
       m_book        = book;
       m_snapshot    = snapshot;
       m_logger      = logger;
+      m_brickSizer       = NULL;
+      m_slSymbol         = NULL;
+      m_minSlBricks      = 0;
+      m_brickFloorCached = 0.0;
+   }
+
+   // E0.3 (M12): injeta a fonte do piso de SL ancorado em bricks. Chamado
+   // pelo composition root APÓS construir (não explode os 3 construtores;
+   // testes atuais ficam intactos). Para sizer CONSTANTE (FixedBrickSizer,
+   // IsReady sempre true) computa e cacheia o piso UMA vez:
+   //   minBricks · (SizePoints/Point)   — SizePoints é em unidades de PREÇO
+   //   (IBrickSizer); dividir por Point() dá pontos, a mesma unidade de
+   //   req.slPoints. Piso > 0 => o gate fica SEMPRE ativo => o NO-OP do
+   //   M12 (StopsLevel=0 desligava o gate) é estruturalmente impossível.
+   // Sizer dinâmico (ATR) precisaria recomputar por ordem — fora deste
+   // escopo (ATR é irreplayável em paridade, bloqueado atrás do M17).
+   void SetSlFloorSource(IBrickSizer *bs, ISymbol *sym, const int minBricks)
+   {
+      m_brickSizer       = bs;
+      m_slSymbol         = sym;
+      m_minSlBricks      = minBricks;
+      m_brickFloorCached = 0.0;
+      if(bs != NULL && sym != NULL && minBricks > 0 && sym.Point() > 0.0)
+         m_brickFloorCached = minBricks * (bs.SizePoints() / sym.Point());
    }
 
    bool Validate(MksError &err) const
@@ -210,6 +264,21 @@ public:
          MKS_SET_ERROR(err, MKS_ERR_RISK_INVALID_PARAM,
                        "minSlPoints < 0",
                        StringFormat("minSlPoints=%.4f", m_params.minSlPoints));
+         return false;
+      }
+      // Piso de SL em bricks (E0.3): sinal válido + wiring fail-closed.
+      if(m_minSlBricks < 0)
+      {
+         MKS_SET_ERROR(err, MKS_ERR_RISK_INVALID_PARAM,
+                       "minSlBricks < 0",
+                       StringFormat("minSlBricks=%d", m_minSlBricks));
+         return false;
+      }
+      if(m_minSlBricks > 0 && (m_brickSizer == NULL || m_slSymbol == NULL))
+      {
+         MKS_SET_ERROR(err, MKS_ERR_RISK_INVALID_PARAM,
+                       "piso de SL em bricks ativo sem brickSizer/symbol injetado",
+                       "");
          return false;
       }
       if(m_stratParams.maxOpenPositions < 0)
@@ -299,19 +368,23 @@ public:
          return false;
       }
 
-      // 1.5 SL abaixo do stops level do símbolo (E1.1 — auditoria 2026-06-02).
+      // 1.5 SL abaixo do piso mínimo (E1.1 + E0.3/M12).
       // Gate SIMÉTRICO backtest/live: evita que o live receba INVALID_STOPS
       // (10016) enquanto o backtest preencheria a mesma ordem (divergência
-      // eixo 2). minSlPoints=0 (default) desliga a checagem. O caso "sem SL"
-      // (slPoints<=0) é tratado em (1); aqui só comparamos SL presente.
-      if(m_params.minSlPoints > 0.0 &&
+      // eixo 2). O piso efetivo = max(belt em pontos, minSlBricks·brickSize)
+      // — função pura de config, idêntica nos dois ambientes. Com piso de
+      // brick >= 1 o gate fica SEMPRE ativo (mata o NO-OP do M12). O caso
+      // "sem SL" (slPoints<=0) é tratado em (1); aqui só comparamos SL
+      // presente. minSlEff=0 (nenhum piso configurado) desliga a checagem.
+      double minSlEff = EffectiveMinSlPoints();
+      if(minSlEff > 0.0 &&
          req.slPoints > 0.0 &&
-         req.slPoints < m_params.minSlPoints)
+         req.slPoints < minSlEff)
       {
          MKS_SET_ERROR(err, MKS_ERR_RISK_REJECTED_SL_BELOW_STOPS,
-                       "SL abaixo do stops level mínimo do símbolo",
+                       "SL abaixo do piso mínimo de SL",
                        StringFormat("slPoints=%.4f minSlPoints=%.4f",
-                                    req.slPoints, m_params.minSlPoints));
+                                    req.slPoints, minSlEff));
          LogRejection("sl_below_stops_level", req, err);
          return false;
       }

@@ -462,6 +462,50 @@ void Test_AutoTriggerDeterminism()
 }
 
 //+------------------------------------------------------------------+
+//| Backstop de piso de SL (E0.3/M12): o sim rejeita o SL que hoje    |
+//| preenche — regressão do "sim mente" (CMksSimulatedBroker.mqh:299).|
+//+------------------------------------------------------------------+
+void Test_SlFloorBackstopRejectsBelow()
+{
+   CMksFakeSymbol sym;
+   CMksCostModel cm;
+   CMksSimulatedBroker b(GetPointer(sym), GetPointer(cm), 300.0); // piso 300
+   b.OnTick(MakeTick(2000.0, 2000.10));
+
+   MksExecutionResult r = b.Send(MakeRequest(MKS_ORDER_BUY, 0.1, 250.0));
+   MKS_ASSERT_EQ_INT((int)MKS_EXEC_REJECTED, (int)r.status,
+                     "SL=250 < piso 300: REJECTED (antes preenchia)");
+   MKS_ASSERT_EQ_INT((int)MKS_ERR_RISK_REJECTED_SL_BELOW_STOPS, r.brokerRetcode,
+                     "mesmo código 410 do gate (registro idêntico bt/live)");
+   MKS_ASSERT_EQ_INT(0, b.OpenPositionsCount(), "nenhuma posição criada");
+}
+
+void Test_SlFloorBackstopAcceptsAbove()
+{
+   CMksFakeSymbol sym;
+   CMksCostModel cm;
+   CMksSimulatedBroker b(GetPointer(sym), GetPointer(cm), 300.0);
+   b.OnTick(MakeTick(2000.0, 2000.10));
+
+   MksExecutionResult r = b.Send(MakeRequest(MKS_ORDER_BUY, 0.1, 350.0));
+   MKS_ASSERT_EQ_INT((int)MKS_EXEC_FILLED, (int)r.status, "SL=350 > piso 300: FILLED");
+   MKS_ASSERT_EQ_INT(1, b.OpenPositionsCount(), "posição criada");
+}
+
+void Test_SlFloorBackstopOffByDefault()
+{
+   // Default minSlPoints=0 preserva os sites de teste existentes.
+   CMksFakeSymbol sym;
+   CMksCostModel cm;
+   CMksSimulatedBroker b(GetPointer(sym), GetPointer(cm)); // sem 3o arg
+   b.OnTick(MakeTick(2000.0, 2000.10));
+
+   MksExecutionResult r = b.Send(MakeRequest(MKS_ORDER_BUY, 0.1, 5.0));
+   MKS_ASSERT_EQ_INT((int)MKS_EXEC_FILLED, (int)r.status,
+                     "backstop off (default): SL=5 preenche como antes");
+}
+
+//+------------------------------------------------------------------+
 void OnStart()
 {
    Print("=== Test_CMksSimulatedBroker ===");
@@ -484,6 +528,10 @@ void OnStart()
    MKS_RUN(Test_AutoTriggerStaysOpenWhenNoHit);
    MKS_RUN(Test_AutoTriggerHalfSpreadBidProxy);
    MKS_RUN(Test_AutoTriggerDeterminism);
+
+   MKS_RUN(Test_SlFloorBackstopRejectsBelow);
+   MKS_RUN(Test_SlFloorBackstopAcceptsAbove);
+   MKS_RUN(Test_SlFloorBackstopOffByDefault);
 
    g_mksTestRunner.Summary();
 }
