@@ -111,6 +111,16 @@ function Invoke-Compile([string]$mq5File) {
     Remove-Item -LiteralPath $logFile -Force -ErrorAction SilentlyContinue
   }
 
+  $name = Split-Path $mq5File -Leaf
+
+  # Log vazio/ausente = MetaEditor nao rodou; NAO reportar OK (M23,
+  # auditoria 2026-07-19). Um compile real sempre escreve a linha de
+  # resultado no log.
+  if ([string]::IsNullOrWhiteSpace($output)) {
+    Write-Host "  ? $name — SEM CONFIRMACAO (log vazio; MetaEditor nao rodou?)" -ForegroundColor Red
+    return
+  }
+
   $errors = 0
   $warnings = 0
   $issueLines = @()
@@ -121,7 +131,6 @@ function Invoke-Compile([string]$mq5File) {
     }
   }
 
-  $name = Split-Path $mq5File -Leaf
   if ($errors -gt 0) {
     Write-Host "  X $name — $errors erro(s), $warnings warning(s)" -ForegroundColor Red
     foreach ($l in $issueLines) { Write-Host "    $l" -ForegroundColor DarkRed }

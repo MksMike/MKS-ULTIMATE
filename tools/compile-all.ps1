@@ -124,9 +124,11 @@ function Invoke-Compile([string]$relPath) {
   $procArgs = @("/compile:`"$relPath`"", "/log:`"$absLog`"")
 
   $sw = [System.Diagnostics.Stopwatch]::StartNew()
+  $exitCode = $null
   Push-Location $TerminalRoot
   try {
-    Start-Process -FilePath $Editor -ArgumentList $procArgs -Wait -WindowStyle Hidden | Out-Null
+    $proc = Start-Process -FilePath $Editor -ArgumentList $procArgs -Wait -WindowStyle Hidden -PassThru
+    $exitCode = $proc.ExitCode
   } finally {
     Pop-Location
   }
@@ -140,6 +142,14 @@ function Invoke-Compile([string]$relPath) {
     }
     Remove-Item -LiteralPath $absLog -Force -ErrorAction SilentlyContinue
   }
+
+  # Um compile real do MetaEditor SEMPRE escreve ao menos a linha de
+  # resultado ("Result: N errors, M warnings ...") no log. Log
+  # vazio/ausente = o MetaEditor nao rodou (nao encontrado, crash,
+  # arquivo travado, GUI concorrente): NAO e sucesso. Tratar como
+  # "unknown" -> falha, nunca como 0/0 OK (achado M23, auditoria
+  # 2026-07-19: falso-OK com log vazio).
+  $hadLog = -not [string]::IsNullOrWhiteSpace($output)
 
   $errors   = 0
   $warnings = 0
@@ -156,6 +166,8 @@ function Invoke-Compile([string]$relPath) {
     warnings = $warnings
     issues   = $issues
     elapsed  = $sw.ElapsedMilliseconds
+    unknown  = (-not $hadLog)
+    exitCode = $exitCode
   }
 }
 
@@ -168,6 +180,7 @@ $totalErrors   = 0
 $totalWarnings = 0
 $failedFiles   = @()
 $warnedFiles   = @()
+$unknownFiles  = @()
 $totalElapsed  = 0
 
 foreach ($f in $allFiles) {
@@ -176,7 +189,10 @@ foreach ($f in $allFiles) {
   $totalErrors   += $r.errors
   $totalWarnings += $r.warnings
 
-  if ($r.errors -gt 0) {
+  if ($r.unknown) {
+    $unknownFiles += $f.name
+    Write-Fail ("{0,-50} SEM CONFIRMACAO — log vazio/ausente (exit={1}); MetaEditor nao rodou?" -f $f.name, $r.exitCode)
+  } elseif ($r.errors -gt 0) {
     $failedFiles += $f.name
     Write-Fail ("{0,-50} {1} erro(s), {2} warning(s), {3}ms" -f $f.name, $r.errors, $r.warnings, $r.elapsed)
     if (-not $Quiet) {
@@ -204,8 +220,17 @@ Write-Info "arquivos compilados: $($allFiles.Count)"
 Write-Info "tempo total:         $totalSec s"
 Write-Info "erros totais:        $totalErrors"
 Write-Info "warnings totais:     $totalWarnings"
+Write-Info "sem confirmacao:     $($unknownFiles.Count)"
 Write-Host ""
 
+# Sem confirmacao (log vazio) e falha dura: preferimos gritar "nao sei"
+# a mentir "OK". Precede a checagem de erros — exit 1 tambem aqui.
+if ($unknownFiles.Count -gt 0) {
+  Write-Fail "FALHA — $($unknownFiles.Count) arquivo(s) SEM CONFIRMACAO de compile (log vazio/ausente):"
+  foreach ($n in $unknownFiles) { Write-Host "        $n" -ForegroundColor DarkRed }
+  Write-Info "Verifique o path do MetaEditor (-Editor) e se a GUI nao esta compilando o mesmo arquivo."
+  exit 1
+}
 if ($totalErrors -gt 0) {
   Write-Fail "FALHA — $($failedFiles.Count) arquivo(s) com erro:"
   foreach ($n in $failedFiles) { Write-Host "        $n" -ForegroundColor DarkRed }
