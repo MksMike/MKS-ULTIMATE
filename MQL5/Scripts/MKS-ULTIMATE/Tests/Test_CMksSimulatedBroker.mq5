@@ -315,6 +315,7 @@ void Test_Determinism()
 void Test_AutoTriggerSlBuy()
 {
    CMksFakeSymbol sym;
+   sym.SetPoint(1.0); // testes de auto-trigger usam preços inteiros (point=1.0)
    CMksCostModel cm; // sem custos: bidProxy = mid
    CMksSimulatedBroker b(GetPointer(sym), GetPointer(cm));
    b.OnTick(MakeTick(2000.0, 2000.0, 1000));
@@ -356,6 +357,7 @@ void Test_AutoTriggerSlBuy()
 void Test_AutoTriggerTpSell()
 {
    CMksFakeSymbol sym;
+   sym.SetPoint(1.0); // preços inteiros (point=1.0)
    CMksCostModel cm;
    CMksSimulatedBroker b(GetPointer(sym), GetPointer(cm));
    b.OnTick(MakeTick(2000.0, 2000.0, 1000));
@@ -380,6 +382,7 @@ void Test_AutoTriggerTpSell()
 void Test_AutoTriggerStaysOpenWhenNoHit()
 {
    CMksFakeSymbol sym;
+   sym.SetPoint(1.0); // preços inteiros (point=1.0)
    CMksCostModel cm;
    CMksSimulatedBroker b(GetPointer(sym), GetPointer(cm));
    b.OnTick(MakeTick(2000.0, 2000.0, 1000));
@@ -401,6 +404,7 @@ void Test_AutoTriggerStaysOpenWhenNoHit()
 void Test_AutoTriggerHalfSpreadBidProxy()
 {
    CMksFakeSymbol sym;
+   sym.SetPoint(1.0); // preços inteiros (point=1.0)
    // Spread=10pts. halfSpread=5pts. bidProxy = mid - 5pts.
    CMksCostModel cm(10.0, 0.0, 0.0);
    CMksSimulatedBroker b(GetPointer(sym), GetPointer(cm));
@@ -428,6 +432,7 @@ void Test_AutoTriggerHalfSpreadBidProxy()
 void Test_AutoTriggerDeterminism()
 {
    CMksFakeSymbol sym;
+   sym.SetPoint(1.0); // preços inteiros (point=1.0)
    CMksCostModel cm(2.0, 1.0, 0.0);
    CMksSimulatedBroker b1(GetPointer(sym), GetPointer(cm));
    CMksSimulatedBroker b2(GetPointer(sym), GetPointer(cm));
