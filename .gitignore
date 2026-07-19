@@ -16,6 +16,11 @@ $RECYCLE.BIN/
 !.vscode/extensions.json
 !.vscode/tasks.json
 
+# Claude Code — settings.json (allowlist compartilhada) fica versionado;
+# settings.local.json é por-máquina (paths de %TEMP%, permissões locais)
+# e não deve ser trackeado (M25, auditoria 2026-07-19).
+.claude/settings.local.json
+
 # Outras IDEs
 .idea/
 

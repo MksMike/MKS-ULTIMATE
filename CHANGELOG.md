@@ -6,6 +6,9 @@ O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/) e es
 
 ## [Não lançado]
 
+### Changed
+- **E0.5 (slice) — `.claude/settings.local.json` deixa de ser versionado (achado M25 da auditoria 2026-07-19).** O arquivo acumula permissões por-máquina (paths de `%TEMP%`) e aparecia como working-tree modificado toda sessão, nas duas máquinas. `git rm --cached` + linha no `.gitignore`; a allowlist compartilhada (`settings.json`) segue versionada.
+
 ### Fixed
 - **E0.4 (slice) — compile tools deixam de reportar falso-OK com log vazio (achado M23 da auditoria 2026-07-19).** `tools/compile-all.ps1` e `tools/watch-compile.ps1` contavam 0 erros/0 warnings quando o MetaEditor não rodava (não encontrado, crash, GUI concorrente travando o arquivo) e o log saía vazio → reportavam "OK"/"TODOS COMPILAM LIMPOS" (exit 0). É a mesma classe do M9: ferramenta de confiança que dá falsa confiança. Agora log vazio/ausente é tratado como **"SEM CONFIRMAÇÃO" → falha** (compile-all: linha própria no summary + exit 1; watcher: linha `?` vermelha), nunca como sucesso. `compile-all` passou a capturar o exit code do MetaEditor (`-PassThru`) para diagnóstico. Um compile real sempre escreve a linha de resultado no log — a ausência dela é o sinal.
   - `tools/compile-all.ps1`, `tools/watch-compile.ps1` — flag `unknown`/log-vazio; verificado rodando o próprio compile-all (43 arquivos, tree limpa).
