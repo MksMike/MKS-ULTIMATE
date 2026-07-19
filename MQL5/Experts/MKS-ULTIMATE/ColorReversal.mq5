@@ -19,6 +19,7 @@
 //|                   Core/RenkoBuilder/CMksFixedBrickSizer.mqh,
 //|                   Core/Data/CMksBrickFileWriter.mqh,
 //|                   Core/Data/CMksBrickWriterSink.mqh,
+//|                   Core/Data/TickBatchCursor.mqh,
 //|                   Core/Output/CMksCustomSymbolSink.mqh,
 //|                   Core/Output/CMksAuditLogSink.mqh,
 //|                   Core/Output/CMksMultiSink.mqh,
@@ -43,6 +44,7 @@
 #include <MKS-ULTIMATE/Core/RenkoBuilder/CMksFixedBrickSizer.mqh>
 #include <MKS-ULTIMATE/Core/Data/CMksBrickFileWriter.mqh>
 #include <MKS-ULTIMATE/Core/Data/CMksBrickWriterSink.mqh>
+#include <MKS-ULTIMATE/Core/Data/TickBatchCursor.mqh>
 #include <MKS-ULTIMATE/Core/Output/CMksCustomSymbolSink.mqh>
 #include <MKS-ULTIMATE/Core/Output/CMksAuditLogSink.mqh>
 #include <MKS-ULTIMATE/Core/Output/CMksChartPainter.mqh>
@@ -131,7 +133,7 @@ string                g_filePath       = "";
 string                g_logPath        = "";
 string                g_auditPath      = "";
 bool                  g_streamHalted   = false;
-long                  g_lastSeenMsc    = 0;
+MksTickBatchCursor    g_tickCursor;              // dedup por contagem no boundary (H5)
 bool                  g_isTesting      = false;  // MQL_TESTER detection (ADR-022 §UX precedent)
 
 // Checkpoint periódico de observabilidade: a cada 60s de wall-clock,
@@ -720,7 +722,7 @@ int OnInit()
    MqlTick anchor;
    if(SymbolInfoTick(g_symbol, anchor))
    {
-      g_lastSeenMsc = anchor.time_msc;
+      g_tickCursor.ResetAfter(anchor.time_msc);
       g_logger.Info("ColorReversal", "anchor captured",
          StringFormat("\"anchorMsc\":%I64d,\"bid\":%.5f,\"ask\":%.5f",
                       anchor.time_msc, anchor.bid, anchor.ask));
@@ -852,17 +854,19 @@ void OnTick()
    if(g_streamHalted) return;
 
    MqlTick ticks[];
-   int n = CopyTicks(g_symbol, ticks, COPY_TICKS_ALL, g_lastSeenMsc, 0);
+   int n = CopyTicks(g_symbol, ticks, COPY_TICKS_ALL, g_tickCursor.FromMsc(), 0);
    if(n <= 0) return;
 
+   // Dedup por contagem na fronteira (MksTickBatchCursor, H5): ticks
+   // legítimos do mesmo ms são preservados; só repetições são puladas.
+   g_tickCursor.BeginBatch();
    for(int i = 0; i < n; i++)
    {
       const MqlTick mt = ticks[i];
-      if(mt.time_msc <= g_lastSeenMsc) continue;  // dedup
-      if(mt.bid <= 0.0 && mt.ask <= 0.0) continue; // lixo
+      if(!g_tickCursor.Admit(mt.time_msc)) continue; // fronteira já vista
+      if(mt.bid <= 0.0 && mt.ask <= 0.0) continue;   // lixo (contado como visto)
       MksTick t = ToMksTick(mt);
       IngestOne(t);
-      g_lastSeenMsc = mt.time_msc;
    }
 
    // Checkpoint de observabilidade a cada 60s (só fora do tester — no

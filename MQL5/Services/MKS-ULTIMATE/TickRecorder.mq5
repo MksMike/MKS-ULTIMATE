@@ -8,6 +8,7 @@
 //|                   tolerar crash, single-symbol. Materializa
 //|                   ADR-024 §regra 2 e §regra 3.
 //| @depends_on     : Core/Data/CMksTickFileWriter.mqh,
+//|                   Core/Data/TickBatchCursor.mqh,
 //|                   Core/Symbol/CMksMt5Symbol.mqh,
 //|                   Core/Account/CMksMt5Account.mqh,
 //|                   Core/Log/CMksLogger.mqh,
@@ -19,6 +20,7 @@
 #property version   "1.00"
 
 #include <MKS-ULTIMATE/Core/Data/CMksTickFileWriter.mqh>
+#include <MKS-ULTIMATE/Core/Data/TickBatchCursor.mqh>
 #include <MKS-ULTIMATE/Core/Symbol/CMksMt5Symbol.mqh>
 #include <MKS-ULTIMATE/Core/Account/CMksMt5Account.mqh>
 #include <MKS-ULTIMATE/Core/Log/CMksLogger.mqh>
@@ -49,13 +51,13 @@ double  g_contractSize;
 string  g_logPath = "";
 
 ulong   g_seq = 0;
-long    g_lastSeenMsc = 0;
+MksTickBatchCursor g_tickCursor;  // dedup por contagem no boundary (H5)
 int     g_currentUtcDay = -1;
 string  g_currentFilePath = "";
 
 long    g_ticksWritten      = 0;
-long    g_ticksSkippedDup   = 0;  // dedup por timeMsc <= último
-long    g_ticksSkippedBad   = 0;  // dedup por preço inválido (bid<=0)
+long    g_ticksSkippedDup   = 0;  // repetições de fronteira puladas pelo cursor
+long    g_ticksSkippedBad   = 0;  // descarte por preço inválido (bid<=0 && ask<=0)
 int     g_ticksSinceFlush   = 0;
 ulong   g_lastCheckpointMs  = 0;
 
@@ -181,8 +183,11 @@ void Checkpoint()
 }
 
 //+------------------------------------------------------------------+
-//| Lê ticks acumulados desde g_lastSeenMsc e grava no writer.        |
-//| Usa CopyTicks(COPY_TICKS_ALL, fromMsc, count). Dedup por timeMsc. |
+//| Lê ticks acumulados desde a fronteira do cursor e grava no writer.|
+//| Usa CopyTicks(COPY_TICKS_ALL, fromMsc, count). Dedup por CONTAGEM |
+//| na fronteira de ms (MksTickBatchCursor, H5): a captura é CRUA —   |
+//| ticks legítimos do mesmo time_msc são preservados (ADR-012 §1);   |
+//| só as repetições da fronteira do batch anterior são puladas.      |
 //+------------------------------------------------------------------+
 void ProcessNewTicks()
 {
@@ -190,16 +195,15 @@ void ProcessNewTicks()
 
    MqlTick ticks[];
    // count=0 → MT5 escolhe limite default (4096). fromMsc=0 vira "todos
-   // os ticks disponíveis"; usamos g_lastSeenMsc para janela incremental.
-   long fromMsc = (g_lastSeenMsc > 0) ? g_lastSeenMsc : 0;
-   int n = CopyTicks(g_symbol, ticks, COPY_TICKS_ALL, fromMsc, 0);
+   // os ticks disponíveis"; o cursor mantém a janela incremental.
+   int n = CopyTicks(g_symbol, ticks, COPY_TICKS_ALL, g_tickCursor.FromMsc(), 0);
    if(n <= 0) return;
 
    MksError err;
+   g_tickCursor.BeginBatch();
    for(int i = 0; i < n; i++)
    {
-      // Dedup: CopyTicks pode retornar o tick com timeMsc==fromMsc.
-      if(ticks[i].time_msc <= g_lastSeenMsc)
+      if(!g_tickCursor.Admit(ticks[i].time_msc))
       {
          g_ticksSkippedDup++;
          continue;
@@ -210,12 +214,11 @@ void ProcessNewTicks()
       // estrutural — provavelmente o slot do CopyTicks veio vazio).
       // Diferente do builder, AQUI o tick pode legitimamente faltar
       // se o broker entregou apenas um lado (TICK_FLAG_BID ou _ASK).
-      // Por isso preservamos tick sem dedup pelos flags — só descartamos
-      // se ambos forem 0 simultaneamente.
+      // Só descartamos se ambos forem 0 simultaneamente — e o cursor
+      // já o contou como visto (não volta no próximo batch).
       if(ticks[i].bid <= 0.0 && ticks[i].ask <= 0.0)
       {
          g_ticksSkippedBad++;
-         g_lastSeenMsc = ticks[i].time_msc;
          continue;
       }
 
@@ -227,7 +230,6 @@ void ProcessNewTicks()
                          t.seq, MksJsonEscape(err.ToString())));
          return;
       }
-      g_lastSeenMsc = ticks[i].time_msc;
       g_ticksWritten++;
       g_ticksSinceFlush++;
    }
@@ -323,7 +325,7 @@ void OnStart()
    // Evita reprocessar histórico via CopyTicks(fromMsc=0).
    MqlTick anchor;
    if(SymbolInfoTick(g_symbol, anchor))
-      g_lastSeenMsc = anchor.time_msc;
+      g_tickCursor.ResetAfter(anchor.time_msc);
 
    g_lastCheckpointMs = GetTickCount();
 

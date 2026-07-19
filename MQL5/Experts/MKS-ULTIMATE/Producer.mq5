@@ -17,6 +17,7 @@
 //|                   Core/RenkoBuilder/CMksFixedBrickSizer.mqh,
 //|                   Core/Data/CMksBrickFileWriter.mqh,
 //|                   Core/Data/CMksBrickWriterSink.mqh,
+//|                   Core/Data/TickBatchCursor.mqh,
 //|                   Core/Output/CMksCustomSymbolSink.mqh,
 //|                   Core/Output/CMksMultiSink.mqh,
 //|                   Core/Log/CMksLogger.mqh,
@@ -41,6 +42,7 @@
 #include <MKS-ULTIMATE/Core/Output/CMksProgressPanel.mqh>
 #include <MKS-ULTIMATE/Core/Output/CMksAuditLogSink.mqh>
 #include <MKS-ULTIMATE/Core/Data/CMksTickFileWriter.mqh>
+#include <MKS-ULTIMATE/Core/Data/TickBatchCursor.mqh>
 #include <MKS-ULTIMATE/Core/Log/CMksLogger.mqh>
 #include <MKS-ULTIMATE/Core/Symbol/CMksMt5Symbol.mqh>
 #include <MKS-ULTIMATE/Core/Account/CMksMt5Account.mqh>
@@ -156,13 +158,13 @@ ulong                g_lastSeqLive = 0;
 uint                 g_lastTimerMs = 0;
 double               g_ticksPerSec = 0.0;
 
-// Janela incremental para CopyTicks no modo live. Mesmo padrão do
-// TickRecorder — usar a mesma API garante que Producer veja o feed
-// completo (não amostrado), permitindo paridade canônica ADR-024 §7c
-// entre live.mksbk e replay.mksbk via fc/b.
-// Inicializado no FinishInitAndGoLive com timeMsc do último tick
-// conhecido (anchor); a partir daí cada OnTick avança a janela.
-long                 g_lastSeenMsc = 0;
+// Janela incremental para CopyTicks no modo live. Mesmo cursor do
+// TickRecorder/ColorReversal — o mesmo critério de dedup nos três,
+// por construção (anti-eixo-2), garante que Producer veja o feed
+// completo (não amostrado nem decimado — H5), permitindo paridade
+// canônica ADR-024 §7c entre live.mksbk e replay.mksbk via fc/b.
+// Ancorado no FinishInitAndGoLive (ResetAfter); cada OnTick avança.
+MksTickBatchCursor   g_tickCursor;
 
 //+------------------------------------------------------------------+
 //| Formata label de tamanho fixo: "3", "1.50".                       |
@@ -849,10 +851,10 @@ void FinishInitAndGoLive()
    // CopyTicksRange; com fillDays=0, queremos começar do "agora".
    MqlTick anchor;
    if(SymbolInfoTick(g_symbol, anchor))
-      g_lastSeenMsc = anchor.time_msc;
+      g_tickCursor.ResetAfter(anchor.time_msc);
 
    g_logger.Info("Producer", "ready, processing live ticks",
-      StringFormat("\"anchorMsc\":%I64d", g_lastSeenMsc));
+      StringFormat("\"anchorMsc\":%I64d", g_tickCursor.FromMsc()));
 
    // Reduz frequência do timer: live só precisa de update 1Hz para
    // ticks/sec, último brick, sync.
@@ -874,7 +876,10 @@ void FinishInitAndGoLive()
 //| triggers → mesmos bricks → paridade canônica ADR-024 §7c via      |
 //| fc/b atingível em sessão sincronizada.                            |
 //|                                                                   |
-//| Dedup por timeMsc <= lastSeen (mesmo padrão TickRecorder).         |
+//| Dedup por CONTAGEM na fronteira de ms (MksTickBatchCursor, H5):   |
+//| ticks legítimos do mesmo time_msc são preservados — só as         |
+//| repetições da fronteira do batch anterior são puladas. Mesmo      |
+//| cursor do TickRecorder/ColorReversal.                             |
 //| Filtro mínimo bid<=0 && ask<=0 (lixo estrutural de slot vazio).   |
 //+------------------------------------------------------------------+
 void OnTick()
@@ -885,28 +890,22 @@ void OnTick()
    if(g_fillRunning) return;
 
    MqlTick ticks[];
-   long fromMsc = (g_lastSeenMsc > 0) ? g_lastSeenMsc : 0;
-   int n = CopyTicks(g_symbol, ticks, COPY_TICKS_ALL, fromMsc, 0);
+   int n = CopyTicks(g_symbol, ticks, COPY_TICKS_ALL, g_tickCursor.FromMsc(), 0);
    if(n <= 0) return;
 
+   g_tickCursor.BeginBatch();
    for(int i = 0; i < n; i++)
    {
-      // Dedup: CopyTicks pode retornar o tick com timeMsc==fromMsc.
-      if(ticks[i].time_msc <= g_lastSeenMsc) continue;
+      if(!g_tickCursor.Admit(ticks[i].time_msc)) continue; // fronteira já vista
 
       // Filtro mínimo simétrico ao TickRecorder: tick com ambos
       // bid/ask <=0 é lixo estrutural (slot vazio do CopyTicks).
       // ADR-006 está no consumo do builder via IsValid(); aqui só
-      // descartamos lixo óbvio para avançar o anchor sem ingestar.
-      if(ticks[i].bid <= 0.0 && ticks[i].ask <= 0.0)
-      {
-         g_lastSeenMsc = ticks[i].time_msc;
-         continue;
-      }
+      // descartamos lixo óbvio — o cursor já o contou como visto.
+      if(ticks[i].bid <= 0.0 && ticks[i].ask <= 0.0) continue;
 
       MksTick t = ToMksTick(ticks[i]);
       IngestOne(t);
-      g_lastSeenMsc = ticks[i].time_msc;
    }
 }
 
