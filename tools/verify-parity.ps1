@@ -252,6 +252,17 @@ if ($LiveLog -ne "" -and $ReplayLog -ne "") {
   Write-Info "live   decisões = $($liveNorm.Count) linhas"
   Write-Info "replay decisões = $($replayNorm.Count) linhas"
 
+  # Passe vácuo (M18, auditoria 2026-07-19): se o padrão não casa NADA em
+  # ambos os logs, o log-diff não prova paridade — reportar "IDÊNTICOS
+  # (0 decisões)" seria falso-OK. Chave do JSON renomeada, sessão sem
+  # bricks, ou filtro desatualizado. Trata como falha, nunca sucesso.
+  if ($liveNorm.Count -eq 0 -and $replayNorm.Count -eq 0) {
+    Write-Fail "0 linhas casaram o padrão de decisão em AMBOS os logs — nada a comparar (passe vácuo)."
+    Write-Info "Pattern: $pattern"
+    Write-Info "(chave do JSON renomeada? sessão sem bricks? filtro desatualizado?)"
+    exit 2
+  }
+
   if ($liveNorm.Count -ne $replayNorm.Count) {
     Write-Fail "contagens divergem: live=$($liveNorm.Count) replay=$($replayNorm.Count)"
     exit 2
