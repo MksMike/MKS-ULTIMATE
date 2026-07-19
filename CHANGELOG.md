@@ -7,6 +7,15 @@ O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/) e es
 ## [Não lançado]
 
 ### Added
+- **E2.0 (fatia) — fundação determinística da paridade de DECISÃO (design DDR via workflow, 2026-07-19).** Início do gate central E2. Um workflow de design (3 arquiteturas → refutação adversária → síntese) estabeleceu a arquitetura **MKS Deterministic Decision Runner (DDR)** e um **reframe honesto** aprovado pelo dono: paridade de decisão bit-a-bit entre a estratégia REAL (broker real) e o replay (sim) é **estruturalmente impossível** (o SL real dispara em tick/preço que o sim não reproduz); então o E2 prova (1) paridade feed→brick live↔replay, (2) **determinismo** da camada de decisão sim↔sim/golden, e **nomeia** o gap sim↔real como risco do StressLab (eixo 3). Fica proibido em doc futuro afirmar "H4 fechado". Esta fatia entrega as peças-folha, cada uma testada em isolamento (testes antes de EA):
+  - `Core/Account/CMksSimAccount.mqh` — **novo**: `IAccount` com equity = startBalance + P&L realizado (closes/auto-closes − comissão) + MTM não-realizado das posições sim ao mid, na convenção de dinheiro do sizer (`(priceDiff/tickSize)·tickValue·lots·sinal`). Fecha o eixo 3 no runner: sem ela o breaker de conta (a camada onde o V5 quebrou) ficaria inerte (a conta fake devolve 10000 fixo). Swap OFF em v1 (decisão do dono: swap-free agora, marcado no journal; accrual fica para o E4).
+  - `Core/Position/CMksSimPositionBook.mqh` — **novo**: `IPositionBook` lastreado no `CMksSimulatedBroker`, com `IsOpen(desconhecido)=false` igual ao book REAL (não a inversão do mock, que mascararia divergência no auto-detach).
+  - `Core/Clock/CMksFeedClock.mqh` — **novo**: `IClock` cujo "agora" é o `timeMsc` do último tick admitido (análogo live do `ReplayClock`) — base do E2.4 (fronteira de dia UTC derivada do feed nos dois ambientes).
+  - `Core/Broker/CMksSimulatedBroker.mqh` — carimba `triggerTickSeq` (seq do tick que cruzou SL/TP) no `MksSimAutoCloseEvent` + enumerador `OpenPositionByIndex` (para o SimPositionBook). Sem mudança de comportamento.
+  - `Test_CMksSimAccount.mq5` (10 testes) e `Test_CMksSimPositionBook.mq5` (5 testes + FeedClock). Compilam 0/0 (44 arquivos).
+  - **Pendente nesta fatia:** `CMksDecisionJournal` + `CMksJournalingBroker` + `CMksDecisionRunner` (o helper de ordem-por-tick e o journal determinístico) — próximo sub-slice do E2.0.
+
+### Added
 - **Resgate do doc de auditoria detalhada de 25/05 antes de aposentar a branch zumbi (2026-07-19).** A branch remota `claude/check-ultimate-access-5kshn` (rodada automática de 25/05, congelada em `45c3a67`, ~82k linhas atrás de main) tinha 1 commit único: `docs/AUDITORIA-2026-05-25.md` (288 linhas, auditoria arquivo-por-arquivo) que nunca subira para main — só o resumo (`CHECKPOINT-2026-05-25-audit.md`) estava versionado. Doc resgatado para main com nota de "documento histórico" (achados já tratados via ADRs/E1/E0) + referência cruzada no índice `CHECKPOINTS.md`. Branch zumbi deletada após o resgate (nada perdido).
 
 ### Removed

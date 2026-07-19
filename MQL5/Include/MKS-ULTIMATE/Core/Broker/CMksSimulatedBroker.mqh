@@ -69,6 +69,7 @@ struct MksSimAutoCloseEvent
    double commissionClose;
    long   openTimeMsc;
    long   closeTimeMsc;
+   ulong  triggerTickSeq;          // seq (run-local) do tick que cruzou SL/TP (E2)
    ulong  dealCloseId;
    bool   hitSl;                  // true = SL; false = TP
 
@@ -82,6 +83,7 @@ struct MksSimAutoCloseEvent
       commissionClose = 0.0;
       openTimeMsc = 0;
       closeTimeMsc = 0;
+      triggerTickSeq = 0;
       dealCloseId = 0;
       hitSl = false;
    }
@@ -109,6 +111,7 @@ private:
    ulong               m_nextDealId;
    double              m_lastMid;
    long                m_lastTickTimeMsc;
+   ulong               m_lastTickSeq;    // E2: seq do tick corrente (carimba auto-close)
    bool                m_hasMid;
 
    // Fila de auto-closes pendentes (ADR-027 §7.3). Crescem em OnTick
@@ -206,6 +209,7 @@ private:
          ev.commissionClose  = commission;
          ev.openTimeMsc      = m_positions[i].openTimeMsc;
          ev.closeTimeMsc     = m_lastTickTimeMsc;
+         ev.triggerTickSeq   = m_lastTickSeq; // E2: seq do tick que cruzou
          ev.dealCloseId      = m_nextDealId++;
          ev.hitSl            = hitSl; // SL tem precedência se ambos
 
@@ -237,6 +241,7 @@ public:
       m_nextDealId       = 1;
       m_lastMid          = 0.0;
       m_lastTickTimeMsc  = 0;
+      m_lastTickSeq      = 0;
       m_hasMid           = false;
       m_autoCloseTotal   = 0;
       ArrayResize(m_positions, 0);
@@ -252,6 +257,7 @@ public:
       if(!tick.IsValid()) return;
       m_lastMid         = (tick.bid + tick.ask) / 2.0;
       m_lastTickTimeMsc = tick.timeMsc;
+      m_lastTickSeq     = tick.seq;   // E2: carimba o seq no auto-close
       m_hasMid          = true;
       CheckSlTpTriggers();
    }
@@ -401,6 +407,24 @@ public:
       if(idx < 0) return false;
       out = m_positions[idx];
       return true;
+   }
+
+   // Enumera as posições ABERTAS por índice (0..OpenPositionsCount()-1),
+   // em ordem de abertura. Usado pelo CMksSimPositionBook (IPositionBook
+   // lastreado no sim, E2) para TotalLots/PositionAt. false se o índice
+   // está fora do range no instante da chamada.
+   bool OpenPositionByIndex(const int openIndex, MksSimPosition &out) const
+   {
+      if(openIndex < 0) return false;
+      int n = ArraySize(m_positions);
+      int hits = 0;
+      for(int i = 0; i < n; i++)
+      {
+         if(!m_positions[i].isOpen) continue;
+         if(hits == openIndex) { out = m_positions[i]; return true; }
+         hits++;
+      }
+      return false;
    }
 
    double LastMid() const { return m_lastMid; }
