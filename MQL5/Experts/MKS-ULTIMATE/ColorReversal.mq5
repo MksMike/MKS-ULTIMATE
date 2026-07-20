@@ -44,6 +44,7 @@
 #include <MKS-ULTIMATE/Core/RenkoBuilder/CMksFixedBrickSizer.mqh>
 #include <MKS-ULTIMATE/Core/Data/CMksBrickFileWriter.mqh>
 #include <MKS-ULTIMATE/Core/Data/CMksBrickWriterSink.mqh>
+#include <MKS-ULTIMATE/Core/Data/CMksTickFileWriter.mqh>
 #include <MKS-ULTIMATE/Core/Data/TickBatchCursor.mqh>
 #include <MKS-ULTIMATE/Core/Output/CMksCustomSymbolSink.mqh>
 #include <MKS-ULTIMATE/Core/Output/CMksAuditLogSink.mqh>
@@ -117,6 +118,9 @@ input color  InpVizLineLoss           = clrCrimson;     // linha conectora — t
 input group "=== Histórico ==="
 input int    InpHistoricalFillDays    = 3;     // dias de bricks históricos no CS/.mksbk no live (0 = só live). Estratégia NÃO opera no histórico.
 
+input group "=== Paridade de decisão (E2.1) ==="
+input bool   InpRecordMkstick         = false; // grava o .mkstick EXATO do feed live (para replay de decisão via DecisionReplayer). Live-only; EXIGE InpHistoricalFillDays=0 (builder começa limpo).
+
 input group "=== Logging ==="
 input bool   InpPrintBricks         = false;
 input bool   InpLogToFile           = true;
@@ -133,6 +137,9 @@ ulong                 g_seq            = 0;
 string                g_filePath       = "";
 string                g_logPath        = "";
 string                g_auditPath      = "";
+string                g_tickFilePath   = "";     // .mkstick de paridade (E2.1), se InpRecordMkstick
+bool                  g_tickRecFailed  = false;  // WriteTick falhou → gravação desativada (trading segue)
+long                  g_tickRecCount   = 0;
 bool                  g_streamHalted   = false;
 MksTickBatchCursor    g_tickCursor;              // dedup por contagem no boundary (H5)
 bool                  g_isTesting      = false;  // MQL_TESTER detection (ADR-022 §UX precedent)
@@ -150,6 +157,7 @@ IClock               *g_iClock   = NULL;
 
 CMksFixedBrickSizer  *g_brickSizer  = NULL;
 CMksBrickFileWriter  *g_writer      = NULL;
+CMksTickFileWriter   *g_tickWriter  = NULL;  // .mkstick de paridade (E2.1); NULL = não gravando
 CMksBrickWriterSink  *g_brickSink   = NULL;
 CMksCustomSymbolSink *g_csSink      = NULL;
 CMksAuditLogSink     *g_auditSink   = NULL;
@@ -191,6 +199,16 @@ string BuildLogPath(const string &symbol, datetime t)
 {
    return StringFormat("MKS-ULTIMATE\\Logs\\ColorReversal_%s_%s.log",
                        symbol, FormatTimestamp(t));
+}
+
+// .mkstick de paridade (E2.1). Sufixo CR distingue do arquivo diário do
+// TickRecorder Service (<symbol>_<YYYYMMDD>.mkstick).
+string BuildTickFilePath(const string &symbol, datetime t, int attempt)
+{
+   string stamp = FormatTimestamp(t);
+   string suffix = (attempt == 0) ? "" : StringFormat("_%d", attempt + 1);
+   return StringFormat("MKS-ULTIMATE\\Ticks\\%s_CR_%s%s.mkstick",
+                       symbol, stamp, suffix);
 }
 
 string BuildAuditPath(const string &symbol, datetime t)
@@ -332,6 +350,7 @@ void Cleanup()
    if(g_snapshot    != NULL) { delete g_snapshot;    g_snapshot    = NULL; }
    if(g_book        != NULL) { delete g_book;        g_book        = NULL; }
    if(g_builder     != NULL) { delete g_builder;     g_builder     = NULL; }
+   if(g_tickWriter  != NULL) { delete g_tickWriter;  g_tickWriter  = NULL; }
    if(g_multiSink   != NULL) { delete g_multiSink;   g_multiSink   = NULL; }
    if(g_auditSink   != NULL) { delete g_auditSink;   g_auditSink   = NULL; }
    if(g_csSink      != NULL) { delete g_csSink;      g_csSink      = NULL; }
@@ -423,6 +442,21 @@ int OnInit()
       }
    }
 
+   // Paridade (E2.1): gravar o .mkstick EXATO só faz sentido com o builder
+   // começando LIMPO — senão o replay (builder fresco no DecisionReplayer)
+   // não reproduz as decisões (o estado inicial veio do warmup histórico,
+   // que NÃO está no .mkstick). Fail-fast em vez de gravar um .mkstick que
+   // parece bom e não replaya (footgun da classe M12/M20). Live-only.
+   if(InpRecordMkstick && !g_isTesting && InpHistoricalFillDays != 0)
+   {
+      Alert("MKS ColorReversal: InpRecordMkstick=true exige InpHistoricalFillDays=0 "
+            "(o .mkstick de paridade precisa do builder comecando limpo). Ajuste e reanexe.");
+      g_logger.Error("ColorReversal", "recording de paridade exige fillDays=0",
+         StringFormat("\"recordMkstick\":true,\"histDays\":%d", InpHistoricalFillDays));
+      Cleanup();
+      return INIT_PARAMETERS_INCORRECT;
+   }
+
    g_logger.Info("ColorReversal", "starting",
       StringFormat("\"magic\":%I64d,\"S\":%.4f,\"slPts\":%.2f,\"lotMode\":\"%s\","
                    "\"fixedLots\":%.4f,\"riskPct\":%.4f,"
@@ -482,6 +516,44 @@ int OnInit()
    }
    g_logger.Info("ColorReversal", "mksbk opened",
       StringFormat("\"path\":\"%s\"", MksJsonEscape(g_filePath)));
+
+   //--- 4.5 Tick recorder .mkstick de paridade (E2.1) — opt-in, live-only.
+   // Grava o feed EXATO que o builder verá, com a mesma proveniência do
+   // TickRecorder Service. Abrir e falhar = INIT_FAILED (o operador pediu
+   // a captura; trair isso em silêncio seria a falha de confiança que o
+   // projeto combate). Já garantido acima: se ligado, fillDays==0.
+   if(InpRecordMkstick && !g_isTesting)
+   {
+      FolderCreate("MKS-ULTIMATE\\Ticks");
+      g_tickWriter = new CMksTickFileWriter();
+      const int kTickAttempts = 100;
+      bool trOpened = false;
+      for(int attempt = 0; attempt < kTickAttempts; attempt++)
+      {
+         g_tickFilePath = BuildTickFilePath(g_symbol, sessionStart, attempt);
+         if(g_tickWriter.Open(g_tickFilePath, err)) { trOpened = true; break; }
+         if(err.code != MKS_ERR_DATA_FILE_EXISTS) break;
+      }
+      if(!trOpened)
+      {
+         g_logger.Error("ColorReversal", "tick writer .mkstick Open failed",
+            StringFormat("\"path\":\"%s\",\"err\":\"%s\"",
+                         MksJsonEscape(g_tickFilePath), MksJsonEscape(err.ToString())));
+         Cleanup();
+         return INIT_FAILED;
+      }
+      if(!g_tickWriter.WriteHeader(g_broker, g_account, g_symbol, g_digits,
+                                   g_iSymbol.TickSize(), g_iSymbol.Point(),
+                                   g_iSymbol.ContractSize(), err))
+      {
+         g_logger.Error("ColorReversal", "tick writer .mkstick WriteHeader failed",
+            StringFormat("\"err\":\"%s\"", MksJsonEscape(err.ToString())));
+         Cleanup();
+         return INIT_FAILED;
+      }
+      g_logger.Info("ColorReversal", "mkstick recording enabled (paridade E2.1)",
+         StringFormat("\"path\":\"%s\"", MksJsonEscape(g_tickFilePath)));
+   }
 
    //--- 5. Custom Symbol (skip em Strategy Tester) -----------------+
    if(g_isTesting)
@@ -886,6 +958,31 @@ MksTick ToMksTick(const MqlTick &mt)
 }
 
 //+------------------------------------------------------------------+
+//| Grava o tick EXATO do feed live no .mkstick de paridade (E2.1).   |
+//| BEST-EFFORT: uma falha de WriteTick desativa a gravação e loga,    |
+//| mas NUNCA para o trading — o EA de dinheiro não morre por um erro  |
+//| de I/O de captura. Só o feed LIVE passa por aqui (o fill histórico |
+//| alimenta IngestOne direto, fonte diferente que não entra no        |
+//| .mkstick — senão o replay do builder fresco não reproduziria).     |
+//+------------------------------------------------------------------+
+void RecordLiveTick(const MksTick &tick)
+{
+   if(g_tickWriter == NULL || g_tickRecFailed) return;
+   MksError err;
+   if(!g_tickWriter.WriteTick(tick, err))
+   {
+      g_tickRecFailed = true;  // desativa; trading segue
+      if(g_logger != NULL)
+         g_logger.Error("ColorReversal",
+            "WriteTick .mkstick falhou — gravação de paridade DESATIVADA (trading segue)",
+            StringFormat("\"seq\":%I64u,\"err\":\"%s\"",
+                         tick.seq, MksJsonEscape(err.ToString())));
+      return;
+   }
+   g_tickRecCount++;
+}
+
+//+------------------------------------------------------------------+
 //| Alimenta builder com um tick. Builder delega para multiSink, que   |
 //| inclui a strategy — decisões de trade saem daí.                    |
 //+------------------------------------------------------------------+
@@ -967,6 +1064,7 @@ void OnTick()
       if(!g_tickCursor.Admit(mt.time_msc)) continue; // fronteira já vista
       if(mt.bid <= 0.0 && mt.ask <= 0.0) continue;   // lixo (contado como visto)
       MksTick t = ToMksTick(mt);
+      if(g_tickWriter != NULL) RecordLiveTick(t); // .mkstick de paridade (E2.1), best-effort
       IngestOne(t);
    }
 
@@ -985,6 +1083,13 @@ void OnTick()
             if(!g_writer.Checkpoint(ckErr) && g_logger != NULL)
                g_logger.Warn("ColorReversal", "writer Checkpoint failed",
                   StringFormat("\"err\":\"%s\"", MksJsonEscape(ckErr.ToString())));
+         }
+         if(g_tickWriter != NULL && !g_tickRecFailed)
+         {
+            MksError trErr;
+            if(!g_tickWriter.Checkpoint(trErr) && g_logger != NULL)
+               g_logger.Warn("ColorReversal", "tick writer Checkpoint failed",
+                  StringFormat("\"err\":\"%s\"", MksJsonEscape(trErr.ToString())));
          }
          if(g_auditSink != NULL) g_auditSink.Flush();
       }
@@ -1037,6 +1142,25 @@ void OnDeinit(const int reason)
       g_writer.Close(err);
    }
    if(g_auditSink != NULL) g_auditSink.Close();
+
+   // Fecha o .mkstick de paridade (patcheia tickCount/times no header).
+   if(g_tickWriter != NULL)
+   {
+      MksError trErr;
+      bool ok = g_tickWriter.Close(trErr);
+      if(g_logger != NULL)
+      {
+         if(ok)
+            g_logger.Info("ColorReversal", "mkstick recording closed",
+               StringFormat("\"path\":\"%s\",\"ticksRecorded\":%I64d,\"recFailed\":%s",
+                            MksJsonEscape(g_tickFilePath), g_tickRecCount,
+                            (g_tickRecFailed ? "true" : "false")));
+         else
+            g_logger.Warn("ColorReversal", "tick writer Close failed",
+               StringFormat("\"err\":\"%s\",\"ticksRecorded\":%I64d",
+                            MksJsonEscape(trErr.ToString()), g_tickRecCount));
+      }
+   }
 
    Cleanup();
 }
