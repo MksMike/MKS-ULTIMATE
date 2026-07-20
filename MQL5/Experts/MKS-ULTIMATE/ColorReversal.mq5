@@ -30,7 +30,7 @@
 //|                   Core/Account/CMksAccountSnapshot.mqh,
 //|                   Core/Trade/CMksFixedLotSizer.mqh,
 //|                   Core/Trade/CMksPercentRiskSizer.mqh,
-//|                   Core/Clock/CMksMt5Clock.mqh,
+//|                   Core/Clock/CMksFeedClock.mqh,
 //|                   Core/Log/CMksLogger.mqh,
 //|                   Core/Symbol/CMksMt5Symbol.mqh,
 //|                   Core/Account/CMksMt5Account.mqh,
@@ -58,7 +58,7 @@
 #include <MKS-ULTIMATE/Core/Account/CMksMt5Account.mqh>
 #include <MKS-ULTIMATE/Core/Trade/CMksFixedLotSizer.mqh>
 #include <MKS-ULTIMATE/Core/Trade/CMksPercentRiskSizer.mqh>
-#include <MKS-ULTIMATE/Core/Clock/CMksMt5Clock.mqh>
+#include <MKS-ULTIMATE/Core/Clock/CMksFeedClock.mqh>
 #include <MKS-ULTIMATE/Core/Log/CMksLogger.mqh>
 #include <MKS-ULTIMATE/Core/Symbol/CMksMt5Symbol.mqh>
 #include <MKS-ULTIMATE/Core/Types/RenkoGeometry.mqh>
@@ -151,9 +151,10 @@ bool                  g_isTesting      = false;  // MQL_TESTER detection (ADR-02
 const uint            kCheckpointEveryMs = 60000;
 uint                  g_lastCheckpointMs = 0;
 
-ISymbol              *g_iSymbol  = NULL;
-IAccount             *g_iAccount = NULL;
-IClock               *g_iClock   = NULL;
+ISymbol              *g_iSymbol   = NULL;
+IAccount             *g_iAccount  = NULL;
+IClock               *g_iClock    = NULL;   // == g_feedClock (E2.4); injetado no snapshot
+CMksFeedClock        *g_feedClock = NULL;   // clock de decisão derivado do FEED (SetNow por tick)
 
 CMksFixedBrickSizer  *g_brickSizer  = NULL;
 CMksBrickFileWriter  *g_writer      = NULL;
@@ -357,7 +358,8 @@ void Cleanup()
    if(g_brickSink   != NULL) { delete g_brickSink;   g_brickSink   = NULL; }
    if(g_writer      != NULL) { delete g_writer;      g_writer      = NULL; }
    if(g_brickSizer  != NULL) { delete g_brickSizer;  g_brickSizer  = NULL; }
-   if(g_iClock      != NULL) { delete g_iClock;      g_iClock      = NULL; }
+   // g_iClock e g_feedClock apontam para o MESMO objeto (E2.4) — delete uma vez.
+   if(g_iClock      != NULL) { delete g_iClock;      g_iClock      = NULL; g_feedClock = NULL; }
    if(g_iAccount    != NULL) { delete g_iAccount;    g_iAccount    = NULL; }
    if(g_iSymbol     != NULL) { delete g_iSymbol;     g_iSymbol     = NULL; }
    if(g_logger      != NULL) { delete g_logger;      g_logger      = NULL; }
@@ -471,7 +473,14 @@ int OnInit()
    //--- 2. ISymbol / IAccount / IClock ----------------------------+
    g_iSymbol  = new CMksMt5Symbol(g_symbol);
    g_iAccount = new CMksMt5Account();
-   g_iClock   = new CMksMt5Clock();
+   // E2.4: clock de DECISÃO derivado do feed (não wall-clock). A fronteira
+   // de dia UTC do CMksAccountSnapshot passa a vir do timeMsc do tick, não
+   // de TimeCurrent() — tira o leak de wall-clock da lógica de decisão
+   // (§1.9) e alinha com o replay/DecisionReplayer (mesma semântica de
+   // clock). Alimentado por SetNow a cada tick admitido no OnTick. Em live
+   // feed-time ≈ wall-clock, então a fronteira de dia cai no mesmo ponto.
+   g_feedClock = new CMksFeedClock();
+   g_iClock    = g_feedClock;
 
    //--- 3. Brick sizer (Fixed somente nesta versão) ---------------+
    g_brickSizer = new CMksFixedBrickSizer(InpBrickSize);
@@ -650,6 +659,16 @@ int OnInit()
    g_book = new CMksMt5PositionBook(g_symbol, InpMagicNumber);
 
    //--- 8. AccountSnapshot ----------------------------------------+
+   // E2.4: semeia o feed clock com o último tick disponível ANTES do Init,
+   // para o snapshot capturar o dia UTC correto. Sem isso NowMsc=0 → baseline
+   // no epoch, e o 1º tick forçaria um rollover imediato (re-baseline). Se
+   // não houver tick (mercado fechado no attach), Init cai no epoch e o 1º
+   // tick auto-corrige via rollover — degrada com graça, não quebra.
+   {
+      MqlTick seedTick;
+      if(SymbolInfoTick(g_symbol, seedTick) && seedTick.time_msc > 0)
+         g_feedClock.SetNow(seedTick.time_msc);
+   }
    g_snapshot = new CMksAccountSnapshot(g_iAccount, g_iClock);
    g_snapshot.Init();
 
@@ -1065,6 +1084,7 @@ void OnTick()
       if(mt.bid <= 0.0 && mt.ask <= 0.0) continue;   // lixo (contado como visto)
       MksTick t = ToMksTick(mt);
       if(g_tickWriter != NULL) RecordLiveTick(t); // .mkstick de paridade (E2.1), best-effort
+      g_feedClock.SetNow(t.timeMsc);              // E2.4: clock de decisão avança com o feed
       IngestOne(t);
    }
 
