@@ -35,10 +35,12 @@
 #   3 = arquivo de entrada não encontrado / erro de argumentos
 
 param(
-  [Parameter(Mandatory=$true)][string]$LiveMksbk,
-  [Parameter(Mandatory=$true)][string]$ReplayMksbk,
-  [string]$LiveLog   = "",
-  [string]$ReplayLog = ""
+  [string]$LiveMksbk   = "",
+  [string]$ReplayMksbk = "",
+  [string]$JournalA    = "",   # E2.1: decision journal TSV (run A / golden)
+  [string]$JournalB    = "",   # E2.1: decision journal TSV (run B / replay)
+  [string]$LiveLog     = "",
+  [string]$ReplayLog   = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -55,7 +57,23 @@ function Write-Info([string]$msg)  { Write-Host "      $msg" -ForegroundColor Da
 #------------------------------------------------------------------#
 # 1. Validar inputs
 #------------------------------------------------------------------#
-Write-Header "verify-parity (ADR-024 §regra 7)"
+Write-Header "verify-parity (ADR-024 §regra 7 + E2.1 decision journal)"
+
+# Modos de comparação: cada par é independente. .mksbk = paridade
+# feed->brick (existente); JournalA/B = determinismo da DECISÃO (E2.1,
+# sim<->sim: runner<->runner ou runner<->golden); Log = diff dos bricks
+# no log estruturado (existente). Sem nenhum par válido não há o que
+# provar — falha (nunca "OK" no vazio).
+$doMksbk   = ($LiveMksbk -ne "" -and $ReplayMksbk -ne "")
+$doJournal = ($JournalA  -ne "" -and $JournalB    -ne "")
+$doLog     = ($LiveLog   -ne "" -and $ReplayLog   -ne "")
+
+if (-not ($doMksbk -or $doJournal)) {
+  Write-Fail "nada a comparar: passe -LiveMksbk/-ReplayMksbk (bricks) e/ou -JournalA/-JournalB (decision journal)."
+  exit 3
+}
+
+if ($doMksbk) {
 
 if (-not (Test-Path -LiteralPath $LiveMksbk)) {
   Write-Fail "live.mksbk não encontrado: $LiveMksbk"
@@ -212,11 +230,84 @@ if ($diffCount -eq 0) {
   exit 1
 }
 
+} # fim if ($doMksbk)
+
+#------------------------------------------------------------------#
+# 3b. Diff do DECISION JOURNAL (E2.1) — stream de ORDENS determinístico.
+#     Compara dois decision journals TSV (CMksDecisionJournal). É o
+#     sucessor do log-diff stub da seção 4: onde aquele filtrava linhas
+#     de brick do .log, este compara o oráculo de paridade da DECISÃO.
+#     Semântica sim<->sim (reframe E2): runner<->runner (determinismo) ou
+#     runner<->golden (regressão). NÃO é live-broker<->replay — essa
+#     paridade é estruturalmente impossível (o SL real dispara em ticks
+#     que o sim não reproduz); ver docs/CHECKPOINT-2026-07-20-sessao.md §4.
+#------------------------------------------------------------------#
+if ($doJournal) {
+  Write-Header "diff decision journal (E2.1 — stream de ordens, determinismo da decisão)"
+
+  if (-not (Test-Path -LiteralPath $JournalA)) { Write-Fail "journal A não encontrado: $JournalA"; exit 3 }
+  if (-not (Test-Path -LiteralPath $JournalB)) { Write-Fail "journal B não encontrado: $JournalB"; exit 3 }
+
+  $JournalA = (Resolve-Path -LiteralPath $JournalA).Path
+  $JournalB = (Resolve-Path -LiteralPath $JournalB).Path
+  Write-Info "journalA = $JournalA"
+  Write-Info "journalB = $JournalB"
+
+  # Descarta linhas de comentário '#' (header do bundle pinado + rodapé
+  # '# total='): o header carrega proveniência que PODE diferir e é
+  # assertado à parte no E2.3; o que prova a paridade da decisão são as
+  # linhas de dados + o cabeçalho de colunas. @() força array mesmo com
+  # 0/1 linha.
+  $linesA = @(Get-Content -LiteralPath $JournalA | Where-Object { $_ -notmatch '^\s*#' -and $_ -ne "" })
+  $linesB = @(Get-Content -LiteralPath $JournalB | Where-Object { $_ -notmatch '^\s*#' -and $_ -ne "" })
+
+  # Linhas de DECISÃO = não-comentário e não o cabeçalho de colunas ('ord\t...').
+  $dataA = @($linesA | Where-Object { $_ -notmatch '^ord\t' })
+  $dataB = @($linesB | Where-Object { $_ -notmatch '^ord\t' })
+
+  Write-Info "journalA = $($dataA.Count) linhas de decisão"
+  Write-Info "journalB = $($dataB.Count) linhas de decisão"
+
+  # Passe vácuo (herda a guarda M18/E0.4): 0 decisões em AMBOS não prova
+  # determinismo nenhum — sessão sem flip, journal não aberto, ou config
+  # que nunca opera. Falha, nunca "OK".
+  if ($dataA.Count -eq 0 -and $dataB.Count -eq 0) {
+    Write-Fail "0 linhas de decisão em AMBOS os journals — nada a comparar (passe vácuo)."
+    Write-Info "(sessão sem flip? runner não abriu o journal? config que nunca opera?)"
+    exit 2
+  }
+
+  if ($linesA.Count -ne $linesB.Count) {
+    Write-Fail "contagens divergem: A=$($linesA.Count) B=$($linesB.Count) (linhas não-comentário)"
+    exit 2
+  }
+
+  $divergences = 0
+  $firstDiff   = -1
+  for ($i = 0; $i -lt $linesA.Count; $i++) {
+    if ($linesA[$i] -ne $linesB[$i]) {
+      if ($firstDiff -lt 0) { $firstDiff = $i }
+      $divergences++
+      if ($divergences -le 3) {
+        Write-Fail "linha $i divergente:"
+        Write-Host "  A: $($linesA[$i])" -ForegroundColor DarkRed
+        Write-Host "  B: $($linesB[$i])" -ForegroundColor DarkRed
+      }
+    }
+  }
+  if ($divergences -eq 0) {
+    Write-Ok "decision journals IDÊNTICOS ($($dataA.Count) decisões; header/rodapé ignorados)"
+  } else {
+    Write-Fail "$divergences linha(s) divergente(s) (1a em $firstDiff; acima de 3 omitidas)"
+    exit 2
+  }
+}
+
 #------------------------------------------------------------------#
 # 4. Comparação opcional de logs — só roda se -LiveLog e -ReplayLog
 #    passados.
 #------------------------------------------------------------------#
-if ($LiveLog -ne "" -and $ReplayLog -ne "") {
+if ($doLog) {
   Write-Header "diff logs (chaves de decisão da estratégia)"
 
   if (-not (Test-Path -LiteralPath $LiveLog)) {
@@ -291,9 +382,8 @@ if ($LiveLog -ne "" -and $ReplayLog -ne "") {
 # 5. Sucesso total.
 #------------------------------------------------------------------#
 Write-Header "PARIDADE VERIFICADA"
-Write-Ok "live e replay produzem o mesmo .mksbk byte-a-byte"
-if ($LiveLog -ne "" -and $ReplayLog -ne "") {
-  Write-Ok "decisões do builder coincidem no log estruturado"
-}
+if ($doMksbk)   { Write-Ok "live e replay produzem o mesmo .mksbk byte-a-byte" }
+if ($doJournal) { Write-Ok "decision journals idênticos no stream de ordens (determinismo da decisão)" }
+if ($doLog)     { Write-Ok "decisões do builder coincidem no log estruturado" }
 Write-Host ""
 exit 0
