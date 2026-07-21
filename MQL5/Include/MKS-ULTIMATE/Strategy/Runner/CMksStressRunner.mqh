@@ -80,8 +80,14 @@ struct MksStressRunnerConfig
    double slippagePoints;
    double commissionPerLot;
    // Base p/ o spread-stress compor (ADR-027 §7.2). 0 = spread-stress
-   // inerte — estado honesto até a CALIBRAÇÃO ao broker real (fatia à parte).
+   // inerte — CALIBRADO XAU = 240 pts (ADR-039).
    double baselineSpreadPoints;
+   // Drift adverso de latência: pts somados ao fill por ms de latência
+   // sorteada (slip = latencyMs · este; ADR-027 §7.1 / ADR-039). Compõe com
+   // o latencyMeanMs do preset. 0 = latência-stress inerte. CALIBRADO XAU
+   // ~0.25 (adverso, deslocamento líquido @ ~260ms). Linear superestima em
+   // L alto (aceitável em Nightmare).
+   double latencyDriftPointsPerMs;
 
    //--- Conta sim
    double startBalance;
@@ -122,6 +128,7 @@ struct MksStressRunnerConfig
       slippagePoints       = 0.0;
       commissionPerLot     = 0.0;
       baselineSpreadPoints = 0.0;
+      latencyDriftPointsPerMs = 0.0;
 
       startBalance         = 10000.0;
       applySwap            = false;
@@ -304,8 +311,10 @@ public:
       if(!m_costModel.Validate(err)) { Teardown(); return false; }
       m_simBroker = new CMksSimulatedBroker(m_symbol, m_costModel, 0.0);
 
-      // O spread-stress compõe sobre a base do CostModel (senão fica inerte).
-      m_stressParams.baselineSpreadPoints = m_cfg.baselineSpreadPoints;
+      // Ancoragem de custo ao broker real (ADR-039): spread-stress compõe
+      // sobre a base do CostModel; drift adverso de latência por ms.
+      m_stressParams.baselineSpreadPoints    = m_cfg.baselineSpreadPoints;
+      m_stressParams.latencyDriftPointsPerMs = m_cfg.latencyDriftPointsPerMs;
       // StressLabBroker envolve o sim; exitSim = o MESMO sim (adversidade de
       // saída/auto-close). underlying e exitSim apontam para o mesmo objeto.
       m_stressBroker = new CMksStressLabBroker(m_simBroker, m_symbol,

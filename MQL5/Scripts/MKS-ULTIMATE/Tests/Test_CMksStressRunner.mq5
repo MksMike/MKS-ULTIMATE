@@ -154,6 +154,49 @@ void Test_SR_SlippageDegradesVsNone()
 }
 
 //==================================================================
+// Drift de latência (ADR-039) — ligado vs desligado
+//==================================================================
+
+void Test_SR_LatencyDriftDegradesVsOff()
+{
+   CMksFakeSymbol sym;
+   MksTick ticks[]; GenZigzag(ticks);
+   MksError err;
+
+   // Params com SÓ latência determinística (stdev 0 → sempre 200ms; nenhum
+   // outro eixo de stress). A diferença entre os dois runs é só o drift.
+   CMksStressParams lat;
+   lat.latencyMeanMs  = 200.0;
+   lat.latencyStdevMs = 0.0;
+
+   // OFF: latencyDriftPointsPerMs = 0 → slipFromLatency = 0.
+   MksStressRunnerConfig cfgOff = MakeCfg();
+   cfgOff.latencyDriftPointsPerMs = 0.0;
+   CMksStressRunner off(GetPointer(sym), cfgOff, lat, "LatOff");
+   MKS_ASSERT_TRUE(off.Init(err), "lat-off init");
+   RunFeed(off, ticks);
+   CMksStressLabReport rOff = off.Report();
+
+   // ON: drift 0.5 → slip = 200ms · 0.5 = 100 pts adversos por fill.
+   MksStressRunnerConfig cfgOn = MakeCfg();
+   cfgOn.latencyDriftPointsPerMs = 0.5;
+   CMksStressRunner on(GetPointer(sym), cfgOn, lat, "LatOn");
+   MKS_ASSERT_TRUE(on.Init(err), "lat-on init");
+   RunFeed(on, ticks);
+   CMksStressLabReport rOn = on.Report();
+
+   MKS_ASSERT_TRUE(rOff.tradesClosed > 0, "baseline teve trades");
+   MKS_ASSERT_EQ_INT(rOff.tradesClosed, rOn.tradesClosed,
+                     "drift não muda o nº de trades (só o preço do fill)");
+   MKS_ASSERT_NEAR_DOUBLE(0.0, rOff.slippageTotalPoints, SR_TOL,
+                          "sem drift: latência não gera slip");
+   MKS_ASSERT_TRUE(rOn.slippageTotalPoints > 0.0,
+                   "com drift: latência vira slip adverso real");
+   MKS_ASSERT_TRUE(rOn.netPnLPoints < rOff.netPnLPoints,
+                   "drift de latência degrada o net");
+}
+
+//==================================================================
 // Guarda de wiring
 //==================================================================
 
@@ -174,6 +217,7 @@ void OnStart()
    MKS_RUN(Test_SR_InitAndRunNoneProducesTrades);
    MKS_RUN(Test_SR_DeterministicDoubleRun);
    MKS_RUN(Test_SR_SlippageDegradesVsNone);
+   MKS_RUN(Test_SR_LatencyDriftDegradesVsOff);
    MKS_RUN(Test_SR_NullSymbolInitFails);
 
    g_mksTestRunner.Summary();

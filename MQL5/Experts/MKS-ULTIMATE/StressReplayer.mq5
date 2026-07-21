@@ -69,6 +69,7 @@ input double InpSpreadPts         = 240.0;  // spread base do CostModel (pts). C
 input double InpSlipPts           = 0.0;    // slippage base do CostModel (pontos)
 input double InpCommPerLot        = 0.0;    // comissão por lote (moeda)
 input double InpBaselineSpreadPts = 240.0;  // base p/ o spread-stress compor (ADR-027 §7.2). CALIBRADO = 240 (mesmo spread real). Multiplicador do preset compõe: High 3× ≈ 720 ≈ max real (700). 0 = spread-stress inerte.
+input double InpLatencyDriftPtsPerMs = 0.25; // drift adverso por ms de latência (ADR-039). CALIBRADO XAU ~0.25 (adverso, deslocamento líquido @ ~260ms). slip = latencyMs·este; compõe com latencyMeanMs do preset. 0 = latência-stress inerte.
 
 input group "=== Piso de SL (E0.3/M12) ==="
 input int    InpMinSlBricks      = 1;
@@ -233,6 +234,7 @@ int OnInit()
    cfg.slippagePoints       = InpSlipPts;
    cfg.commissionPerLot     = InpCommPerLot;
    cfg.baselineSpreadPoints = InpBaselineSpreadPts;
+   cfg.latencyDriftPointsPerMs = InpLatencyDriftPtsPerMs;
    cfg.startBalance         = InpStartBalance;
    cfg.applySwap            = false;
    cfg.slPoints             = slPoints;
