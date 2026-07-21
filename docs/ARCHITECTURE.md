@@ -2496,10 +2496,46 @@ A comissão é **computada** (`CMksCostModel`→`CMksSimulatedBroker`: `r.commis
 
 ---
 
+### ADR-036: Segurança do flip do ColorReversal (E5.3) + semântica preventiva do circuit breaker e do DayPnL (E5.4)
+
+**Data:** 2026-07-21
+**Status:** Aceita
+**Relação:** Executa **E5.3/E5.4** do `docs/ROADMAP-CORE-HARDENING.md`; rastreia `[close-failure-clears-state-still-opens]`, `[circuit-breaker-only-gates-opening]`, `[daypnl-uses-equity]` e `[rollover-baseline]` da auditoria 2026-06-02. **Com a ADR-035, encerra a Fase E5** (e o gate E1–E5). Complementa a ADR-019 (risco em camadas) e a Fase 9 (ColorReversal).
+
+**Contexto:**
+1. **E5.3 — exposição dupla no flip com Close falho `[close-failure-clears-state-still-opens]`.** No `CMksColorReversalStrategy.OnBrickClose`, o flip fazia `CloseCurrentIfAny()` — que **zerava o vínculo interno mesmo em falha** — e **ignorava o retorno**, abrindo a nova posição sempre. Se o Close do flip falhasse (broker rejeitou/erro), a posição antiga seguia **ABERTA** no broker mas órfã (a estratégia esquecia dela) e uma nova era aberta → **exposição dupla**. Com `maxOpenPositions=1` o gate mascarava (rejeitava a nova, mas a estratégia perdia o track da antiga e spammava rejeições); sem limite, a exposição dupla era real. Eco direto da lição V5 (reconstrução de estado é completa ou não acontece).
+2. **E5.4 — semântica do breaker/DayPnL não documentada `[circuit-breaker-only-gates-opening, daypnl-uses-equity, rollover-baseline]`.** O circuit breaker (camada Por Conta do `CMksRiskManager`) roda só em `CheckOrder`, chamado apenas na abertura (Send via `CMksRiskGatedBroker`) — é estruturalmente **preventivo** (bloqueia entrada), não **corretivo** (não fecha posição aberta ao cruzar o limite). Isso nunca foi dito nos ADRs. E o `DayPnL` usa `Equity() − dayStartBalance` (equity flutuante) sem registro de que a escolha é deliberada.
+
+**Decisão:**
+1. **Flip NÃO abre nova posição se o Close falhou (E5.3).** `CloseCurrentIfAny` passa a **manter** o vínculo na falha (só zera em `FILLED`) — a posição segue conhecida pela estratégia. O `OnBrickClose` só chama `OpenNewInDirection` se `m_currentPositionId == 0` após o fecho (fechou, ou não havia posição); se o vínculo persiste (close falhou), NÃO abre e loga WARN. O próximo flip tenta fechar de novo; o auto-detach limpa se o SL bater; o operador enxerga a posição no book. Simétrico ao `FlattenForSafety`, que já mantinha o vínculo na falha.
+2. **Breaker é PREVENTIVO — documentado (E5.4).** Fica registrado (comentário do `CMksRiskAccountParams` + esta ADR) que as três checagens Por Conta bloqueiam a ABERTURA, não fecham posições abertas. Um componente **corretivo** (`flatten-on-breach`: fecha tudo + trava via `OnTick` ao cruzar `minEquityAbs`/`maxDrawdownPct`) fica como **decisão de design em aberto** — avaliado e adiado nesta fatia (decisão do dono: só documentar por ora).
+3. **DayPnL usa equity FLUTUANTE — deliberado (E5.4).** Fica documentado (comentário do `DayPnL` + esta ADR) que a perda diária mede `equity corrente (flutuante, inclui não-realizado) − balance de início do dia UTC`, para reagir a drawdown intraday não-realizado — a escolha mais protetora. **Sem mudança de código** (o comportamento já era esse; faltava a decisão explícita). Numerador flutuante, baseline/denominador = `balance` realizado no rollover UTC (`[rollover-baseline]` alinhado).
+
+**Alternativas consideradas:**
+- **E5.3: só logar WARN e seguir abrindo** (a opção mínima do roadmap). Rejeitada: não corrige a exposição dupla, só a torna visível. Manter o vínculo + não abrir é a correção real e não custa mais.
+- **E5.3: zerar o vínculo na falha e confiar no risk gate** (comportamento antigo). Rejeitada: perde o track da posição órfã (a estratégia deixa de gerenciá-la) e, sem `maxOpenPositions`, há exposição dupla de fato.
+- **E5.4: construir o `flatten-on-breach` agora.** Rejeitada nesta fatia (decisão do dono): muda comportamento de proteção em live e merece fatia própria com teste dedicado; a lacuna fica **nomeada**, não escondida.
+- **E5.4: mudar DayPnL para balance realizado.** Rejeitada: equity flutuante é mais protetor (o breaker de perda diária reage antes de a perda ser realizada). Manter + documentar.
+
+**Consequências:**
+- `CMksColorReversalStrategy`: `CloseCurrentIfAny` mantém o vínculo na falha; `OnBrickClose` condiciona a abertura a `m_currentPositionId==0`. **Nenhum teste existente exercitava o flip-close falho** (era um buraco de cobertura) → sem regressão; 2 testes novos em `Test_CMksColorReversalStrategy` (mantém posição + sem nova entrada; reconcilia no próximo flip com close OK).
+- `CMksAccountSnapshot`/`CMksRiskManager`: **só comentários** (semântica preventiva + DayPnL flutuante). Sem mudança de comportamento.
+- **Disjunção do ColorReversal:** os arquivos do E5.3/E5.4 (`CMksColorReversalStrategy`, `CMksAccountSnapshot`, `CMksRiskManager`) estão **DENTRO** do grafo de includes do `ColorReversal.mq5` — editar recompila o EA. Feito **sem captura viva anexada** (PC de casa, pós-`git pull`); `compile-all` sem risco de fragmentar captura.
+- Fecha `[close-failure-clears-state-still-opens]`, `[circuit-breaker-only-gates-opening]`, `[daypnl-uses-equity]`, `[rollover-baseline]`. **Com a ADR-035, encerra a Fase E5** → gate E1–E5 cumprido, destrava a Fase 10.
+
+**Fronteiras:**
+- **`flatten-on-breach` (breaker corretivo) fica em aberto** — decisão de design adiada conscientemente; a lacuna está nomeada aqui, no comentário do `CMksRiskAccountParams` e na §4 (Decisões pendentes).
+- Não muda a semântica do gate (preventivo) nem os códigos de erro; só o comportamento do flip da estratégia + docs.
+- E5.3 é específico ao `CMksColorReversalStrategy` (a estratégia da Fase 9); estratégias futuras herdam o princípio "não criar exposição dupla em fecho falho", mas cada uma decide sua reconciliação.
+- Um Close que falha persistentemente deixa a estratégia sem abrir novas posições até a posição presa resolver (SL/auto-detach/operador) — quietude conservadora deliberada, não bug.
+
+---
+
 ## 4. Decisões pendentes
 
 - **ADR-031 — manter+corrigir o Custom Symbol** (referenciada nas notas da ADR-023-A, ainda **não escrita como seção própria**). Entregável E7.3 do `docs/ROADMAP-CORE-HARDENING.md`: redigir formalmente com o dado do gate empírico (sobrevivência à virada de dia). Bloqueada por E7.1 (gate empírico pendente de dado).
 - **Termo spread-aware dinâmico do piso de SL** — a fórmula por-tick (que fecha a cauda residual do M12) foi deliberadamente **diferida ao E2** (precisa do runner de replay + spread por-tick no simulador). Decisão de shipar o piso estático de brick agora (E0.3) tomada com o dono em 2026-07-19; o termo dinâmico é decisão arquitetural em aberto para o E2.
+- **Circuit breaker corretivo (`flatten-on-breach`)** — o breaker Por Conta é **preventivo** (bloqueia a abertura), não corretivo (não fecha posição já aberta ao cruzar `minEquityAbs`/`maxDrawdownPct`). A ADR-036 (E5.4) documentou isso e **adiou conscientemente** (decisão do dono, 2026-07-21) a construção de um componente que feche tudo + trave via `OnTick`. Decisão em aberto para uma fatia futura, com teste dedicado.
 
 Outras decisões novas são registradas formalmente quando forem enfrentadas, não antes — decidir arquitetura no vazio produz decisões erradas.
 

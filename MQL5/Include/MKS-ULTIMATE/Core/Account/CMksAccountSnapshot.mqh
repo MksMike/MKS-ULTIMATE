@@ -116,7 +116,12 @@ public:
    double Equity()  const { return m_account.Equity(); }
    double Balance() const { return m_account.Balance(); }
 
-   // P&L do dia em moeda da conta. Positivo = lucro, negativo = perda.
+   // P&L do dia em moeda da conta = EQUITY corrente (FLUTUANTE — inclui o
+   // não-realizado das posições abertas) − BALANCE de início do dia UTC.
+   // Escolha DELIBERADA (E5.4/ADR-036): usar equity flutuante (não só o
+   // balance realizado) faz a camada de perda diária reagir a drawdown
+   // intraday NÃO-realizado — mais protetor, alinhado ao antídoto do V5
+   // (`[daypnl-uses-equity]`). Positivo = lucro, negativo = perda.
    double DayPnL() const
    {
       if(!m_initialized) return 0.0;

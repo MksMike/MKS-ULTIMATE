@@ -280,6 +280,67 @@ void Test_CR_NoBookPreservesLegacyBehavior()
 }
 
 //==================================================================
+// E5.3 (ADR-036) — Close do flip falha: MANTÉM a posição, NÃO abre nova
+// (evita exposição dupla). [close-failure-clears-state-still-opens]
+//==================================================================
+
+void Test_CR_FlipCloseFailureKeepsPositionNoNewEntry()
+{
+   CMksRecordingBroker br;
+   CMksFakeSymbol sym;
+   CMksFixedLotSizer sizer(GetPointer(sym), FIXED_LOTS);
+   CMksColorReversalStrategy strat(GetPointer(br), GetPointer(sizer),
+                                    GetPointer(sym), SL_POINTS, MAGIC);
+
+   // Abre SELL no 1o flip (close default FILLED).
+   strat.OnBrickClose(MakeBrick(MKS_BRICK_BULL, 2000.0, 2003.0)); // 1o
+   strat.OnBrickClose(MakeBrick(MKS_BRICK_BEAR, 2003.0, 2000.0)); // flip → SELL
+   MKS_ASSERT_TRUE(strat.HasOpenPosition(), "posição SELL aberta");
+   ulong pid = strat.CurrentPositionId();
+   int sendsBefore = br.SendCount(); // 1
+
+   // Próximo flip: Close FALHA (broker ERROR). E5.3: mantém a posição,
+   // NÃO abre nova (sem exposição dupla).
+   br.SetNextCloseStatus(MKS_EXEC_ERROR);
+   strat.OnBrickClose(MakeBrick(MKS_BRICK_BULL, 2000.0, 2003.0)); // flip
+
+   MKS_ASSERT_TRUE(strat.HasOpenPosition(), "posição MANTIDA (close falhou)");
+   MKS_ASSERT_EQ_ULONG(pid, strat.CurrentPositionId(), "MESMO pid preservado");
+   MKS_ASSERT_EQ_INT((int)MKS_ORDER_SELL, (int)strat.CurrentSide(), "side inalterado (SELL)");
+   MKS_ASSERT_EQ_INT(sendsBefore, br.SendCount(), "NENHUM Send novo (sem exposição dupla)");
+   MKS_ASSERT_EQ_LONG(1, strat.Metrics().closesRejected, "closesRejected == 1");
+   MKS_ASSERT_EQ_LONG(0, strat.Metrics().sendsRejected, "0 sendsRejected (nem tentou abrir)");
+   MKS_ASSERT_EQ_LONG(1, strat.Metrics().sendsFilled, "sendsFilled segue 1 (só a 1a abertura)");
+}
+
+void Test_CR_FlipCloseFailureThenNextFlipReconciles()
+{
+   CMksRecordingBroker br;
+   CMksFakeSymbol sym;
+   CMksFixedLotSizer sizer(GetPointer(sym), FIXED_LOTS);
+   CMksColorReversalStrategy strat(GetPointer(br), GetPointer(sizer),
+                                    GetPointer(sym), SL_POINTS, MAGIC);
+
+   strat.OnBrickClose(MakeBrick(MKS_BRICK_BULL, 2000.0, 2003.0)); // 1o
+   strat.OnBrickClose(MakeBrick(MKS_BRICK_BEAR, 2003.0, 2000.0)); // flip → SELL (pid1)
+   ulong pid1 = strat.CurrentPositionId();
+
+   // Flip com Close falhando → mantém pid1, sem novo Send.
+   br.SetNextCloseStatus(MKS_EXEC_ERROR);
+   strat.OnBrickClose(MakeBrick(MKS_BRICK_BULL, 2000.0, 2003.0)); // flip
+   MKS_ASSERT_EQ_ULONG(pid1, strat.CurrentPositionId(), "mantém pid1 após falha");
+   MKS_ASSERT_EQ_INT(1, br.SendCount(), "sem novo Send enquanto pid1 aberta");
+
+   // Próximo flip com Close OK → fecha pid1 e abre nova (reconcilia).
+   br.SetNextCloseStatus(MKS_EXEC_FILLED);
+   strat.OnBrickClose(MakeBrick(MKS_BRICK_BEAR, 2003.0, 2000.0)); // flip
+   MKS_ASSERT_EQ_ULONG(pid1, br.LastClose().positionId, "reconciliou fechando pid1");
+   MKS_ASSERT_TRUE(strat.HasOpenPosition(), "nova posição aberta pós-reconciliação");
+   MKS_ASSERT_EQ_INT(2, br.SendCount(), "novo Send só após o fecho bem-sucedido");
+   MKS_ASSERT_EQ_INT((int)MKS_ORDER_SELL, (int)strat.CurrentSide(), "nova = SELL");
+}
+
+//==================================================================
 // Send rejeitada: state não fica corrompido
 //==================================================================
 
@@ -576,6 +637,9 @@ void OnStart()
    MKS_RUN(Test_CR_AutoDetachWhenBookSaysClosed);
    MKS_RUN(Test_CR_AutoDetachThenFlipOpensCleanly);
    MKS_RUN(Test_CR_NoBookPreservesLegacyBehavior);
+
+   MKS_RUN(Test_CR_FlipCloseFailureKeepsPositionNoNewEntry);
+   MKS_RUN(Test_CR_FlipCloseFailureThenNextFlipReconciles);
 
    MKS_RUN(Test_CR_SendRejectedNoStateCorruption);
    MKS_RUN(Test_CR_ResetMetricsZeroesCounters);

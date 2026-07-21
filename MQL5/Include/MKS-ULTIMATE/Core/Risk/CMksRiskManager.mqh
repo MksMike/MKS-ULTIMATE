@@ -108,6 +108,14 @@ struct CMksRiskStrategyParams
 // considerando o ESTADO da conta (equity, P&L, peak). Os dois são
 // ortogonais — operar com poucas posições não impede explodir equity;
 // operar com muito equity sobrando não isenta o limite de exposure.
+//
+// SEMÂNTICA PREVENTIVA (E5.4/ADR-036): as três checagens são PREVENTIVAS —
+// rodam em CheckOrder, chamado só na ABERTURA (Send). O breaker BLOQUEIA
+// novas entradas ao cruzar o limite; NÃO fecha posições já abertas (não é
+// corretivo). Um componente corretivo (flatten-on-breach: fecha tudo +
+// trava via OnTick ao cruzar minEquity/maxDrawdown) é decisão de design em
+// ABERTO — ver ADR-036 §Fronteiras. DayPnL usa equity FLUTUANTE (ver
+// CMksAccountSnapshot::DayPnL — mais protetor).
 struct CMksRiskAccountParams
 {
    double maxDailyLossPct;

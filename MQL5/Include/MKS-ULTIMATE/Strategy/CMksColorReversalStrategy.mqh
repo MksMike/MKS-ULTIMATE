@@ -82,10 +82,12 @@ struct CMksColorReversalMetrics
 //      (idempotente) e retorna.
 //   4. FLIP detectado:
 //      a. Se currentPositionId != 0: broker.Close(currentId, fullLots).
-//         Sucesso ou falha, currentPositionId é zerado (Phase 9 simplista:
-//         falha de close é responsabilidade do risk operacional, não
-//         da estratégia bloquear nova entrada).
-//      b. Calcula lots via sizer.ComputeLots(slPoints).
+//         Sucesso → zera o vínculo e segue para (b). Falha → MANTÉM o
+//         vínculo (posição segue aberta no broker) e NÃO abre nova neste
+//         brick (E5.3/ADR-036: evita exposição dupla); o próximo flip /
+//         auto-detach / operador reconciliam.
+//      b. (só se NÃO há posição corrente) Calcula lots via
+//         sizer.ComputeLots(slPoints).
 //      c. side = (brick.direction == BULL) ? BUY : SELL.
 //      d. request com slPoints fixo, tpPoints=0, comment="ColorReversal".
 //      e. broker.Send(request). Se FILLED: registra novo positionId.
@@ -154,10 +156,18 @@ private:
               StringFormat("\"pid\":%I64u", closedId));
    }
 
-   // Fecha posição corrente, se houver. Best-effort: limpa state
-   // interno mesmo se Close falhar (Fase 9 simplista). Retorna true
-   // se houve close bem-sucedido, false caso contrário. Marca a saída
-   // na visualização no tempo do brick do flip.
+   // Fecha posição corrente, se houver. Retorna true se o Close foi FILLED,
+   // false caso contrário. Marca a saída na visualização no tempo do brick.
+   //
+   // Semântica de falha (E5.3/ADR-036): SUCESSO zera o vínculo interno;
+   // FALHA **mantém** o vínculo — a posição segue aberta no broker, então
+   // a estratégia continua a "conhecê-la" (o próximo flip tenta fechar de
+   // novo, o auto-detach a limpa se o SL bater, o operador a enxerga no
+   // book). É o `CloseCurrentIfAny` quem NÃO zera na falha; quem decide não
+   // abrir nova posição é o `OnBrickClose` (checando `m_currentPositionId`).
+   // Antes (Fase 9): zerava o vínculo mesmo na falha e o EA abria assim
+   // mesmo → posição órfã no broker + nova posição = exposição dupla
+   // ([close-failure-clears-state-still-opens]).
    bool CloseCurrentIfAny(const MksBrick &brick)
    {
       if(m_currentPositionId == 0) return false;
@@ -172,17 +182,17 @@ private:
             m_visualizer.MarkExit(brick.closeTimeMsc, r.fillPrice, closingId);
          LogInfo("posição fechada (flip)",
                  StringFormat("\"pid\":%I64u,\"price\":%.5f,\"lots\":%.4f",
-                              m_currentPositionId, r.fillPrice, r.filledLots));
+                              closingId, r.fillPrice, r.filledLots));
+         m_currentPositionId = 0;
+         m_currentLots       = 0.0;
       }
       else
       {
          m_metrics.closesRejected++;
-         LogWarn("Close falhou em flip — limpando state internamente",
+         LogWarn("Close falhou em flip — MANTENDO vínculo (posição segue aberta)",
                  StringFormat("\"pid\":%I64u,\"status\":%d,\"retcode\":%d",
-                              m_currentPositionId, (int)r.status, r.brokerRetcode));
+                              closingId, (int)r.status, r.brokerRetcode));
       }
-      m_currentPositionId = 0;
-      m_currentLots       = 0.0;
       return ok;
    }
 
@@ -363,10 +373,24 @@ public:
          return;
       }
 
-      // 5. FLIP live. Fecha + abre na nova direção.
+      // 5. FLIP live. Fecha a posição corrente; só abre a nova se o fecho
+      //    teve sucesso (ou não havia posição). Se o Close falhou, a posição
+      //    segue ABERTA e MANTIDA (CloseCurrentIfAny não zerou o vínculo) —
+      //    não abrir nova neste brick evita exposição dupla; o próximo flip /
+      //    auto-detach / operador reconciliam (E5.3/ADR-036,
+      //    [close-failure-clears-state-still-opens]).
       m_metrics.flipsDetected++;
       CloseCurrentIfAny(brick);
-      OpenNewInDirection(brick.direction, brick);
+      if(m_currentPositionId == 0)
+      {
+         OpenNewInDirection(brick.direction, brick);
+      }
+      else
+      {
+         LogWarn("flip: Close falhou, posição mantida — sem nova entrada neste brick",
+                 StringFormat("\"pid\":%I64u,\"lots\":%.4f",
+                              m_currentPositionId, m_currentLots));
+      }
 
       // 6. Atualiza última direção observada.
       m_lastBrickDir = brick.direction;
