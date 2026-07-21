@@ -501,6 +501,42 @@ powershell -ExecutionPolicy Bypass -File C:\dev\MKS-ULTIMATE\tools\backup-captur
 # Para agendar diário: Task Scheduler → nova tarefa → aponta para o comando acima.
 ```
 
+### 9.8 Runbook de primeira execução — operar o ColorReversal (E6.4)
+
+O caminho único para pôr o EA de trading pra rodar. **Um EA por função — não confunda:**
+
+| Artefato | Tipo | Para quê | Anexar em |
+|---|---|---|---|
+| **`ColorReversal`** | Expert | **É o que OPERA** (live e tester) | chart do símbolo **REAL** (ex.: XAUUSDm) |
+| `Producer` | Expert | Só desenha o Custom Symbol (visualização do renko) — **não opera** | chart do símbolo real |
+| `TickRecorder` | Service | Captura `.mkstick` do feed (para replay/paridade) | Navigator → Services |
+| `Replayer` / `DecisionReplayer` | Expert | Replay de `.mkstick` (paridade de bricks / de decisão) | qualquer chart |
+| `Test_*` | Script | Testes do core — arrastar como Script (rodam sem recompilar) | qualquer chart |
+
+**Pré-requisitos (uma vez):**
+1. Conta **HEDGING** (o EA recusa netting/exchange com popup — invariante v1, ADR-029).
+2. Junctions ativas (§9.5) e `compile-all` **0/0** (§9.1).
+3. Símbolo **REAL** do broker no Market Watch (o EA recusa anexar num Custom Symbol `.MKS*`).
+
+**Passo a passo (live):**
+1. Abrir um chart do **símbolo real** (ex.: `XAUUSDm`). **Não** o CS de visualização.
+2. Arrastar `ColorReversal` no chart. Ajustar os inputs **básicos**:
+   - `InpBrickSize` (tamanho do brick em USD; XAU ≈ 3.0)
+   - `InpSlBricks` (SL em **bricks**, broker-agnóstico — ADR-032; default 10)
+   - `InpLotMode` + `InpFixedLots` **ou** `InpRiskPct`
+   - Limites de risco: `InpMaxDailyLossPct`, `InpMaxDrawdownPct`, `InpMinEquityAbs`
+   - (`InpMagicNumber` só se rodar mais de uma estratégia no mesmo símbolo)
+3. **Enter.** O EA: valida conta/símbolo/piso de SL, cria+abre o chart do Custom Symbol de visualização, opcionalmente popula `InpHistoricalFillDays` dias de bricks (warm-up, **não opera** no passado), e passa a abrir/fechar posição a cada flip de cor.
+4. Acompanhar em `MQL5\Files\MKS-ULTIMATE\Logs\ColorReversal_<symbol>_<TS>.log` (JSON-line) e nas setas de trade no chart do CS (ADR-028).
+
+**Se o EA recusar anexar (popup/`INIT_FAILED`), a causa está na mensagem:**
+- *"é um Custom Symbol"* → anexe no símbolo real, não no `.MKS*`.
+- *"conta NETTING/EXCHANGE"* → troque para conta/corretora hedging.
+- *"piso de SL / InpSlBricks abaixo do piso"* → suba `InpSlBricks` (ou `InpMinSlBricks`).
+- *"N posições abertas… gerencia no máximo 1"* → feche/ajuste manualmente e reanexe.
+
+**Backtest (Strategy Tester):** mesmo EA, mesmos inputs; o CS é pulado (proibido no tester — os bricks vão direto à estratégia). Para stress (níveis None→Nightmare) ainda **não** há runner pronto — fatia futura.
+
 ---
 
 ## 10. Links rápidos

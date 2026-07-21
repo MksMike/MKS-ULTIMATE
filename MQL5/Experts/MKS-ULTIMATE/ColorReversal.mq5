@@ -10,10 +10,12 @@
 //|                   cor pura (close-and-reverse a cada flip, SL fixo,
 //|                   sem TP). Magic próprio (527001 default). Auto-detach
 //|                   via CMksMt5PositionBook injetado na strategy.
-//|                   Geometria FIXA em classic (ADR-026). Sem StressLab
-//|                   nesta versão — runner stress é slice separado que
-//|                   reusa CMksColorReversalStrategy sobre SimulatedBroker
-//|                   + StressLabBroker + replayer de .mkstick.
+//|                   Geometria FIXA em classic (ADR-026). Este EA só OPERA
+//|                   (live/tester); a paridade de DECISÃO tem EA próprio
+//|                   (DecisionReplayer, E2). Um runner de STRESS
+//|                   (CMksColorReversalStrategy sobre SimulatedBroker +
+//|                   StressLabBroker por níveis) ainda NÃO existe — fica
+//|                   para fatia futura.
 //| @depends_on     : Strategy/CMksColorReversalStrategy.mqh,
 //|                   Core/RenkoBuilder/CMksRenkoBuilder.mqh,
 //|                   Core/RenkoBuilder/CMksFixedBrickSizer.mqh,

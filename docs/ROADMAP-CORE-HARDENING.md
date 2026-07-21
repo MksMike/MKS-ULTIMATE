@@ -175,7 +175,7 @@ Referência cruzada: os IDs entre colchetes (ex.: `[H1]`, `[M9]`, `[cs-recovery-
 
 ## Fase E6 — Produto operável (UX SaaS)
 
-**Status:** Não iniciada
+**Status:** Em andamento — **E6.4 parcial** (2026-07-21): runbook de 1 página (`CHEATSHEET §9.8`) + header do `ColorReversal` corrigido (`[header-describes-nonexistent-stress-runner]`). Compila 0/0. Pendentes: E6.1 (reduzir superfície de ~31 inputs → ≤8 básicos), E6.2 (unidades — grande parte já feita pela ADR-032), E6.3 (presets por instrumento), e a decisão do E6.4 sobre o `Producer` continuar como EA separado.
 **Paralela a E2–E5; pré-requisito de operação real (não de construir o core).**
 
 **Por que importa:** o foco declarado é experiência do usuário — "simples de operar, sem confundir com opções demais". Hoje a superfície de configuração e o fluxo de operação contradizem essa meta, e um default (`InpSlPoints=30`) já quebrou em produção.
@@ -190,10 +190,10 @@ Referência cruzada: os IDs entre colchetes (ex.: `[H1]`, `[M9]`, `[cs-recovery-
   - Padronizar a unidade do SL para a mesma do brick (preço, ou múltiplos de `brickSize`); eliminar "Pts" do naming onde o valor não é ponto do símbolo.
 - **E6.3 — Presets por instrumento**
   - Um preset por instrumento (XAU, EURUSD…) que pré-popula brick/SL/limites sãos — o operador escolhe o instrumento, não 30 números.
-- **E6.4 — Runbook de primeira execução + consolidação de artefatos** `[run-ea-flow-manual-multistep, header-describes-nonexistent-stress-runner]`
-  - Runbook de 1 página no `CHEATSHEET.md` (ordem dos passos, anexar no símbolo real, conta hedging, qual EA para quê).
-  - Avaliar se o `Producer` ainda precisa existir como EA separado para o operador final (útil para dev, confunde como produto).
-  - Corrigir o `@responsibility` de `ColorReversal.mq5` (narra stress runner inexistente).
+- **E6.4 — Runbook de primeira execução + consolidação de artefatos** `[run-ea-flow-manual-multistep, header-describes-nonexistent-stress-runner]` — **parcial (2026-07-21)**
+  - ✅ Runbook de 1 página no `CHEATSHEET.md §9.8` (ordem dos passos, anexar no símbolo real, conta hedging, qual EA para quê, mapa das recusas do OnInit).
+  - ⬜ Avaliar se o `Producer` ainda precisa existir como EA separado para o operador final (útil para dev, confunde como produto) — **decisão do dono pendente**.
+  - ✅ Corrigir o `@responsibility` de `ColorReversal.mq5` (narrava stress runner inexistente).
 
 **Critério de saída:**
 - Operador roda com ≤ ~8 inputs básicos, defaults sãos por instrumento, sem aritmética manual de config.
