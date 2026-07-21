@@ -2568,6 +2568,43 @@ O `ColorReversal.mq5` expunha **~31 inputs** num nível plano — o oposto da me
 
 ---
 
+### ADR-038: Runner de estresse liga/desliga — bridge estratégia→trade journal + orquestrador multi-nível + EA de replay (slice-2 da Fase 9 / Parte B)
+
+**Data:** 2026-07-21
+**Status:** Proposta
+**Relação:** Executa o **slice-2 da Fase 9** (`ROADMAP.md` — último ⏳ do critério de saída) e a **Parte B** do `docs/ROADMAP-CHECKLIST.md` (pedido do dono). Consome o StressLab da Fase 7 (ADR-027/030) e espelha o padrão runner do `CMksDecisionRunner` (E2).
+
+**Contexto:**
+O pipeline sim+stress+report existe e é provado em pequena escala (`Test_RPT_CaptureFromRealPipeline`), mas com um gap: a `CMksColorReversalStrategy` **encapsula** seus `Send`/`Close` (chama `m_broker` dentro do `OnBrickClose`), então nada alimenta o `CMksTradeJournal` que o `CMksStressLabReport.Capture()` lê. Sem isso não se mede o net por nível de uma corrida real da estratégia. Também não existe orquestrador que rode N níveis e agregue reports, nem um EA que dirija isso sobre um `.mkstick`.
+
+**Decisão:**
+1. **`CMksTradeJournalingBroker`** (decorator `IBroker`) — grava no `CMksTradeJournal` no `Send`/`Close` FILLED (`RecordOpen`/`RecordClose`). Auto-closes de SL/TP **não** passam por ele (fecham dentro do sim) → entram no journal pelo loop `PollAutoCloses` do runner. Sem dupla contagem (cada posição fecha uma vez: explícita via decorator **ou** auto via poll). Espelha o `CMksJournalingBroker` existente (que grava num journal de *decisão*, não serve ao report).
+2. **`CMksStressRunner`** (orquestrador, dono do grafo por nível) — monta `CostModel→SimulatedBroker→StressLabBroker→RiskGatedBroker` + `TradeJournalingBroker` + estratégia + builder, replaya o feed, captura 1 `CMksStressLabReport` por nível. Ordem-por-tick *load-bearing* herdada do `CMksDecisionRunner`: `stress.OnTick` **antes** de `builder.IngestTick`; drena `PollAutoCloses` do **stress** (não do sim direto, senão sai sem slip). `params.baselineSpreadPoints` setado do CostModel (senão spread-stress inerte).
+3. **`StressReplayer.mq5`** (EA) — dirige o runner (OnTimer/ProcessBatch/self-remove, espelhando `DecisionReplayer`), loopa None→Nightmare sobre 1 `.mkstick`, imprime `MksStressLabPrintComparison`. **Liga/desliga** = None (off) vs Light→Nightmare (on) numa corrida; operador roda 1 EA + 1 input (o caminho do `.mkstick`) → tabela comparativa (≤2 passos, critério Parte B).
+4. **Testes antes do EA:** `Test_CMksTradeJournalingBroker` + `Test_CMksStressRunner` (feed sintético, 2 níveis, determinismo duplo-run + degradação None→stress).
+5. **Reframe honesto preservado:** o runner prova **determinismo + degradação sob stress modelado**, **não** fidelidade ao fill do broker real. "Sobreviveu ao Nightmare" só ganha significado após a **calibração** (fatia separada, ADR futura, precisa medir spread/slippage/latência reais da Exness). O gap sim↔real segue nomeado como risco do StressLab (eixo 3), não escondido.
+
+**Alternativas consideradas:**
+- **Inline no EA** (sem runner nem decorator). Rejeitada: não-testável isoladamente (fere "testes antes de EA"); lógica multi-nível+journal presa num EA não-reutilizável. O `CMksDecisionRunner` já provou que "runner dono do grafo" é testável e correto.
+- **Reusar o `CMksJournalingBroker`** para alimentar o journal. Rejeitada: ele grava num `CMksDecisionJournal` (byte-a-byte de decisão), não num `CMksTradeJournal` (agregados money-aware que o report lê); adaptá-lo bifurcaria um decorator estável.
+- **Estratégia expor `Send`/`Close` para o runner interceptar** (como o teste faz à mão). Rejeitada: quebra o encapsulamento da estratégia e cria caminho que só existe no runner (fere caminho único). O decorator é transparente à estratégia.
+- **`StressLabEngine` multi-nível automatizado** (previsto na Fase 7). Adiado: a Fase 7 já dispensou o engine por composição direta; o runner cobre o slice-2 rodando os níveis em sequência num EA, sem reintroduzir orquestração pesada.
+
+**Consequências:**
+- Novos arquivos: `Core/Trade/CMksTradeJournalingBroker.mqh`, `Strategy/Runner/CMksStressRunner.mqh`, `Experts/MKS-ULTIMATE/StressReplayer.mq5`, `Tests/Test_CMksTradeJournalingBroker.mq5`, `Tests/Test_CMksStressRunner.mq5` (~48 → ~51 compiláveis).
+- Fecha o slice-2 da Fase 9 (último ⏳ do critério de saída) e a Parte B (runner) do checklist; a Fase 9 conclui quando o smoke sobre `.mkstick` real produzir a tabela.
+- **Dívida técnica nomeada:** a calibração dos presets ao broker real fica pendente (fatia separada, precisa de dado medido). Até lá os níveis são sintéticos — o runner mostra degradação **relativa** (útil), mas o valor absoluto de "sobreviveu ao Nightmare" não é ancorado em realidade medida.
+- Não toca o caminho live do `ColorReversal` nem o `DecisionReplayer` (**paridade E2 intacta**); o `CMksTradeJournalingBroker` é aditivo. Smoke-testável sobre `.mkstick` já existente no PC (não bloqueado pela captura longa).
+
+**Fronteiras:**
+- Não implementa a calibração ao broker real (fatia à parte, ADR futura).
+- Não altera a estratégia, o builder nem o risco — só acrescenta decorator + runner + EA.
+- Não reintroduz o `StressLabEngine` (composição direta em sequência).
+
+**Validação contra invariantes (§1):** passa nos 5 — determinismo por seed (`params.rngSeed`); caminho único (mesma estratégia/builder/risco do live, troca só o broker via `IBroker`); abstrações (decorator sobre `IBroker`); paridade (replay determinístico do `.mkstick`); zero código fechado (`.mkstick` + `CMksRenkoBuilder` próprios).
+
+---
+
 ## 4. Decisões pendentes
 
 - **ADR-031 — manter+corrigir o Custom Symbol** (referenciada nas notas da ADR-023-A, ainda **não escrita como seção própria**). Entregável E7.3 do `docs/ROADMAP-CORE-HARDENING.md`: redigir formalmente com o dado do gate empírico (sobrevivência à virada de dia). Bloqueada por E7.1 (gate empírico pendente de dado).
