@@ -55,6 +55,7 @@
 #include <MKS-ULTIMATE/Core/Broker/CMksMt5Broker.mqh>
 #include <MKS-ULTIMATE/Core/Risk/CMksRiskManager.mqh>
 #include <MKS-ULTIMATE/Core/Risk/CMksRiskGatedBroker.mqh>
+#include <MKS-ULTIMATE/Core/Risk/CMksCircuitBreaker.mqh>
 #include <MKS-ULTIMATE/Core/Position/CMksMt5PositionBook.mqh>
 #include <MKS-ULTIMATE/Core/Account/CMksAccountSnapshot.mqh>
 #include <MKS-ULTIMATE/Core/Account/CMksMt5Account.mqh>
@@ -104,6 +105,7 @@ input double InpMinEquityAbs        = 0.0;   // circuit breaker absoluto em equi
 input group "=== AVANÇADO — risco fino / histórico ==="
 input long   InpMagicNumber         = 527001; // id único desta estratégia (só troque se rodar >1 no mesmo símbolo)
 input bool   InpRequireSl           = true;   // exige SL em toda ordem (lição V5)
+input bool   InpEnableCorrectiveBreaker = true; // ADR-040: ao cruzar limite Por Conta (dailyLoss/drawdown/minEquity), FECHA tudo + TRAVA (sticky). Desligar volta ao só-preventivo (bloqueia entrada, não fecha).
 input bool   InpRequireTp           = false;  // color reversal não usa TP
 input double InpMaxLotsPerTrade     = 1.0;
 input int    InpMinSlBricks         = 1;      // piso de SL em bricks (>=1; mata o M12). Ignorado se preset != Custom
@@ -181,6 +183,7 @@ CMksAccountSnapshot  *g_snapshot    = NULL;
 CMksRiskManager      *g_risk        = NULL;
 CMksMt5Broker        *g_mt5Broker   = NULL;
 CMksRiskGatedBroker  *g_gatedBroker = NULL;
+CMksCircuitBreaker   *g_breaker     = NULL; // corretivo (ADR-040), opt-in via input
 IPositionSizer       *g_lotSizer    = NULL;
 
 CMksColorReversalStrategy *g_strategy = NULL;
@@ -352,6 +355,7 @@ void Cleanup()
 {
    if(g_strategy        != NULL) { delete g_strategy;        g_strategy        = NULL; }
    if(g_painter         != NULL) { delete g_painter;         g_painter         = NULL; }
+   if(g_breaker     != NULL) { delete g_breaker;     g_breaker     = NULL; }
    if(g_gatedBroker != NULL) { delete g_gatedBroker; g_gatedBroker = NULL; }
    if(g_mt5Broker   != NULL) { delete g_mt5Broker;   g_mt5Broker   = NULL; }
    if(g_lotSizer    != NULL) { delete g_lotSizer;    g_lotSizer    = NULL; }
@@ -836,6 +840,24 @@ int OnInit()
    }
    g_gatedBroker = new CMksRiskGatedBroker(g_mt5Broker, g_risk);
 
+   //--- 11.6 Circuit breaker CORRETIVO (ADR-040, opt-in) ----------+
+   // Envolve o gate preventivo (broker mais externo). Dirigido por tick no
+   // OnTick: ao cruzar limite Por Conta (mesmo predicado do gate), FECHA todas
+   // as posições + TRAVA o Send (sticky). A estratégia usa `strategyBroker`
+   // (o breaker quando ligado, senão o gate direto). Inerte se nenhum limite
+   // Por Conta estiver configurado. Resposta à lição do V5 (conta quebrou com
+   // posição ABERTA — bloquear só a abertura não a salvaria).
+   IBroker *strategyBroker = g_gatedBroker;
+   if(InpEnableCorrectiveBreaker)
+   {
+      g_breaker = new CMksCircuitBreaker(g_gatedBroker, g_risk, g_book, g_logger);
+      strategyBroker = g_breaker;
+   }
+   g_logger.Info("ColorReversal", "circuit breaker corretivo",
+      StringFormat("\"enabled\":%s,\"maxDailyLossPct\":%.2f,\"maxDrawdownPct\":%.2f,\"minEquityAbs\":%.2f",
+                   (InpEnableCorrectiveBreaker ? "true" : "false"),
+                   InpMaxDailyLossPct, InpMaxDrawdownPct, InpMinEquityAbs));
+
    //--- 11.5 Visualização (ADR-028) -------------------------------+
    // Marcadores de trade como chart objects. No live desenha no chart do
    // CS auto-aberto (caixinhas renko); no tester desenha sobre os candles
@@ -878,7 +900,7 @@ int OnInit()
    //--- 12. Strategy ----------------------------------------------+
    // g_painter é NULL se InpShowTradeMarkers=false → estratégia roda sem
    // visualização, comportamento idêntico (paridade — ADR-028 §7).
-   g_strategy = new CMksColorReversalStrategy(g_gatedBroker, g_lotSizer,
+   g_strategy = new CMksColorReversalStrategy(strategyBroker, g_lotSizer,
                                                g_iSymbol, slPoints,
                                                InpMagicNumber, g_logger, g_book,
                                                g_painter);
@@ -1131,6 +1153,7 @@ void OnTick()
       MksTick t = ToMksTick(mt);
       if(g_tickWriter != NULL) RecordLiveTick(t); // .mkstick de paridade (E2.1), best-effort
       g_feedClock.SetNow(t.timeMsc);              // E2.4: clock de decisão avança com o feed
+      if(g_breaker != NULL) g_breaker.OnTick();   // ADR-040: breach → flatten + trava, ANTES do Send da estratégia
       IngestOne(t);
    }
 

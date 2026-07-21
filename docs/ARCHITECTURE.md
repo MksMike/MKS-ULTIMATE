@@ -2665,7 +2665,7 @@ O breaker Por Conta era só **PREVENTIVO**: o `CMksRiskManager.CheckOrder` bloqu
 **Consequências:**
 - Novos: `Core/Risk/CMksCircuitBreaker.mqh`, `Tests/Test_CMksCircuitBreaker.mq5`. `CMksRiskManager` refatorado (`AccountBreached` público + predicado privado). Compila **52/0/0**.
 - **Behavior-preserving no RiskManager** → `Test_CMksRiskManager`/`Test_CMksRiskGatedBroker` sem regressão (compilam; re-rodar no MT5 para confirmar verde).
-- **Pendente:** integração no `ColorReversal.mq5` (e opcionalmente o stress runner) — fatia seguinte; e o MT5-verde dos testes.
+- **Integrado no `ColorReversal.mq5`** (2026-07-22): input `InpEnableCorrectiveBreaker` (default ON), breaker envolve o gate preventivo (broker mais externo da estratégia), `breaker.OnTick()` dirigido por tick ANTES do `IngestOne` (age antes do Send). Muda o comportamento live: ao cruzar limite Por Conta, fecha + trava (antes só bloqueava a abertura). Desligar volta ao só-preventivo. Compila 52/0/0. **Resta só o MT5-verde** (testes + smoke do breaker disparando em tester/demo). Integração no stress runner fica opcional/futura.
 - **Trade-off nomeado:** flatten é per-tick; um `Close` que falha re-tenta no próximo tick (a posição presa fica até fechar / SL / operador) — quietude conservadora, não bug.
 
 **Fronteiras:**
@@ -2681,7 +2681,7 @@ O breaker Por Conta era só **PREVENTIVO**: o `CMksRiskManager.CheckOrder` bloqu
 
 - **ADR-031 — manter+corrigir o Custom Symbol** (referenciada nas notas da ADR-023-A, ainda **não escrita como seção própria**). Entregável E7.3 do `docs/ROADMAP-CORE-HARDENING.md`: redigir formalmente com o dado do gate empírico (sobrevivência à virada de dia). Bloqueada por E7.1 (gate empírico pendente de dado).
 - **Termo spread-aware dinâmico do piso de SL** — a fórmula por-tick (que fecha a cauda residual do M12) foi deliberadamente **diferida ao E2** (precisa do runner de replay + spread por-tick no simulador). Decisão de shipar o piso estático de brick agora (E0.3) tomada com o dono em 2026-07-19; o termo dinâmico é decisão arquitetural em aberto para o E2.
-- ~~**Circuit breaker corretivo (`flatten-on-breach`)**~~ — **RESOLVIDO pela ADR-040 (2026-07-22):** `CMksCircuitBreaker` (decorator `IBroker` + `OnTick`) fecha tudo + trava sticky ao cruzar limite Por Conta, reusando o predicado do gate preventivo (fonte única). Componente + `Test_CMksCircuitBreaker` code-complete (52/0/0). **Resta** a integração no `ColorReversal.mq5` + o MT5-verde dos testes.
+- ~~**Circuit breaker corretivo (`flatten-on-breach`)**~~ — **RESOLVIDO pela ADR-040 (2026-07-22):** `CMksCircuitBreaker` (decorator `IBroker` + `OnTick`) fecha tudo + trava sticky ao cruzar limite Por Conta, reusando o predicado do gate preventivo (fonte única). Componente + `Test_CMksCircuitBreaker` + **integração no `ColorReversal.mq5`** (input `InpEnableCorrectiveBreaker`, default ON) code-complete (52/0/0). **Resta só o MT5-verde** (testes + smoke do breaker disparando).
 
 - **Calibração do StressLab — eixo slippage** (ADR-039, fatia 5). Spread (240 pts) e drift de latência (~0.25 adverso/ms) já **medidos e ligados**. Falta só **medir o slippage puro de ordem real** (requested vs filled) — separado do drift de latência; só há 11 trades do demo (amostra insuficiente). Adiado por depender de dado a coletar (demo longa ou EA de medição dedicado).
 
