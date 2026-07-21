@@ -57,6 +57,9 @@ Insumos criados nesta sessão para o debate: `docs/ROADMAP-CHECKLIST.md` (invent
 
 ## 5. Pendências
 
+> **Coleta de ticks LIGADA (2026-07-21, ~08:34 UTC):** `TickRecorder` Service capturando **XAUUSDm** neste terminal (Exness, conta 277801828) → `MQL5\Files\MKS-ULTIMATE\Ticks\XAUUSDm_<AAAAMMDD>.mkstick` (um por dia UTC). Objetivo: base de dados para os testes do runner de estresse (§4). **Esses `.mkstick` são LOCAIS deste terminal e gitignorados — NÃO vêm pelo `git pull`.** Se a próxima sessão for noutro PC, ou se leva os arquivos na mão / backup (`CHEATSHEET §9.7`), ou liga um `TickRecorder` próprio lá. Manter o terminal ligado/conectado para não abrir buracos na série.
+
+
 - **E6.1/E6.3 — smoke test no MT5 (dono):** anexar o `ColorReversal` e conferir (a) dialog nos 3 níveis, sem K/L; (b) preset `XAU` sobrepõe (log `starting` mostra `preset:XAU, S:3.00000, slBricks:10.00`); (c) `Custom` (default) preserva o comportamento anterior; (d) um tester run abre/fecha ordens como antes. Só então o E6.1/E6.3 vira "MT5-verificado". **Committado já** (a pedido do dono, com a pendência anotada na ADR-037/CHANGELOG).
 - **E6.1 sub-item:** unificar o default de `InpHistoricalFillDays` entre Producer e ColorReversal (ou documentar por que diferem). Pequeno.
 - **Preset EURUSD:** valores iniciais (brick 0.0010 / SL 10 bricks) **não validados com dado** — ajustar quando EURUSD entrar em uso real.
