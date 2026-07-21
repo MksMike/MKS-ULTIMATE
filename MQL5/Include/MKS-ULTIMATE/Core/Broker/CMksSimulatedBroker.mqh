@@ -120,6 +120,14 @@ private:
    MksSimAutoCloseEvent m_autoCloseEvents[];
    long                 m_autoCloseTotal;
 
+   // Injeção determinística one-shot do desfecho do PRÓXIMO Close (E5.2/
+   // ADR-035): valida o tratamento de fill parcial/recusa no caminho de
+   // fechamento (o Close normal do sim sempre preenche integral). Sem RNG;
+   // consumida após um uso. Default FILLED = inerte.
+   bool                 m_hasForcedClose;
+   ENUM_MKS_EXEC_STATUS m_forcedCloseStatus;
+   double               m_forcedCloseFilledLots;
+
    int FindPositionIndex(ulong positionId) const
    {
       int n = ArraySize(m_positions);
@@ -244,6 +252,9 @@ public:
       m_lastTickSeq      = 0;
       m_hasMid           = false;
       m_autoCloseTotal   = 0;
+      m_hasForcedClose        = false;
+      m_forcedCloseStatus     = MKS_EXEC_FILLED;
+      m_forcedCloseFilledLots = 0.0;
       ArrayResize(m_positions, 0);
       ArrayResize(m_autoCloseEvents, 0);
    }
@@ -346,6 +357,51 @@ public:
       if(lots <= 0.0 || lots > m_positions[idx].lots)
          return MakeRejected(MKS_ERR_CORE_INVALID_ARGUMENT, m_lastMid);
 
+      // Injeção one-shot do desfecho (E5.2/ADR-035). Só se aplica a uma Close
+      // de posição VÁLIDA (as validações acima passaram), para não gastar a
+      // injeção numa chamada degenerada. Consome ANTES de ramificar.
+      if(m_hasForcedClose)
+      {
+         ENUM_MKS_EXEC_STATUS forced = m_forcedCloseStatus;
+         double forcedFill           = m_forcedCloseFilledLots;
+         m_hasForcedClose        = false;   // one-shot
+         m_forcedCloseStatus     = MKS_EXEC_FILLED;
+         m_forcedCloseFilledLots = 0.0;
+
+         if(forced == MKS_EXEC_REJECTED)
+            return MakeRejected(MKS_ERR_CORE_INVALID_ARGUMENT, m_lastMid);
+         if(forced == MKS_EXEC_ERROR)
+            return MakeError(MKS_ERR_BROKER_TIMEOUT, m_lastMid);
+         if(forced == MKS_EXEC_PARTIAL)
+         {
+            // Fill estritamente parcial: 0 < filled < lots pedido. Reduz a
+            // posição só pelo filled; residual segue aberto (isOpen=true).
+            double filled = (forcedFill > 0.0 && forcedFill < lots)
+                            ? forcedFill : (lots * 0.5);
+            double pt = m_symbol.Point();
+            ENUM_MKS_ORDER_SIDE opp =
+               (m_positions[idx].side == MKS_ORDER_BUY) ? MKS_ORDER_SELL : MKS_ORDER_BUY;
+            double fp   = m_costModel.FillPriceFor(opp, m_lastMid, pt);
+            double comm = m_costModel.Commission(filled);
+            m_positions[idx].lots -= filled;   // < lots => nunca zera
+
+            MksExecutionResult rp;
+            rp.status         = MKS_EXEC_PARTIAL;
+            rp.positionId     = positionId;
+            rp.dealId         = m_nextDealId++;
+            rp.fillPrice      = fp;
+            rp.requestedPrice = m_lastMid;
+            rp.filledLots     = filled;
+            rp.commission     = comm;
+            rp.swap           = 0.0;
+            rp.execTimeMsc    = m_lastTickTimeMsc;
+            rp.brokerRetcode  = 0;
+            rp.attempts       = 1;
+            return rp;
+         }
+         // forced == MKS_EXEC_FILLED cai no caminho normal abaixo.
+      }
+
       double point = m_symbol.Point();
       // Close fill: lado oposto ao da posição.
       ENUM_MKS_ORDER_SIDE oppositeSide =
@@ -445,6 +501,22 @@ public:
 
    int  PendingAutoCloses() const { return ArraySize(m_autoCloseEvents); }
    long AutoCloseTotal()    const { return m_autoCloseTotal; }
+
+   // Força o desfecho do PRÓXIMO Close (one-shot, E5.2/ADR-035).
+   //   MKS_EXEC_PARTIAL  — fill de fechamento parcial: filledLots em
+   //                       (0, lots pedido) fecha só esse volume, residual
+   //                       segue aberto. filledLots<=0 ou >=lots => metade.
+   //   MKS_EXEC_REJECTED — recusa (nenhuma posição alterada).
+   //   MKS_EXEC_ERROR    — falha de execução (nenhuma posição alterada).
+   //   MKS_EXEC_FILLED   — inerte (limpa qualquer injeção pendente).
+   // Consumida após um Close de posição válida; depois volta ao normal
+   // (FILLED integral). Determinístico — sem RNG.
+   void SetNextCloseStatus(ENUM_MKS_EXEC_STATUS status, double filledLots = 0.0)
+   {
+      m_hasForcedClose        = (status != MKS_EXEC_FILLED);
+      m_forcedCloseStatus     = status;
+      m_forcedCloseFilledLots = filledLots;
+   }
 };
 
 #endif // MKS_ULTIMATE_CORE_BROKER_CMKSSIMULATEDBROKER_MQH

@@ -145,17 +145,19 @@ Referência cruzada: os IDs entre colchetes (ex.: `[H1]`, `[M9]`, `[cs-recovery-
 
 ## Fase E5 — Gestão de trade integrada
 
-**Status:** Não iniciada
+**Status:** Em andamento — **E5.1** (TradeManager num composition root real, teste de integração) e **E5.2** (partial close acumula fill parcial + hook one-shot no sim) feitos via **ADR-035** (2026-07-21). **MT5-verificado (2026-07-21): `Test_TradeManagerIntegration` 52/52 assertions (7 tests), `Test_CMksTradeManager` 74/74 (28 tests), `Test_CMksSimulatedBroker` 83/83 (20 tests), 0 failed** ✅. **E5.3/E5.4** não iniciadas (tocam o grafo do ColorReversal — Strategy/Risk/Account).
 **Depende de:** E1, E4. **Bloqueia:** Fase 10.
+
+**Nota (2026-07-21):** o `CMksTradeManager` sai de "coberto só por mock" (`CMksRecordingBroker`) para provado na cadeia REAL — `CMksCostModel → CMksSimulatedBroker → CMksRiskGatedBroker(+RiskManager+FixedLotSizer+SimPositionBook) → CMksTradeManager` — via `Test_TradeManagerIntegration.mq5` (7 testes: BE/partial/trail contra fills reais + idempotência; auto-detach no SL hit; rejeições do gate; fill parcial acumulado; determinismo duplo-run). O bug `[partial-close-partial-status-reapplies]` (partial re-fechava o alvo inteiro sobre o residual num `MKS_EXEC_PARTIAL`) foi corrigido com um acumulador de fill (re-emite só o residual). Ver ADR-035 e `CHANGELOG.md [Não lançado]`. Falta fazer E5.3/E5.4.
 
 **Por que importa:** a peça que responde à ausência que quebrou o V5 (gestão reativa) está coberta por unit tests mas **nunca rodou num composition root real**. Estratégias reais vão usá-la — precisa funcionar fim a fim antes.
 
 **Entregáveis:**
 
-- **E5.1 — TradeManager integrado fim a fim** `[trademanager-not-wired-in-ea]`
-  - Runner (ou EA de validação) que compõe `CMksTradeManager` sobre `CMksSimulatedBroker` + auto-close, exercitando BE/trailing/partial contra fills reais e o interplay com auto-detach e o `CMksRiskGatedBroker`.
-- **E5.2 — Partial close trata fill parcial** `[partial-close-partial-status-reapplies]`
-  - Tratar `MKS_EXEC_PARTIAL` explicitamente (acumular `filledLots`, recalcular sobre o residual, ou marcar progresso) + teste com `SetNextCloseStatus(MKS_EXEC_PARTIAL)`.
+- **E5.1 — TradeManager integrado fim a fim** `[trademanager-not-wired-in-ea]` — **feito (ADR-035, 2026-07-21; MT5 pendente)**
+  - Runner (ou EA de validação) que compõe `CMksTradeManager` sobre `CMksSimulatedBroker` + auto-close, exercitando BE/trailing/partial contra fills reais e o interplay com auto-detach e o `CMksRiskGatedBroker`. → materializado como teste de integração headless `Test_TradeManagerIntegration.mq5` (o critério de saída pede "testes que provam"); EA de replay com gestão fica para a Fase 10 se necessário.
+- **E5.2 — Partial close trata fill parcial** `[partial-close-partial-status-reapplies]` — **feito (ADR-035, 2026-07-21; MT5 pendente)**
+  - Tratar `MKS_EXEC_PARTIAL` explicitamente (acumular `filledLots`, recalcular sobre o residual, ou marcar progresso) + teste com `SetNextCloseStatus(MKS_EXEC_PARTIAL)`. → acumulador `m_partialFilledLots` re-emite só o residual até o alvo; `SetNextCloseStatus` adicionado ao `CMksSimulatedBroker` (one-shot, determinístico); regressão provada em `Test_TradeManagerIntegration`.
 - **E5.3 — Exposição órfã no flip** `[close-failure-clears-state-still-opens]`
   - Em flip, se `CloseCurrentIfAny` retornar `false`, NÃO abrir nova posição no mesmo brick (deixar auto-detach/risk reconciliar) ou ao menos logar WARN de exposição dupla potencial.
 - **E5.4 — Semântica do circuit breaker** `[circuit-breaker-only-gates-opening, daypnl-uses-equity, rollover-baseline]`

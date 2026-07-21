@@ -2460,6 +2460,42 @@ A comissão é **computada** (`CMksCostModel`→`CMksSimulatedBroker`: `r.commis
 
 ---
 
+### ADR-035: Gestão de trade integrada — TradeManager em composition root real (E5.1) + partial close acumula fill parcial (E5.2)
+
+**Data:** 2026-07-21
+**Status:** Aceita
+**Relação:** Executa **E5.1/E5.2** do `docs/ROADMAP-CORE-HARDENING.md`; rastreia `[trademanager-not-wired-in-ea]` e `[partial-close-partial-status-reapplies]` da auditoria 2026-06-02. Fecha a **lição V5 #2** (gestão reativa com state machine, não "vou lembrar de fechar") no caminho end-to-end. Complementa a ADR-019 (slice 5b, `CMksTradeManager`) e a ADR-027 §7.3 (auto-close de SL/TP + auto-detach).
+
+**Contexto:**
+1. **E5.1 — TradeManager nunca correu num composition root real `[trademanager-not-wired-in-ea]`.** O `CMksTradeManager` (BE/trailing/partial + auto-detach) tinha 29 testes robustos, mas **todos contra o mock `CMksRecordingBroker`**. Nenhuma estratégia do projeto usa gestão de trade (o `ColorReversal` da Fase 9 é reversão de cor pura), então BE/trailing/partial **jamais foram exercitados** contra fills reais do `CMksSimulatedBroker`, o auto-close de SL/TP, o auto-detach via `CMksSimPositionBook`, nem a decoração do `CMksRiskGatedBroker`. As estratégias reais (Fase 10) vão compor exatamente essa cadeia — provar a peça no root real é pré-requisito.
+2. **E5.2 — partial close re-fechava o alvo sobre o residual `[partial-close-partial-status-reapplies]`.** No `Update()`, o partial só marcava `m_partialDone` em `MKS_EXEC_FILLED`. Um `MKS_EXEC_PARTIAL` caía no ramo de WARN e deixava `m_partialDone=false` → no próximo tick elegível re-emitia `Close(alvo INTEIRO)` sobre o residual → **over-close** (ou loop de rejeições quando o alvo passa a exceder os lots restantes). Latente: nenhum broker do projeto devolvia `PARTIAL` até aqui — mas um broker live pode, e é o tipo de divergência silenciosa que a disciplina anti-V5 proíbe.
+
+**Decisão:**
+1. **Partial close acumula fill parcial (E5.2).** `CMksTradeManager` ganha `m_partialFilledLots`. O alvo (`lots iniciais·pct`) é fechado UMA vez, re-emitindo só o **residual** (`alvo − acumulado`) a cada tick elegível até o alvo ser atingido. `MKS_EXEC_PARTIAL` é **progresso**, não falha: acumula `r.filledLots` e reprocessa o resto depois; `m_partialDone` só vira `true` quando o acumulado ≥ alvo. Zero-fill num status "ok" (broker degenerado) cai no WARN (não acumula, reprocessa). Getter `PartialFilledLots()` para observabilidade; reset no `Attach`/construtor.
+2. **Injeção determinística one-shot no `CMksSimulatedBroker` (E5.2).** `SetNextCloseStatus(status, filledLots)` força o desfecho do PRÓXIMO Close (`PARTIAL` com fill < pedido / `REJECTED` / `ERROR`), sem RNG, consumida após um uso. Modela um **fill de fechamento parcial** (residual segue aberto) — comportamento real de broker que o sim (que sempre fillava integral) não representava. Default `FILLED` = inerte.
+3. **Teste de integração end-to-end (E5.1).** `Test_TradeManagerIntegration.mq5` compõe a cadeia REAL (`CMksCostModel → CMksSimulatedBroker → CMksRiskGatedBroker(+CMksRiskManager+CMksFixedLotSizer+CMksSimPositionBook) → CMksTradeManager`) e prova, contra fills reais: (a) BE+partial+trail no mesmo tick tocam o estado do **simulador** (SL movido, lots reduzido) + idempotência do re-Update; (b) o BE move o SL do broker e um recuo de preço auto-fecha a posição no sim → o TM **auto-detacha** sem tocar broker fantasma; (c) o gate rejeita 2ª abertura (`maxOpenPositions`) e abertura sem SL → sem posição fantasma, TM não é vinculado; (d) fill parcial **acumula e fecha exatamente o alvo** (regressão do E5.2); (e) determinismo duplo-run do caminho integrado.
+
+**Alternativas consideradas:**
+- **E5.1 como EA de replay de `.mkstick`** (irmão do `DecisionReplayer`). Rejeitada para esta fatia: o critério de saída pede "testes que provam o comportamento e a idempotência" — um teste headless de cenário scriptado prova o wiring de forma determinística, roda na suíte (Alert em falha) e não depende de fixture. Um EA de replay com gestão fica como evolução quando uma estratégia real da Fase 10 precisar.
+- **E5.2 provado só com mock** (`CMksRecordingBroker.SetNextCloseStatus`, que já existia). Insuficiente sozinho: o E5.1 pede "contra fills reais (incl. parciais)". A injeção no sim prova o acúmulo end-to-end (posição de fato reduzida pelo fill parcial). O mock segue cobrindo o caso de falha na suíte do TradeManager.
+- **Marcar `partialDone` no primeiro `PARTIAL`** ("tentou, segue a vida"). Rejeitada: deixaria a posição com volume acima do pretendido (fechou menos que o pct) sem sinal — o oposto do bug, igualmente errado. O contrato é "fecha o pct configurado"; re-emitir o residual é a semântica correta.
+- **Sim recusar parciais** (sempre integral, como hoje). Rejeitada: parcial é comportamento real de broker; não modelá-lo deixaria o E5.2 sem prova end-to-end e a Fase 10 exposta ao mesmo bug em live.
+
+**Consequências:**
+- `CMksTradeManager`: novo estado `m_partialFilledLots` + `PartialFilledLots()`; bloco de partial re-emitindo residual. Idempotência e ordem (BE→partial→trail) preservadas; os 28 testes do `Test_CMksTradeManager` seguem válidos (a mudança é **não-breaking**: `FILLED` integral fecha o alvo num passo, como antes).
+- `CMksSimulatedBroker`: `SetNextCloseStatus` + estado one-shot. Default `FILLED` = inerte → zero impacto nos testes existentes (nenhum injeta). **Determinismo preservado** (a injeção é parte da sequência de chamadas).
+- Novo `Test_TradeManagerIntegration.mq5` (7 testes). **Compila 0/0** (`compile-all`: 48 arquivos limpos). **MT5-verificado (2026-07-21): `Test_TradeManagerIntegration` 52/52 assertions (7 tests), `Test_CMksTradeManager` 74/74 (28 tests), `Test_CMksSimulatedBroker` 83/83 (20 tests), 0 failed** ✅.
+- **Disjunção do ColorReversal:** todos os arquivos tocados (`CMksTradeManager`, `CMksSimulatedBroker`, teste novo) estão **FORA** do grafo de includes do `ColorReversal.mq5` — editar o E5.1/E5.2 não recompila o EA da captura (checkpoint §4 tabela).
+- Fecha `[trademanager-not-wired-in-ea]` e `[partial-close-partial-status-reapplies]`. Os critérios do E5.1/E5.2 ("BE/trailing/partial fim a fim + parcial + idempotência") ficam **atendidos**; faltam E5.3/E5.4 para fechar a Fase E5.
+
+**Fronteiras:**
+- Não wireia o TradeManager numa estratégia real ainda (Fase 10) — prova a peça no composition root, não cria produto.
+- **E5.3** (exposição órfã no flip do `ColorReversal`) e **E5.4** (semântica preventiva vs. corretiva do circuit breaker + `DayPnL`) ficam para as próximas fatias — tocam o grafo do ColorReversal (Strategy/Risk/Account).
+- Não modela fila temporal de múltiplos parciais por um único Close no sim (a injeção é one-shot por chamada); o acúmulo multi-tick do TradeManager cobre o caso realista (residual re-emitido tick a tick).
+- Não toca o caminho live (`CMksMt5Broker`): fill parcial real live vem do retorno do `OrderSend`/deals, fora do escopo desta fatia.
+
+---
+
 ## 4. Decisões pendentes
 
 - **ADR-031 — manter+corrigir o Custom Symbol** (referenciada nas notas da ADR-023-A, ainda **não escrita como seção própria**). Entregável E7.3 do `docs/ROADMAP-CORE-HARDENING.md`: redigir formalmente com o dado do gate empírico (sobrevivência à virada de dia). Bloqueada por E7.1 (gate empírico pendente de dado).

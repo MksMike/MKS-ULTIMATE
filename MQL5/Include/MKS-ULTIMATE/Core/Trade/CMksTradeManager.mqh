@@ -121,6 +121,10 @@ private:
    bool   m_beApplied;
    bool   m_trailActive;
    bool   m_partialDone;
+   double m_partialFilledLots; // volume ACUMULADO já fechado pelo partial
+                               // (soma dos fills, inclui parciais). Alvo do
+                               // partial = m_initialLots·pct; done quando o
+                               // acumulado alcança o alvo. ADR-035 / E5.2.
    double m_currentSl;      // último SL aplicado (broker ou setup inicial)
 
    void LogInfo(const string &msg, const string &ctx)
@@ -204,6 +208,7 @@ public:
       m_beApplied   = false;
       m_trailActive = false;
       m_partialDone = false;
+      m_partialFilledLots = 0.0;
       m_currentSl   = 0.0;
    }
 
@@ -270,6 +275,7 @@ public:
       m_beApplied   = false;
       m_trailActive = false;
       m_partialDone = false;
+      m_partialFilledLots = 0.0;
    }
 
    // Desvincula sem ação de broker. Usado em fechamento externo
@@ -285,6 +291,7 @@ public:
    bool   IsBeApplied() const { return m_beApplied; }
    bool   IsTrailing()  const { return m_trailActive; }
    bool   IsPartialDone() const { return m_partialDone; }
+   double PartialFilledLots() const { return m_partialFilledLots; }
    double CurrentSl()   const { return m_currentSl; }
    ulong  PositionId()  const { return m_positionId; }
 
@@ -337,26 +344,56 @@ public:
          }
       }
 
-      // 2. Partial close
+      // 2. Partial close — fecha um volume-ALVO (target = lots iniciais·pct)
+      //    UMA vez. Fill parcial (MKS_EXEC_PARTIAL) é PROGRESSO, não falha:
+      //    acumula o r.filledLots e re-emite só o RESIDUAL (target − acumulado)
+      //    no próximo tick elegível, até o alvo ser atingido. Sem isso, um
+      //    PARTIAL deixaria m_partialDone=false e o próximo tick re-fecharia
+      //    o target INTEIRO sobre o residual (over-close). ADR-035 / E5.2.
+      //    Zero-fill num status "ok" (broker degenerado) cai no ramo de WARN
+      //    — evita acumular nada e reprocessa no próximo tick.
       if(m_params.partialEnabled && !m_partialDone
          && profit >= m_params.partialTriggerPoints)
       {
-         double closeLots = m_initialLots * m_params.partialClosePct / 100.0;
-         MksExecutionResult r = m_broker.Close(m_positionId, closeLots);
-         step.brokerCalls++;
-         if(r.status == MKS_EXEC_FILLED)
+         const double lotEps = 1e-9;
+         double targetLots    = m_initialLots * m_params.partialClosePct / 100.0;
+         double remainingLots = targetLots - m_partialFilledLots;
+         if(remainingLots > lotEps)
          {
-            m_partialDone = true;
-            step.partialDone = true;
-            LogInfo("partial aplicado",
-                    StringFormat("\"pid\":%I64u,\"lots\":%.4f,\"pct\":%.2f",
-                                 m_positionId, closeLots, m_params.partialClosePct));
-         }
-         else
-         {
-            LogWarn("broker.Close falhou em partial",
-                    StringFormat("\"pid\":%I64u,\"lots\":%.4f,\"status\":%d",
-                                 m_positionId, closeLots, (int)r.status));
+            MksExecutionResult r = m_broker.Close(m_positionId, remainingLots);
+            step.brokerCalls++;
+            bool progressed = (r.status == MKS_EXEC_FILLED
+                               || r.status == MKS_EXEC_PARTIAL)
+                              && r.filledLots > lotEps;
+            if(progressed)
+            {
+               m_partialFilledLots += r.filledLots;
+               if(m_partialFilledLots >= targetLots - lotEps)
+               {
+                  m_partialDone    = true;
+                  step.partialDone = true;
+                  LogInfo("partial concluído",
+                          StringFormat("\"pid\":%I64u,\"target\":%.4f,\"filled\":%.4f,\"pct\":%.2f",
+                                       m_positionId, targetLots, m_partialFilledLots,
+                                       m_params.partialClosePct));
+               }
+               else
+               {
+                  // Fill parcial: registra o progresso; o residual fica para
+                  // o próximo tick elegível (NÃO re-fecha o target inteiro).
+                  LogInfo("partial parcial — acumulando residual",
+                          StringFormat("\"pid\":%I64u,\"filledNow\":%.4f,\"cum\":%.4f,\"target\":%.4f",
+                                       m_positionId, r.filledLots,
+                                       m_partialFilledLots, targetLots));
+               }
+            }
+            else
+            {
+               LogWarn("broker.Close falhou/zero-fill em partial",
+                       StringFormat("\"pid\":%I64u,\"lots\":%.4f,\"status\":%d,\"filled\":%.4f",
+                                    m_positionId, remainingLots, (int)r.status,
+                                    r.filledLots));
+            }
          }
       }
 
