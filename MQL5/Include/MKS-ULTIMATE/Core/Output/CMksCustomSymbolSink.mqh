@@ -56,6 +56,8 @@ public:
    double   brickSizePts;  // ADR-022 regra 8: tamanho VISUAL full do brick
    int      barsPushed;
    int      updateFailures;
+   int      formingSuppressed;  // barras parciais puladas por nextBarTime<=0 (guard time=0, 2026-07-22)
+   int      invalidTimeDropped; // bricks descartados do desenho por brickTime<=0 (defesa)
    bool     showWicks;     // ADR-022 regra 3: false (default) = caixinhas;
                            // true = wicks de excursão preservados no CS
    long     maxFutureDriftSecs; // ADR-023-A: teto de adianto da timeline em
@@ -70,6 +72,8 @@ public:
       brickSizePts       = 0.0;
       barsPushed         = 0;
       updateFailures     = 0;
+      formingSuppressed  = 0;
+      invalidTimeDropped = 0;
       showWicks          = false;
       maxFutureDriftSecs = 6 * 3600; // 6h: folga ampla sob o teto do MT5
                                      // (~fim-de-amanhã, ≥24h no pior caso)
@@ -98,6 +102,13 @@ public:
       return brickTime;
    }
 
+   // Uma barra do CS exige slot de tempo VÁLIDO (> 0). Escrever em time <= 0
+   // grava a barra em 1970.01.01 e CORROMPE o container do CS (sintoma
+   // observado 2026-07-22: HistoryBase "invalid container (1970.01.01)").
+   // Guarda pura na fronteira de escrita — o .mksbk segue com o brick intacto
+   // (ADR-020: o CS é só desenho, a estratégia não o lê). Testável sem CS.
+   static bool IsRenderableBarTime(datetime t) { return t > (datetime)0; }
+
    void OnBrickClose(const MksBrick &brick) override
    {
       if(StringLen(csName) == 0) return;
@@ -110,6 +121,19 @@ public:
       // (ADR-028) ancora marcadores nesse tempo.
       datetime brickTime = ComputeBrickTime(brick.closeTimeMsc, nextBarTime,
                                             maxFutureDriftSecs);
+      // Defesa: brickTime<=0 só ocorre se closeTimeMsc<=0 (tick sem tempo) —
+      // NÃO acontece com tick real (ComputeBrickTime(>0) > 0, provado em
+      // Test_FirstBrickFromEpochZero). Se ocorrer, gravar corromperia o CS:
+      // descarta do DESENHO (o brick segue no .mksbk) e falha alto, SEM avançar
+      // lastBarTime/nextBarTime a partir de um tempo inválido.
+      if(!IsRenderableBarTime(brickTime))
+      {
+         invalidTimeDropped++;
+         PrintFormat("[CS] brick descartado do desenho: brickTime<=0 "
+                     "(closeTimeMsc=%I64d). Brick intacto no .mksbk. cs=%s",
+                     brick.closeTimeMsc, csName);
+         return;
+      }
       rates[0].time = brickTime;
 
       // ADR-022 regra 8: bricks no CS têm tamanho VISUAL full (=
@@ -176,6 +200,20 @@ public:
    {
       if(!fb.hasData) return;
       if(StringLen(csName) == 0) return;
+      // Guard (2026-07-22): sem brick fechado, nextBarTime==0 → o slot seria
+      // 1970.01.01, que CORROMPE o container do CS. Pula a barra parcial e
+      // FALHA ALTO (uma vez): se persistir, o builder não fechou nenhum brick
+      // (ex.: K subdimensionado p/ brick pequeno) — sintoma exposto, não
+      // silêncio. Sem afetar o caminho normal (nextBarTime>0 após o 1º brick).
+      if(!IsRenderableBarTime(nextBarTime))
+      {
+         formingSuppressed++;
+         if(formingSuppressed == 1)
+            PrintFormat("[CS] forming suprimido: nextBarTime<=0 (nenhum brick "
+                        "fechou ainda). Barra parcial NAO gravada p/ evitar "
+                        "time=0. cs=%s", csName);
+         return;
+      }
       MqlRates rates[1];
       rates[0].time        = nextBarTime;
       rates[0].open        = fb.open;

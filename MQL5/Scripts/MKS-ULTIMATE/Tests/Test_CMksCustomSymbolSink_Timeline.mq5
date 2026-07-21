@@ -148,6 +148,37 @@ void Test_Determinism()
 }
 
 //+------------------------------------------------------------------+
+//| Test 10: guarda de time>0 — barra em 1970 (time=0) NÃO é           |
+//| renderável (corromperia o container do CS, bug 2026-07-22)         |
+//+------------------------------------------------------------------+
+void Test_GuardRejectsEpochZeroBarTime()
+{
+   MKS_ASSERT_FALSE(CMksCustomSymbolSink::IsRenderableBarTime((datetime)0),
+                    "time=0 (1970.01.01) NAO é renderável — corromperia o CS");
+   MKS_ASSERT_TRUE(CMksCustomSymbolSink::IsRenderableBarTime((datetime)1),
+                   "time=1 é > 0 → renderável (guarda mínima em time=0)");
+   MKS_ASSERT_TRUE(CMksCustomSymbolSink::IsRenderableBarTime((datetime)BASE),
+                   "time válido é renderável");
+}
+
+//+------------------------------------------------------------------+
+//| Test 11: OnBrickClose com tick REAL nunca produz time=0 — a       |
+//| corrupção vem do forming (nextBarTime=0), não do close.           |
+//+------------------------------------------------------------------+
+void Test_CloseNeverEmitsEpochForValidTick()
+{
+   // Para QUALQUER closeTimeMsc>0, brickTime>0 — inclusive com nextBarTime=0
+   // (1º brick). Prova que a guarda do close é pura defesa (tick real nunca a
+   // dispara) e que a corrupção observada só pode vir do OnBrickForming.
+   datetime a = CMksCustomSymbolSink::ComputeBrickTime(1000, (datetime)0, DRIFT);        // 1s desde epoch
+   datetime b = CMksCustomSymbolSink::ComputeBrickTime(BASE * 1000, (datetime)0, DRIFT); // tick real
+   MKS_ASSERT_TRUE(CMksCustomSymbolSink::IsRenderableBarTime(a),
+                   "closeTimeMsc=1000 → brickTime>0 (close seguro)");
+   MKS_ASSERT_TRUE(CMksCustomSymbolSink::IsRenderableBarTime(b),
+                   "closeTimeMsc real → brickTime>0 (close seguro)");
+}
+
+//+------------------------------------------------------------------+
 void OnStart()
 {
    Print("=== Test_CMksCustomSymbolSink_Timeline ===");
@@ -161,6 +192,9 @@ void OnStart()
    MKS_RUN(Test_RegressionRunawayBoundedUnderSustainedBurst);
    MKS_RUN(Test_PinsAtCapAfterExpectedBricks);
    MKS_RUN(Test_Determinism);
+
+   MKS_RUN(Test_GuardRejectsEpochZeroBarTime);
+   MKS_RUN(Test_CloseNeverEmitsEpochForValidTick);
 
    g_mksTestRunner.Summary();
 }
