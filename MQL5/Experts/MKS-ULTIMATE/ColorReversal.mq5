@@ -75,7 +75,7 @@ input int    InpThresholdLimit      = 20;    // K (ADR-011)
 
 input group "=== Estratégia ==="
 input long   InpMagicNumber         = 527001; // Identificador único desta estratégia
-input double InpSlPoints            = 3000.0; // SL fixo em pontos do símbolo (=10 bricks em XAU/S=3.0). OnInit recusa anexar se < piso mínimo = max(InpMinSlFloorPts, InpMinSlBricks·brickSize) — E0.3/M12.
+input double InpSlBricks             = 10.0;  // SL em BRICKS (broker-agnóstico, ADR-032). Distância = InpSlBricks·InpBrickSize (USD), idêntica em qualquer digits — o EA converte para pontos via Point() em runtime. OnInit recusa anexar se < piso = max(InpMinSlFloorPts, InpMinSlBricks·brickSize) — E0.3/M12.
 
 input group "=== Sizing ==="
 enum ENUM_CR_LOT_MODE
@@ -460,11 +460,11 @@ int OnInit()
    }
 
    g_logger.Info("ColorReversal", "starting",
-      StringFormat("\"magic\":%I64d,\"S\":%.4f,\"slPts\":%.2f,\"lotMode\":\"%s\","
+      StringFormat("\"magic\":%I64d,\"S\":%.4f,\"slBricks\":%.2f,\"lotMode\":\"%s\","
                    "\"fixedLots\":%.4f,\"riskPct\":%.4f,"
                    "\"maxLotsPerTrade\":%.4f,\"maxOpenPos\":%d,\"maxTotalLots\":%.4f,"
                    "\"maxDailyLossPct\":%.4f,\"maxDrawdownPct\":%.4f",
-                   InpMagicNumber, InpBrickSize, InpSlPoints,
+                   InpMagicNumber, InpBrickSize, InpSlBricks,
                    (InpLotMode == CR_LOT_FIXED ? "fixed" : "percent"),
                    InpFixedLots, InpRiskPct,
                    InpMaxLotsPerTrade, InpMaxOpenPositions, InpMaxTotalLots,
@@ -689,6 +689,12 @@ int OnInit()
                           ? (g_brickSizer.SizePoints() / g_iSymbol.Point()) : 0.0;
    double configFloor   = MathMax(InpMinSlFloorPts, InpMinSlBricks * brickSizePts);
 
+   // ADR-032: SL em BRICKS → pontos, pelo Point() do símbolo. A distância
+   // final em preço = slPoints·Point() = InpSlBricks·brickSize (USD), então
+   // o SL é o MESMO número de bricks em digits=2 ou digits=3 (o Point() se
+   // cancela). É a mesma conversão do DecisionReplayer (paridade E2).
+   double slPoints = InpSlBricks * brickSizePts;
+
    if(InpMinSlBricks < 1)
    {
       Alert("MKS ColorReversal: InpMinSlBricks deve ser >= 1 (piso de SL fail-closed).");
@@ -708,17 +714,23 @@ int OnInit()
       Cleanup();
       return INIT_PARAMETERS_INCORRECT;
    }
-   if(InpSlPoints > 0.0 && InpSlPoints < configFloor)
+   if(slPoints > 0.0 && slPoints < configFloor)
    {
-      // Este é o caso exato do M12: operador setou InpSlPoints abaixo do
-      // piso enforçado (ex.: 30 < 300). Recusa anexar ANTES de qualquer
-      // ordem live — em vez de o gate rejeitar cada Send em runtime.
+      // Caso M12 no espaço de bricks: com o SL em bricks isto só dispara se
+      // InpSlBricks < InpMinSlBricks (ou abaixo do belt absoluto). Recusa
+      // anexar ANTES de qualquer ordem live — em vez de o gate rejeitar cada
+      // Send em runtime. reqBricks = piso efetivo convertido de volta a bricks
+      // (bate com InpMinSlBricks quando o belt=0, e reflete o belt quando ele
+      // é o gargalo — o hint continua correto nos dois casos).
+      double reqBricks = (brickSizePts > 0.0) ? (configFloor / brickSizePts)
+                                              : (double)InpMinSlBricks;
       Alert(StringFormat(
-         "MKS ColorReversal: InpSlPoints=%.0f abaixo do piso mínimo enforçado (%.0f pts "
-         "= %d brick(s)). Ajuste InpSlPoints para >= %.0f e reanexe.",
-         InpSlPoints, configFloor, InpMinSlBricks, configFloor));
-      g_logger.Error("ColorReversal", "InpSlPoints abaixo do piso de SL",
-         StringFormat("\"slPoints\":%.1f,\"configFloor\":%.1f", InpSlPoints, configFloor));
+         "MKS ColorReversal: InpSlBricks=%.2f (=%.0f pts) abaixo do piso mínimo "
+         "(%.0f pts = %.2f brick(s)). Suba InpSlBricks para >= %.2f e reanexe.",
+         InpSlBricks, slPoints, configFloor, reqBricks, reqBricks));
+      g_logger.Error("ColorReversal", "InpSlBricks abaixo do piso de SL",
+         StringFormat("\"slBricks\":%.2f,\"slPoints\":%.1f,\"configFloor\":%.1f",
+                      InpSlBricks, slPoints, configFloor));
       Cleanup();
       return INIT_PARAMETERS_INCORRECT;
    }
@@ -833,7 +845,7 @@ int OnInit()
    // g_painter é NULL se InpShowTradeMarkers=false → estratégia roda sem
    // visualização, comportamento idêntico (paridade — ADR-028 §7).
    g_strategy = new CMksColorReversalStrategy(g_gatedBroker, g_lotSizer,
-                                               g_iSymbol, InpSlPoints,
+                                               g_iSymbol, slPoints,
                                                InpMagicNumber, g_logger, g_book,
                                                g_painter);
    // Strategy é IRenkoSink → vai no multiSink junto com writer/CS/audit.

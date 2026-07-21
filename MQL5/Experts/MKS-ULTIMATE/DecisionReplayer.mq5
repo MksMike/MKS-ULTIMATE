@@ -50,7 +50,7 @@ input int    InpInvalidTickLimit = 10;     // L (ADR-006)
 input int    InpThresholdLimit   = 20;     // K (ADR-011)
 
 input group "=== Estratégia (ColorReversal) ==="
-input double InpSlPoints         = 3000.0; // SL em pontos do símbolo
+input double InpSlBricks         = 10.0;   // SL em BRICKS (broker-agnóstico, ADR-032; = InpSlBricks·InpBrickSize USD). Convertido em pontos pelo Point() do símbolo — MESMA conversão do ColorReversal (paridade E2).
 input long   InpMagic            = 527001; // magic da estratégia
 
 input group "=== Sizing ==="
@@ -335,6 +335,12 @@ int OnInit()
       g_journalPath = AutoJournalPath(stem);
    }
 
+   // ADR-032: SL em BRICKS → pontos (Point() já validado > 0 acima). MESMA
+   // conversão do ColorReversal live: distância = InpSlBricks·InpBrickSize
+   // (USD), broker-agnóstica. A simetria bit-a-bit dessa conversão é o que
+   // mantém o runner↔runner (e runner↔golden) determinístico sob a mesma config.
+   double slPoints = InpSlBricks * (InpBrickSize / g_iSymbol.Point());
+
    // 8. Config pinada do runner (o bundle versionado do golden).
    MksDecisionRunnerConfig cfg;
    cfg.journalPath      = g_journalPath;
@@ -350,7 +356,7 @@ int OnInit()
    cfg.commissionPerLot = InpCommPerLot;
    cfg.startBalance     = InpStartBalance;
    cfg.applySwap        = false;         // v1: swap OFF
-   cfg.slPoints         = InpSlPoints;
+   cfg.slPoints         = slPoints;
    cfg.magic            = InpMagic;
    cfg.lotMode          = InpLotMode;
    cfg.fixedLots        = InpFixedLots;
@@ -375,9 +381,9 @@ int OnInit()
       return INIT_FAILED;
    }
    g_logger.Info("DecisionReplayer", "runner ready",
-      StringFormat("\"journalPath\":\"%s\",\"lotMode\":\"%s\",\"slPoints\":%.2f,"
+      StringFormat("\"journalPath\":\"%s\",\"lotMode\":\"%s\",\"slBricks\":%.2f,\"slPoints\":%.2f,"
                    "\"startBalance\":%.2f,\"minSlBricks\":%d,\"maxOpenPositions\":%d",
-                   MksJsonEscape(g_journalPath), InpLotMode, InpSlPoints,
+                   MksJsonEscape(g_journalPath), InpLotMode, InpSlBricks, slPoints,
                    InpStartBalance, InpMinSlBricks, InpMaxOpenPositions));
 
    // 10. Timer para processar ticks.
