@@ -80,7 +80,7 @@ input double InpAtrMinSize            = 0.0;   // Clamp inferior (0 = sem limite
 input double InpAtrMaxSize            = 1e18;  // Clamp superior
 
 input group "=== Histórico / Live ==="
-input int    InpHistoricalFillDays    = 30;    // Histórico (dias). 0 = só live (recomendado p/ paridade ADR-024).
+input int    InpHistoricalFillDays    = 30;    // Histórico (dias). 0 = só live (paridade ADR-024). Default 30: o Producer é ferramenta de VISUALIZAÇÃO (E6.4) — quer histórico profundo. Difere do ColorReversal (=3, warm-up) e do DecisionReplayer (=0, paridade) POR PAPEL, não por acidente.
 input int    InpInvalidTickLimit      = 10;    // L: ticks inválidos consecutivos antes de halt (ADR-006)
 input int    InpThresholdLimit        = 20;    // K: máx thresholds num tick (ADR-011 + nota 2026-05-26 — dimensionar p/ cobrir maior gap entre fim-do-fill e tick-live; com fillDays=0, K=20 OK; com fillDays>0 e S pequeno, considerar K ≥ 100/S)
 

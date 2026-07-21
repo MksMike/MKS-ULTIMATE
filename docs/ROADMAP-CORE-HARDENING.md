@@ -175,20 +175,20 @@ Referência cruzada: os IDs entre colchetes (ex.: `[H1]`, `[M9]`, `[cs-recovery-
 
 ## Fase E6 — Produto operável (UX SaaS)
 
-**Status:** Em andamento — **E6.1/E6.2/E6.3 feitos + E6.4 parcial** (2026-07-21). ADR-037: superfície de inputs enxuta em 3 níveis (Básico/Avançado/Diagnóstico), K/L fora do dialog (const, valores mantidos → golden E2 intacto), preset por instrumento (`InpInstrumentPreset` Custom/XAU/EURUSD). ADR-032 já fechou o E6.2 (SL em bricks). E6.4: runbook (`CHEATSHEET §9.8`) + header corrigido; Producer **mantido separado** (decisão do dono). Compila 0/0 (48 arquivos). **MT5 pendente** (conferir dialog + preset + tester). Resta o sub-item do E6.1 "unificar `InpHistoricalFillDays` Producer↔ColorReversal".
+**Status:** Em andamento — **E6.1/E6.2/E6.3 feitos + E6.4 parcial** (2026-07-21). ADR-037: superfície de inputs enxuta em 3 níveis (Básico/Avançado/Diagnóstico), K/L fora do dialog (const, valores mantidos → golden E2 intacto), preset por instrumento (`InpInstrumentPreset` Custom/XAU/EURUSD). ADR-032 já fechou o E6.2 (SL em bricks). E6.4: runbook (`CHEATSHEET §9.8`) + header corrigido; Producer **mantido separado** (decisão do dono). Compila 0/0 (48 arquivos). **E6.1/E6.3 MT5-verificado (2026-07-21):** dialog nos 3 níveis sem K/L; preset XAU **sobrepõe** o input (com `InpBrickSize=99` o log `starting` saiu `"preset":"XAU","S":3.00000` e o CS virou `MKSCR_3`); Custom preserva (`"preset":"custom","S":99.00000`); OnInit limpo nos 3 runs. (Item (d) — tester com abre/fecha de ordem — **não** re-exercitado; fora do diff da ADR-037, order path intocado.) O sub-item do E6.1 (`InpHistoricalFillDays` Producer↔ColorReversal) foi **fechado documentando por que diferem** (papel, não acidente) — E6.1 completo.
 **Paralela a E2–E5; pré-requisito de operação real (não de construir o core).**
 
 **Por que importa:** o foco declarado é experiência do usuário — "simples de operar, sem confundir com opções demais". Hoje a superfície de configuração e o fluxo de operação contradizem essa meta, e um default (`InpSlPoints=30`) já quebrou em produção.
 
 **Entregáveis:**
 
-- **E6.1 — Reduzir a superfície de configuração** `[input-surface-too-large, k-l-defaults-coupled]` — **feito (ADR-037, 2026-07-21; MT5 pendente)**
+- **E6.1 — Reduzir a superfície de configuração** `[input-surface-too-large, k-l-defaults-coupled]` — **feito (ADR-037, 2026-07-21; MT5-verificado)**
   - ✅ Agrupar inputs em **Básico** (instrumento, brick, SL, modo de lote/risco, limites de conta) vs **Avançado** (risco fino/histórico) vs **Diagnóstico** (paridade/captura/visualização).
   - ✅ Esconder K/L atrás de defaults no composition root (const `kThresholdLimit`/`kInvalidTickLimit`, não mais inputs). **NÃO** auto-derivei K (mudaria o valor → risco de paridade com o golden E2; decisão do dono de manter paridade-safe).
-  - ⬜ Unificar o default de `InpHistoricalFillDays` entre Producer e ColorReversal (ou documentar por que diferem) — **sub-item pequeno remanescente**.
+  - ✅ `InpHistoricalFillDays` — **documentado por que diferem** (2026-07-21): Producer=30 (visualização, histórico profundo), ColorReversal=3 (warm-up leve; estratégia não opera no histórico), DecisionReplayer=0 (paridade). Diferença por PAPEL, não acidente — unificar seria arbitrário (o operador só vê o input do ColorReversal; o footgun "recording exige 0" já é pego por `Alert`). Rationale cruzado nos comentários dos 3 sites.
 - **E6.2 — Unidades explícitas** `[pts-naming-misleading]` — **feito (herdado da ADR-032)**
   - ✅ SL já está em bricks (ADR-032); o único "Pts" restante (`InpMinSlFloorPts`) é legitimamente pontos (belt absoluto). Nada a padronizar além de agrupar/comentar (ADR-037).
-- **E6.3 — Presets por instrumento** — **feito (ADR-037, 2026-07-21; MT5 pendente)**
+- **E6.3 — Presets por instrumento** — **feito (ADR-037, 2026-07-21; MT5-verificado)**
   - ✅ `InpInstrumentPreset` (Custom/XAU/EURUSD); `!= Custom` pré-popula brick/SL/pisos sãos no OnInit (preset vence, precedência logada). XAU = produção; EURUSD = valores iniciais a ajustar.
 - **E6.4 — Runbook de primeira execução + consolidação de artefatos** `[run-ea-flow-manual-multistep, header-describes-nonexistent-stress-runner]` — **parcial (2026-07-21)**
   - ✅ Runbook de 1 página no `CHEATSHEET.md §9.8` (ordem dos passos, anexar no símbolo real, conta hedging, qual EA para quê, mapa das recusas do OnInit).

@@ -22,7 +22,7 @@
 | Bloco | Estado |
 |---|---|
 | **Núcleo / gate de estratégias (E1–E5)** | ✅ **fechado** (todos MT5-verificados) |
-| Produto operável (E6) | 🟢 quase (E6.1/E6.3 código-completo, MT5 pendente) |
+| Produto operável (E6) | 🟢 quase (E6.1/E6.3 MT5-verificado; falta só validar preset EURUSD com dado) |
 | Fundação de indicadores / CS (E7–E8) | ⬜ aberto (E7 pende de dado) |
 | Estratégia lucrativa (Fase 10) | ⬜ aberto (sem hipótese de edge) |
 | Painel de monitoramento (E9) | ⬜ aberto (adiado por decisão do dono) |
@@ -105,10 +105,10 @@
 ## PARTE 2 — O que FALTA construir
 
 ### A. Produto operável (E6) — *quase fechado*
-- [~] **E6.1/E6.3 — superfície de inputs enxuta + presets** (ADR-037) — código completo, compila 0/0. *Critério de pronto:* smoke test no MT5 (dialog nos 3 níveis + preset XAU sobrepõe + Custom preserva + tester abre/fecha).
+- [x] **E6.1/E6.3 — superfície de inputs enxuta + presets** (ADR-037) — *medida: MT5-verificado 2026-07-21 — dialog nos 3 níveis sem K/L, preset XAU sobrepõe (S:3.00000, CS `MKSCR_3`), Custom preserva (S:99.00000), OnInit limpo. Item (d) tester order-cycle não re-exercitado (fora do diff).*
 - [x] E6.2 — unidades explícitas (SL em bricks, ADR-032) — herdado, pronto.
 - [x] E6.4 (runbook + header) — `CHEATSHEET §9.8`; Producer mantido separado (decisão do dono).
-- [ ] **E6.4 — sub-item:** unificar o default de `InpHistoricalFillDays` entre Producer e ColorReversal (ou documentar por que diferem). *Critério: os dois batem ou há nota explicando.*
+- [x] **E6.4 — sub-item:** `InpHistoricalFillDays` — *documentado por que diferem (2026-07-21): Producer=30 (visualização), ColorReversal=3 (warm-up), DecisionReplayer=0 (paridade) — por PAPEL, não acidente; rationale cruzado nos 3 sites.*
 - [ ] **Preset EURUSD validado** — os valores (brick 0.0010 / SL 10 bricks) são chute inicial. *Critério: validar com dado real de EURUSD.*
 
 ### B. StressLab calibrado + liga/desliga — *prioridade Agora (pedido do dono)*

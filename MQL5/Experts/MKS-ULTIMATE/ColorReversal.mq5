@@ -110,7 +110,7 @@ input int    InpMinSlBricks         = 1;      // piso de SL em bricks (>=1; mata
 input double InpMinSlFloorPts       = 0.0;    // belt absoluto do piso, em pontos (0 = só o piso de brick). Ignorado se preset != Custom
 input int    InpMaxOpenPositions    = 1;      // color reversal: máx 1 posição
 input double InpMaxTotalLots        = 1.0;
-input int    InpHistoricalFillDays  = 3;      // dias de bricks históricos no CS/.mksbk (0 = só live). Estratégia NÃO opera no histórico
+input int    InpHistoricalFillDays  = 3;      // dias de bricks históricos no CS/.mksbk (0 = só live). Estratégia NÃO opera no histórico — o fill só dá contexto visual + semeia lastDir. Default 3 (warm-up leve): difere do Producer (=30, visualização) e do DecisionReplayer (=0, paridade) POR PAPEL, não por acidente. Recording (InpRecordMkstick) força 0.
 
 input group "=== DIAGNÓSTICO — paridade / captura ==="
 input bool   InpRecordMkstick         = false; // grava o .mkstick EXATO do feed (replay de decisão, E2.1). Live-only; EXIGE InpHistoricalFillDays=0
