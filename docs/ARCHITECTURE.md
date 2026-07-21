@@ -2640,11 +2640,48 @@ Os presets do StressLab (`CMksStressParams`) traziam `baselineSpreadPoints=0` (s
 
 ---
 
+### ADR-040: Circuit breaker CORRETIVO — fecha tudo + trava ao cruzar limite Por Conta
+
+**Data:** 2026-07-22
+**Status:** Proposta
+**Relação:** Resolve a decisão pendente **`flatten-on-breach`** (ADR-036 §Fronteiras / §4 Decisões pendentes / checklist §G). Complementa a camada Por Conta do `CMksRiskManager` (Fase 6.3).
+
+**Contexto:**
+O breaker Por Conta era só **PREVENTIVO**: o `CMksRiskManager.CheckOrder` bloqueia a ABERTURA de nova ordem ao cruzar `minEquityAbs`/`maxDrawdownPct`/`maxDailyLossPct` (códigos 407–409), mas **não fecha** posição já aberta. Só que o **V5 quebrou a conta com posição ABERTA** — "não abrir novas" não a teria salvo. A ADR-036 (E5.4) documentou a lacuna e adiou o corretivo conscientemente. Decisão do dono: construí-lo agora.
+
+**Decisão:**
+1. **Predicado ÚNICO de breach.** Extração dos 3 checks Por Conta em `CMksRiskManager.AccountBreached(err)` (público) + `AccountBreachPredicate(err)` (privado), reusados pelo `CheckOrder` (preventivo) **e** pelo breaker (corretivo). Fonte única — elimina a divergência entre "o que bloqueia a abertura" e "o que dispara o fecho" (classe de bug do V5). O refactor é **behavior-preserving** (mesmos checks/ordem/slugs de log no `CheckOrder`).
+2. **`CMksCircuitBreaker : IBroker`** (decorator, o mais externo da cadeia). `Send` → REJECTED **sticky** se tripado (senão delega); `Close`/`Modify` → sempre delegam (o flatten precisa fechar). `OnTick()` (dirigido por tick) → se `AccountBreached` **tripa** (sticky) + loga; se tripado e há posição, **flatten**: itera `IPositionBook.PositionAt` → `inner.Close`, retry por tick até flat (Close falho re-tenta).
+3. **Sticky.** Uma vez tripado, trava até `Reset()` — **não** re-arma no rollover diário nem na recuperação de equity. O ponto do corretivo é *"a conta estourou, PARA"*.
+4. **Estratégia cega.** Tenta `Send`, leva REJECTED, trata como qualquer rejeição; a posição fechada pelo flatten some via auto-detach (`IPositionBook.IsOpen`). Agnóstico de estratégia.
+5. **Testes antes da integração.** `Test_CMksCircuitBreaker` (breach → trip + flatten + Send bloqueado + sticky + Reset; conta saudável nunca tripa; `risk` NULL inerte).
+
+**Alternativas consideradas:**
+- **Breaker duplica o predicado** (sem mexer no RiskManager). Rejeitada: 2 cópias da lógica de breach → divergência (o antipadrão do V5). O refactor é behavior-preserving e testado.
+- **Breaker chama `strategy.FlattenForSafety`.** Rejeitada: acopla o breaker a uma estratégia concreta; o flatten via `IPositionBook`+`IBroker` é agnóstico e reusável.
+- **Componente separado (não `IBroker`).** Rejeitada: exigiria um segundo decorator só pra travar o `Send`; um único objeto (`IBroker` + `OnTick`) é mais enxuto e consistente com o `CMksRiskGatedBroker`.
+- **Auto-reset na recuperação.** Rejeitada: um breaker que re-arma sozinho pode entrar em loop trip→flatten→recover→re-entra→trip. Sticky até decisão humana / nova sessão.
+
+**Consequências:**
+- Novos: `Core/Risk/CMksCircuitBreaker.mqh`, `Tests/Test_CMksCircuitBreaker.mq5`. `CMksRiskManager` refatorado (`AccountBreached` público + predicado privado). Compila **52/0/0**.
+- **Behavior-preserving no RiskManager** → `Test_CMksRiskManager`/`Test_CMksRiskGatedBroker` sem regressão (compilam; re-rodar no MT5 para confirmar verde).
+- **Pendente:** integração no `ColorReversal.mq5` (e opcionalmente o stress runner) — fatia seguinte; e o MT5-verde dos testes.
+- **Trade-off nomeado:** flatten é per-tick; um `Close` que falha re-tenta no próximo tick (a posição presa fica até fechar / SL / operador) — quietude conservadora, não bug.
+
+**Fronteiras:**
+- Não integra ainda (só o componente + teste).
+- Não muda a semântica do gate preventivo (segue bloqueando a abertura).
+- Hedging-only (netting fora de escopo, ADR-029).
+
+**Validação contra invariantes (§1):** passa — determinismo (predicado puro sobre o snapshot); caminho único (MESMO predicado no preventivo e no corretivo); abstração (decorator sobre `IBroker`); zero código fechado.
+
+---
+
 ## 4. Decisões pendentes
 
 - **ADR-031 — manter+corrigir o Custom Symbol** (referenciada nas notas da ADR-023-A, ainda **não escrita como seção própria**). Entregável E7.3 do `docs/ROADMAP-CORE-HARDENING.md`: redigir formalmente com o dado do gate empírico (sobrevivência à virada de dia). Bloqueada por E7.1 (gate empírico pendente de dado).
 - **Termo spread-aware dinâmico do piso de SL** — a fórmula por-tick (que fecha a cauda residual do M12) foi deliberadamente **diferida ao E2** (precisa do runner de replay + spread por-tick no simulador). Decisão de shipar o piso estático de brick agora (E0.3) tomada com o dono em 2026-07-19; o termo dinâmico é decisão arquitetural em aberto para o E2.
-- **Circuit breaker corretivo (`flatten-on-breach`)** — o breaker Por Conta é **preventivo** (bloqueia a abertura), não corretivo (não fecha posição já aberta ao cruzar `minEquityAbs`/`maxDrawdownPct`). A ADR-036 (E5.4) documentou isso e **adiou conscientemente** (decisão do dono, 2026-07-21) a construção de um componente que feche tudo + trave via `OnTick`. Decisão em aberto para uma fatia futura, com teste dedicado.
+- ~~**Circuit breaker corretivo (`flatten-on-breach`)**~~ — **RESOLVIDO pela ADR-040 (2026-07-22):** `CMksCircuitBreaker` (decorator `IBroker` + `OnTick`) fecha tudo + trava sticky ao cruzar limite Por Conta, reusando o predicado do gate preventivo (fonte única). Componente + `Test_CMksCircuitBreaker` code-complete (52/0/0). **Resta** a integração no `ColorReversal.mq5` + o MT5-verde dos testes.
 
 - **Calibração do StressLab — eixo slippage** (ADR-039, fatia 5). Spread (240 pts) e drift de latência (~0.25 adverso/ms) já **medidos e ligados**. Falta só **medir o slippage puro de ordem real** (requested vs filled) — separado do drift de latência; só há 11 trades do demo (amostra insuficiente). Adiado por depender de dado a coletar (demo longa ou EA de medição dedicado).
 

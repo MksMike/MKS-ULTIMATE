@@ -141,7 +141,7 @@
 - [ ] **Multi-corretora validada** (além da Exness). *Critério: idem em outra corretora hedging.*
 
 ### G. Decisões arquiteturais em aberto
-- [ ] **`flatten-on-breach` (breaker corretivo)** — fechar tudo + travar ao cruzar minEquity/drawdown em `OnTick` (hoje o breaker é só preventivo). *Critério: decidir construir ou não; se sim, componente + teste (ADR-036 §Fronteiras).*
+- [~] **`flatten-on-breach` (breaker corretivo)** — fechar tudo + travar ao cruzar minEquity/drawdown em `OnTick` (hoje o breaker é só preventivo). *Critério: decidir construir ou não; se sim, componente + teste (ADR-036 §Fronteiras).* → **construído (ADR-040, 2026-07-22): `CMksCircuitBreaker` + `Test_CMksCircuitBreaker`, predicado único com o gate preventivo, sticky. 52/0/0. FALTA: integração no `ColorReversal` + MT5-verde.**
 - [ ] **Termo spread-aware dinâmico do piso de SL** (diferido ao E2, fecha a cauda do M12). *Critério: fórmula por-tick + teste.*
 - [ ] **Cadência do snapshot live** (per-Send) vs runner (per-tick) — alinhar. *Critério: decisão de design do dono.*
 

@@ -172,6 +172,62 @@ private:
       m_logger.Log(MKS_LOG_WARN, "RiskManager", "order rejected", ctxJson);
    }
 
+   // Predicado PURO da camada Por Conta (daily loss / drawdown / min equity).
+   // NÃO faz snapshot.Update (o caller garante) nem log — devolve false + err
+   // na PRIMEIRA violação (ordem: daily → drawdown → min equity), true se OK.
+   // Fonte ÚNICA do critério de breach: usado pelo gate PREVENTIVO (CheckOrder,
+   // bloqueia a abertura) e pelo breaker CORRETIVO (AccountBreached, ADR-040).
+   bool AccountBreachPredicate(MksError &err)
+   {
+      if(m_snapshot != NULL && m_acctParams.maxDailyLossPct > 0.0)
+      {
+         double pnlPct = m_snapshot.DayPnLPct(); // negativo em queda
+         if(pnlPct <= -m_acctParams.maxDailyLossPct)
+         {
+            MKS_SET_ERROR(err, MKS_ERR_RISK_REJECTED_DAILY_LOSS,
+                          "limite de perda diária atingido",
+                          StringFormat("dayPnLPct=%.4f maxLossPct=%.4f",
+                                       pnlPct, m_acctParams.maxDailyLossPct));
+            return false;
+         }
+      }
+      if(m_snapshot != NULL && m_acctParams.maxDrawdownPct > 0.0)
+      {
+         double ddPct = m_snapshot.DrawdownPct(); // sempre >= 0
+         if(ddPct >= m_acctParams.maxDrawdownPct)
+         {
+            MKS_SET_ERROR(err, MKS_ERR_RISK_REJECTED_DRAWDOWN,
+                          "drawdown desde peak atingiu limite",
+                          StringFormat("drawdownPct=%.4f maxDdPct=%.4f",
+                                       ddPct, m_acctParams.maxDrawdownPct));
+            return false;
+         }
+      }
+      if(m_snapshot != NULL && m_acctParams.minEquityAbs > 0.0)
+      {
+         double eq = m_snapshot.Equity();
+         if(eq < m_acctParams.minEquityAbs)
+         {
+            MKS_SET_ERROR(err, MKS_ERR_RISK_REJECTED_MIN_EQUITY,
+                          "equity abaixo do limite mínimo (circuit breaker)",
+                          StringFormat("equity=%.4f minEquity=%.4f",
+                                       eq, m_acctParams.minEquityAbs));
+            return false;
+         }
+      }
+      return true;
+   }
+
+   // Slug de log da rejeição Por Conta (código → razão), preservando os
+   // slugs históricos do CheckOrder.
+   string AccountReasonSlug(int code) const
+   {
+      if(code == (int)MKS_ERR_RISK_REJECTED_DAILY_LOSS) return "daily_loss_exceeded";
+      if(code == (int)MKS_ERR_RISK_REJECTED_DRAWDOWN)   return "drawdown_exceeded";
+      if(code == (int)MKS_ERR_RISK_REJECTED_MIN_EQUITY) return "min_equity_breached";
+      return "account_breach";
+   }
+
 public:
    // sizer, book, snapshot e logger são opcionais.
    // sizer NULL:    pula a checagem "lots vs sizer".
@@ -481,52 +537,29 @@ public:
          }
       }
 
-      // 7. Camada Por Conta: daily loss %
-      if(m_snapshot != NULL && m_acctParams.maxDailyLossPct > 0.0)
+      // 7. Camada Por Conta (daily loss / drawdown / min equity). Predicado
+      //    extraído (AccountBreachPredicate) e COMPARTILHADO com o breaker
+      //    corretivo (ADR-040) — fonte ÚNICA do critério de breach. Aqui é
+      //    PREVENTIVO: bloqueia a abertura da nova ordem.
+      if(!AccountBreachPredicate(err))
       {
-         double pnlPct = m_snapshot.DayPnLPct(); // negativo em queda
-         if(pnlPct <= -m_acctParams.maxDailyLossPct)
-         {
-            MKS_SET_ERROR(err, MKS_ERR_RISK_REJECTED_DAILY_LOSS,
-                          "limite de perda diária atingido",
-                          StringFormat("dayPnLPct=%.4f maxLossPct=%.4f",
-                                       pnlPct, m_acctParams.maxDailyLossPct));
-            LogRejection("daily_loss_exceeded", req, err);
-            return false;
-         }
-      }
-
-      // 8. Camada Por Conta: drawdown desde peak
-      if(m_snapshot != NULL && m_acctParams.maxDrawdownPct > 0.0)
-      {
-         double ddPct = m_snapshot.DrawdownPct(); // sempre >= 0
-         if(ddPct >= m_acctParams.maxDrawdownPct)
-         {
-            MKS_SET_ERROR(err, MKS_ERR_RISK_REJECTED_DRAWDOWN,
-                          "drawdown desde peak atingiu limite",
-                          StringFormat("drawdownPct=%.4f maxDdPct=%.4f",
-                                       ddPct, m_acctParams.maxDrawdownPct));
-            LogRejection("drawdown_exceeded", req, err);
-            return false;
-         }
-      }
-
-      // 9. Camada Por Conta: equity mínimo (circuit breaker absoluto)
-      if(m_snapshot != NULL && m_acctParams.minEquityAbs > 0.0)
-      {
-         double eq = m_snapshot.Equity();
-         if(eq < m_acctParams.minEquityAbs)
-         {
-            MKS_SET_ERROR(err, MKS_ERR_RISK_REJECTED_MIN_EQUITY,
-                          "equity abaixo do limite mínimo (circuit breaker)",
-                          StringFormat("equity=%.4f minEquity=%.4f",
-                                       eq, m_acctParams.minEquityAbs));
-            LogRejection("min_equity_breached", req, err);
-            return false;
-         }
+         string slug = AccountReasonSlug(err.code); // MQL5: ref param exige lvalue
+         LogRejection(slug, req, err);
+         return false;
       }
 
       return true;
+   }
+
+   // Corretivo (ADR-040): true se a conta VIOLOU um limite Por Conta AGORA
+   // (equity/drawdown/daily loss). Atualiza o snapshot antes (uso per-tick).
+   // MESMO predicado do gate preventivo (CheckOrder) — fonte única. O
+   // CMksCircuitBreaker consulta isto por tick; em true, dispara flatten +
+   // trava. &err traz o motivo/código do primeiro limite violado.
+   bool AccountBreached(MksError &err)
+   {
+      if(m_snapshot != NULL) m_snapshot.Update();
+      return !AccountBreachPredicate(err);
    }
 };
 
