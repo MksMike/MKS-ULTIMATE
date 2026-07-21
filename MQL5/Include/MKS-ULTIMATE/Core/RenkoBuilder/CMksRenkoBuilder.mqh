@@ -57,13 +57,17 @@ private:
    double                m_lastMid;       // último mid observado (ADR-021 §5)
    bool                  m_emitForming;   // dispara OnBrickForming a cada tick (ADR-021)
 
-   // Soft recovery de gap estrutural (ADR-011 nota 2026-05-26): N rejeições
-   // K consecutivas com mids agrupados disparam reanchor de m_lastClose.
-   // Distingue gap legítimo (mids agrupados longe de lastClose) de spike
-   // isolado (1 tick outlier seguido de mids perto de lastClose).
+   // Soft recovery de gap estrutural (ADR-011 nota 2026-05-26; critério
+   // corrigido pela ADR-033): N rejeições K consecutivas cujos mids são
+   // agrupados ENTRE SI (passo tick-a-tick ≤ S) disparam reanchor de
+   // m_lastClose. Distingue gap legítimo (mids consecutivos próximos, longe
+   // de lastClose) de spike isolado (1 outlier seguido de tick aceito perto
+   // de lastClose, que zera o run). A âncora é DESLIZANTE (mid da rejeição
+   // anterior), não o primeiro mid — senão uma rampa monotônica nunca
+   // reanchora (o mid se afasta progressivamente do primeiro). Ver ADR-033.
    int                   m_kRecoverAfter;       // 0 = desabilitado; N = reanchor após N rejeições
    int                   m_kExceededRun;        // contador de rejeições consecutivas
-   double                m_kFirstMid;           // primeiro mid rejeitado da janela atual
+   double                m_kPrevMid;            // mid da rejeição ANTERIOR (âncora deslizante, ADR-033)
 
    // Próximo limiar de continuação na direção `dir`:
    //   base + sign · (1 - PO) · S
@@ -92,15 +96,26 @@ private:
    bool HandleKExceeded(int M, double mid, ulong seq, double size, MksError &err)
    {
       m_kExceededRun++;
-      if(m_kExceededRun == 1)
-         m_kFirstMid = mid;
 
-      // Reanchor só se: recovery habilitado, atingiu N consecutivas, e
-      // mids estão agrupados (variância ≤ size — gap legítimo, não spike).
+      // Âncora DESLIZANTE (ADR-033): a janela é "agrupada" se cada mid
+      // rejeitado está a ≤ S do mid rejeitado ANTERIOR (passo tick-a-tick
+      // pequeno), não a ≤ S de um primeiro-mid congelado. Numa rampa
+      // monotônica de reabertura (caso ADR-008) os passos são pequenos e o
+      // recovery dispara; com âncora fixa o mid se afastava do primeiro e o
+      // recovery NUNCA disparava (deadlock permanente em 102). A 1ª rejeição
+      // do run não tem anterior — conta como tight (o gate kRecoverAfter ≥ 2
+      // é o que exige consecutivas de verdade).
+      bool tightWithPrev = (m_kExceededRun == 1)
+                           || (MathAbs(mid - m_kPrevMid) <= size);
+      m_kPrevMid = mid;
+
+      // Reanchor só se: recovery habilitado, atingiu N consecutivas, e o
+      // passo corrente é tight (mids agrupados entre si — gap legítimo, não
+      // uma rampa dispersa de corrupção).
       bool gapDetected =
          (m_kRecoverAfter > 0)
          && (m_kExceededRun >= m_kRecoverAfter)
-         && (MathAbs(mid - m_kFirstMid) <= size);
+         && tightWithPrev;
 
       if(gapDetected)
       {
@@ -110,6 +125,7 @@ private:
          m_formingHigh = mid;
          m_formingLow = mid;
          m_hasFirstBrick = false;
+         m_lastDirection = MKS_BRICK_BULL; // inerte até o 1º brick pós-reanchor (E3.3/ADR-033; simetria com o construtor)
          m_kExceededRun = 0;
          MKS_SET_ERROR(err, MKS_ERR_RENKO_RECOVERED_FROM_GAP,
                        "gap estrutural detectado — reanchor de m_lastClose",
@@ -153,9 +169,10 @@ public:
    // K = 20: tolera spikes plausíveis de XAUUSD em baixa liquidez; corta cruzamentos de
    //         magnitude impossível em um único tick (ADR-011 §4).
    // kRecoverAfter = 5: após 5 rejeições K consecutivas com mids agrupados
-   //         (variância ≤ S), reconhece gap legítimo e reanchora m_lastClose.
-   //         0 desabilita (comportamento legado, builder pode travar em gap
-   //         maior que K·(1-PO)·S). Ver ADR-011 nota 2026-05-26.
+   //         entre si (passo tick-a-tick ≤ S — âncora deslizante, ADR-033),
+   //         reconhece gap legítimo e reanchora m_lastClose. 0 desabilita
+   //         (comportamento legado, builder pode travar em gap maior que
+   //         K·(1-PO)·S). Ver ADR-011 nota 2026-05-26 + ADR-033.
    CMksRenkoBuilder(const MksRenkoGeometry &geometry,
                     IBrickSizer *sizer,
                     IRenkoSink  *sink,
@@ -180,7 +197,7 @@ public:
       m_emitForming = true;
       m_kRecoverAfter = kRecoverAfter;
       m_kExceededRun = 0;
-      m_kFirstMid = 0.0;
+      m_kPrevMid = 0.0;
    }
 
    // Liga/desliga emissão de OnBrickForming a cada tick (ADR-021). Usado
@@ -274,6 +291,7 @@ public:
          // Ver ADR-011, nota de esclarecimento — geometria do primeiro brick.
          if(mid == m_lastClose)
          {
+            m_kExceededRun = 0; // tick aceito no lastClose quebra o run de rejeições (invariante do recovery, ADR-033)
             if(mid > m_formingHigh) m_formingHigh = mid;
             if(mid < m_formingLow)  m_formingLow  = mid;
             EmitFormingIfEnabled();
@@ -341,10 +359,12 @@ public:
          }
       }
 
-      // Reset do run de K-exceeded em qualquer tick aceito (com ou sem
-      // brick emitido). Quebra a sequência de rejeições — gap legítimo
-      // exige N consecutivas com mids agrupados, intercaladas com
-      // sucesso resetam o estado.
+      // Reset do run de K-exceeded ao aceitar um tick pela escada (com ou
+      // sem brick emitido). Quebra a sequência de rejeições: gap legítimo
+      // exige N consecutivas. Os early-returns ANTES da escada não deixam um
+      // run ativo passar sem reset: init tem run=0; sizer-não-pronto/size≤0
+      // não coexistem com um run (a escada — única fonte de rejeição — exige
+      // size>0); o caminho mid==lastClose do 1º brick reseta explicitamente.
       m_kExceededRun = 0;
 
       if(M >= 1)

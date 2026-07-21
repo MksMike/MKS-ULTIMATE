@@ -630,6 +630,238 @@ void Test_OnBrickForming_EmittedAfterBrickClose()
                           "forming.open == bricks[0].close após emissão");
 }
 
+//==================================================================
+// Soft recovery de gap estrutural (código 105) — E3.1/E3.2/E3.3
+// ADR-011 nota 2026-05-26 + ADR-033 (âncora deslizante). Todos usam
+// classic (S=10, degrau 10), K=3, kRecoverAfter=3 para streams compactos.
+//==================================================================
+
+//+------------------------------------------------------------------+
+//| E3.2 — rampa monotônica RECUPERA (não trava). Mids sobem em passos|
+//| ≤ S mas se afastam de um lastClose stale. Com âncora FIXA o        |
+//| recovery nunca dispararia (deadlock em 102); com deslizante,       |
+//| dispara no K-ésimo. Falha no código antigo, passa após o fix.      |
+//+------------------------------------------------------------------+
+void Test_SoftRecovery_MonotonicRampRecovers()
+{
+   CMksCapturingSink sink;
+   CMksFixedBrickSizer sizer(10.0);
+   MksRenkoGeometry geom = MksGeometryClassic();
+   CMksRenkoBuilder b(geom, GetPointer(sizer), GetPointer(sink), 10, 3, 3);
+
+   MksError err;
+   b.IngestTick(MakeTickByMid(2000.0, 1, 1000), err); // init (lastClose=2000)
+
+   double ramp[] = {2100.0, 2106.0, 2113.0, 2120.0, 2127.0}; // passos ≤ 10
+   int recoveryCount = 0;
+   for(int i = 0; i < ArraySize(ramp); i++)
+   {
+      bool ok = b.IngestTick(MakeTickByMid(ramp[i], (ulong)(2 + i), (long)(2000 + i * 100)), err);
+      if(!ok && err.code == MKS_ERR_RENKO_RECOVERED_FROM_GAP) recoveryCount++;
+   }
+
+   MKS_ASSERT_EQ_INT(1, recoveryCount, "exatamente 1 recovery (105) na rampa");
+   MKS_ASSERT_FALSE(b.IsStreamCorrupt(), "builder não corrompeu");
+   MKS_ASSERT_TRUE(sink.count >= 1, "forma brick após o recovery (não deadlock em 102)");
+}
+
+//+------------------------------------------------------------------+
+//| E3.1 #1 — gap para platô: N mids agrupados → 1 recovery, reanchor  |
+//| correto, e o PRÓXIMO movimento define a direção (sem reversão).    |
+//+------------------------------------------------------------------+
+void Test_SoftRecovery_LegitimateGapPlateau()
+{
+   CMksCapturingSink sink;
+   CMksFixedBrickSizer sizer(10.0);
+   MksRenkoGeometry geom = MksGeometryClassic();
+   CMksRenkoBuilder b(geom, GetPointer(sizer), GetPointer(sink), 10, 3, 3);
+
+   MksError err;
+   b.IngestTick(MakeTickByMid(2000.0, 1, 1000), err); // init lastClose=2000
+
+   double plateau[] = {2100.0, 2101.0, 2100.5};
+   int recoveryCount = 0;
+   double recoverMid = 0.0;
+   for(int i = 0; i < ArraySize(plateau); i++)
+   {
+      bool ok = b.IngestTick(MakeTickByMid(plateau[i], (ulong)(2 + i), (long)(2000 + i * 100)), err);
+      if(!ok && err.code == MKS_ERR_RENKO_RECOVERED_FROM_GAP) { recoveryCount++; recoverMid = plateau[i]; }
+   }
+   MKS_ASSERT_EQ_INT(1, recoveryCount, "exatamente 1 recovery no platô");
+   MKS_ASSERT_EQ_DOUBLE(2100.5, recoverMid, "reanchor no 3º mid (2100.5)");
+   MKS_ASSERT_EQ_INT(0, sink.count, "nenhum brick ainda (só reanchor)");
+
+   // Próximo movimento para BAIXO define BEAR via primeiro brick (o reanchor
+   // zerou hasFirstBrick — sem reversão).
+   b.IngestTick(MakeTickByMid(2090.5, 10, 20000), err); // 2100.5 - 10 = 1 brick BEAR
+   MKS_ASSERT_EQ_INT(1, sink.count, "1 brick pós-reanchor");
+   MKS_ASSERT_EQ_INT(MKS_BRICK_BEAR, (int)sink.bricks[0].direction, "direção pelo novo movimento (BEAR), não reversão");
+   MKS_ASSERT_EQ_DOUBLE(2100.5, sink.bricks[0].open,  "abre no mid reanchorado");
+   MKS_ASSERT_EQ_DOUBLE(2090.5, sink.bricks[0].close, "fecha 1 brick abaixo");
+}
+
+//+------------------------------------------------------------------+
+//| E3.1 #2 — spike isolado: 1 outlier + tick normal perto do          |
+//| lastClose. O normal é aceito e zera o run → nenhum recovery.       |
+//+------------------------------------------------------------------+
+void Test_SoftRecovery_IsolatedSpikeNoRecovery()
+{
+   CMksCapturingSink sink;
+   CMksFixedBrickSizer sizer(10.0);
+   MksRenkoGeometry geom = MksGeometryClassic();
+   CMksRenkoBuilder b(geom, GetPointer(sizer), GetPointer(sink), 10, 3, 3);
+
+   MksError err;
+   b.IngestTick(MakeTickByMid(2000.0, 1, 1000), err);  // init
+   b.IngestTick(MakeTickByMid(2010.0, 2, 2000), err);  // brick BULL close 2010
+   MKS_ASSERT_EQ_INT(1, sink.count, "1 brick inicial");
+
+   int recoveryCount = 0;
+   bool ok;
+   ok = b.IngestTick(MakeTickByMid(2200.0, 3, 3000), err); // spike > K
+   if(!ok && err.code == MKS_ERR_RENKO_RECOVERED_FROM_GAP) recoveryCount++;
+   MKS_ASSERT_FALSE(ok, "spike rejeitado");
+   MKS_ASSERT_EQ_INT(MKS_ERR_RENKO_THRESHOLD_LIMIT_EXCEEDED, (int)err.code, "102, não 105");
+
+   ok = b.IngestTick(MakeTickByMid(2012.0, 4, 4000), err); // volta perto do lastClose → aceito, run reset
+   MKS_ASSERT_TRUE(ok, "tick normal após spike é aceito");
+
+   ok = b.IngestTick(MakeTickByMid(2200.0, 5, 5000), err); // spike de novo, mas run já zerou
+   if(!ok && err.code == MKS_ERR_RENKO_RECOVERED_FROM_GAP) recoveryCount++;
+   b.IngestTick(MakeTickByMid(2012.0, 6, 6000), err);      // aceito de novo
+
+   MKS_ASSERT_EQ_INT(0, recoveryCount, "nenhum recovery em spikes isolados");
+   MKS_ASSERT_EQ_INT(1, sink.count, "lastClose preservado, nenhum brick do spike");
+}
+
+//+------------------------------------------------------------------+
+//| E3.1 #3 — tick aceito no meio do run zera o contador: 4 rejeições  |
+//| no total, mas nunca 3 CONSECUTIVAS → nenhum recovery.              |
+//+------------------------------------------------------------------+
+void Test_SoftRecovery_AcceptedTickResetsRun()
+{
+   CMksCapturingSink sink;
+   CMksFixedBrickSizer sizer(10.0);
+   MksRenkoGeometry geom = MksGeometryClassic();
+   CMksRenkoBuilder b(geom, GetPointer(sizer), GetPointer(sink), 10, 3, 3);
+
+   MksError err;
+   b.IngestTick(MakeTickByMid(2000.0, 1, 1000), err); // init lastClose=2000
+
+   int recoveryCount = 0;
+   bool ok;
+   ok = b.IngestTick(MakeTickByMid(2100.0, 2, 2000), err); // 102 run=1
+   if(!ok && err.code == MKS_ERR_RENKO_RECOVERED_FROM_GAP) recoveryCount++;
+   ok = b.IngestTick(MakeTickByMid(2103.0, 3, 3000), err); // 102 run=2
+   if(!ok && err.code == MKS_ERR_RENKO_RECOVERED_FROM_GAP) recoveryCount++;
+   ok = b.IngestTick(MakeTickByMid(2001.0, 4, 4000), err); // aceito perto do lastClose → run reset
+   MKS_ASSERT_TRUE(ok, "tick aceito zera o run");
+   ok = b.IngestTick(MakeTickByMid(2100.0, 5, 5000), err); // 102 run=1 de novo
+   if(!ok && err.code == MKS_ERR_RENKO_RECOVERED_FROM_GAP) recoveryCount++;
+   ok = b.IngestTick(MakeTickByMid(2103.0, 6, 6000), err); // 102 run=2
+   if(!ok && err.code == MKS_ERR_RENKO_RECOVERED_FROM_GAP) recoveryCount++;
+
+   MKS_ASSERT_EQ_INT(0, recoveryCount, "sem recovery: 4 rejeições, máx 2 consecutivas");
+}
+
+//+------------------------------------------------------------------+
+//| E3.1 #4 — paridade pós-recovery: 2 builders no mesmo stream (com   |
+//| um recovery no meio) → bricks idênticos, incl. triggerPrice/Id.    |
+//+------------------------------------------------------------------+
+void Test_SoftRecovery_Determinism()
+{
+   const int N = 8;
+   MksTick ticks[8];
+   double mids[] = {2000.0, 2010.0, 2100.0, 2104.0, 2108.0, 2118.0, 2128.0, 2115.0};
+   for(int i = 0; i < N; i++)
+      ticks[i] = MakeTickByMid(mids[i], (ulong)(i + 1), (long)(1000 + i * 100));
+
+   CMksCapturingSink s1, s2;
+   CMksFixedBrickSizer sz1(10.0), sz2(10.0);
+   MksRenkoGeometry geom = MksGeometryClassic();
+   CMksRenkoBuilder b1(geom, GetPointer(sz1), GetPointer(s1), 10, 3, 3);
+   CMksRenkoBuilder b2(geom, GetPointer(sz2), GetPointer(s2), 10, 3, 3);
+
+   MksError err;
+   for(int i = 0; i < N; i++) b1.IngestTick(ticks[i], err);
+   for(int i = 0; i < N; i++) b2.IngestTick(ticks[i], err);
+
+   MKS_ASSERT_TRUE(s1.count > 0, "stream com recovery produz bricks");
+   MKS_ASSERT_EQ_INT(s1.count, s2.count, "brick count idêntico");
+   for(int i = 0; i < s1.count && i < s2.count; i++)
+   {
+      MKS_ASSERT_EQ_DOUBLE(s1.bricks[i].open,              s2.bricks[i].open,              StringFormat("b%d open", i));
+      MKS_ASSERT_EQ_DOUBLE(s1.bricks[i].close,             s2.bricks[i].close,             StringFormat("b%d close", i));
+      MKS_ASSERT_EQ_INT   ((int)s1.bricks[i].direction,    (int)s2.bricks[i].direction,    StringFormat("b%d dir", i));
+      MKS_ASSERT_EQ_INT   (s1.bricks[i].thresholdsCrossed, s2.bricks[i].thresholdsCrossed, StringFormat("b%d M", i));
+      MKS_ASSERT_EQ_DOUBLE(s1.bricks[i].triggerPrice,      s2.bricks[i].triggerPrice,      StringFormat("b%d trigPrice", i));
+      MKS_ASSERT_EQ_ULONG (s1.bricks[i].triggerTickId,     s2.bricks[i].triggerTickId,     StringFormat("b%d trigId", i));
+   }
+   MksFormingBrick fb1 = b1.GetFormingBrick();
+   MksFormingBrick fb2 = b2.GetFormingBrick();
+   MKS_ASSERT_EQ_DOUBLE(fb1.open, fb2.open, "forming open match");
+   MKS_ASSERT_EQ_INT((int)fb1.direction, (int)fb2.direction, "forming direction match");
+}
+
+//+------------------------------------------------------------------+
+//| E3.3 — pós-reanchor a direção do forming volta ao inerte do        |
+//| construtor (BULL), não fica stale na direção pré-gap (BEAR).       |
+//+------------------------------------------------------------------+
+void Test_SoftRecovery_ReanchorResetsDirection()
+{
+   CMksCapturingSink sink;
+   CMksFixedBrickSizer sizer(10.0);
+   MksRenkoGeometry geom = MksGeometryClassic();
+   CMksRenkoBuilder b(geom, GetPointer(sizer), GetPointer(sink), 10, 3, 3);
+
+   MksError err;
+   b.IngestTick(MakeTickByMid(2000.0, 1, 1000), err); // init
+   b.IngestTick(MakeTickByMid(1990.0, 2, 2000), err); // brick BEAR (close 1990)
+   MKS_ASSERT_EQ_INT(MKS_BRICK_BEAR, (int)sink.bricks[0].direction, "brick inicial BEAR");
+   MKS_ASSERT_EQ_INT(MKS_BRICK_BEAR, (int)b.GetFormingBrick().direction, "forming reflete BEAR pré-gap");
+
+   double plateau[] = {2200.0, 2202.0, 2201.0}; // gap acima + platô → recovery
+   int recoveryCount = 0;
+   for(int i = 0; i < ArraySize(plateau); i++)
+   {
+      bool ok = b.IngestTick(MakeTickByMid(plateau[i], (ulong)(3 + i), (long)(3000 + i * 100)), err);
+      if(!ok && err.code == MKS_ERR_RENKO_RECOVERED_FROM_GAP) recoveryCount++;
+   }
+   MKS_ASSERT_EQ_INT(1, recoveryCount, "1 recovery no platô");
+   MKS_ASSERT_EQ_INT(MKS_BRICK_BULL, (int)b.GetFormingBrick().direction,
+                     "direção do forming volta ao inerte (BULL) pós-reanchor, não BEAR stale");
+}
+
+//+------------------------------------------------------------------+
+//| E3 (blindagem do invariante, achado da revisão adversarial) — um   |
+//| tick aceito EXATAMENTE no lastClose (caminho primeiro-brick        |
+//| mid==lastClose) também zera o run de rejeições; senão duas janelas |
+//| separadas por esse tick emendariam num recovery espúrio.           |
+//+------------------------------------------------------------------+
+void Test_SoftRecovery_MidEqualsLastCloseResetsRun()
+{
+   CMksCapturingSink sink;
+   CMksFixedBrickSizer sizer(10.0);
+   MksRenkoGeometry geom = MksGeometryClassic();
+   CMksRenkoBuilder b(geom, GetPointer(sizer), GetPointer(sink), 10, 3, 3);
+
+   MksError err;
+   b.IngestTick(MakeTickByMid(2000.0, 1, 1000), err); // init lastClose=2000, hasFirstBrick=false
+
+   int recoveryCount = 0;
+   bool ok;
+   ok = b.IngestTick(MakeTickByMid(2100.0, 2, 2000), err); // 102 run=1
+   if(!ok && err.code == MKS_ERR_RENKO_RECOVERED_FROM_GAP) recoveryCount++;
+   ok = b.IngestTick(MakeTickByMid(2103.0, 3, 3000), err); // 102 run=2
+   if(!ok && err.code == MKS_ERR_RENKO_RECOVERED_FROM_GAP) recoveryCount++;
+   ok = b.IngestTick(MakeTickByMid(2000.0, 4, 4000), err); // mid == lastClose → aceito, zera o run
+   MKS_ASSERT_TRUE(ok, "tick no lastClose é aceito");
+   ok = b.IngestTick(MakeTickByMid(2100.0, 5, 5000), err); // 102 run=1 (não 3)
+   if(!ok && err.code == MKS_ERR_RENKO_RECOVERED_FROM_GAP) recoveryCount++;
+
+   MKS_ASSERT_EQ_INT(0, recoveryCount, "tick no lastClose zera o run — sem recovery espúrio");
+}
+
 //+------------------------------------------------------------------+
 void OnStart()
 {
@@ -659,6 +891,15 @@ void OnStart()
    MKS_RUN(Test_OnBrickForming_ReEnabledByFlag);
    MKS_RUN(Test_OnBrickForming_PropagatesThroughMultiSink);
    MKS_RUN(Test_OnBrickForming_EmittedAfterBrickClose);
+
+   // Soft recovery de gap estrutural (105) — E3.1/E3.2/E3.3, ADR-033
+   MKS_RUN(Test_SoftRecovery_MonotonicRampRecovers);
+   MKS_RUN(Test_SoftRecovery_LegitimateGapPlateau);
+   MKS_RUN(Test_SoftRecovery_IsolatedSpikeNoRecovery);
+   MKS_RUN(Test_SoftRecovery_AcceptedTickResetsRun);
+   MKS_RUN(Test_SoftRecovery_Determinism);
+   MKS_RUN(Test_SoftRecovery_ReanchorResetsDirection);
+   MKS_RUN(Test_SoftRecovery_MidEqualsLastCloseResetsRun);
 
    g_mksTestRunner.Summary();
 }
