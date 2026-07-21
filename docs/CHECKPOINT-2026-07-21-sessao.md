@@ -49,6 +49,8 @@
 
 ## 4. Próximo passo EXATO: a captura longa (o dono roda no MT5)
 
+> **✅ CONCLUÍDO (2026-07-21, novo PC): E2.1 validada + E2.2 golden versionado.** A captura `XAUUSDm_CR_20260720T233245.mkstick` (33.546 ticks reais, 32 bricks) foi replayada 2× pelo `DecisionReplayer` (`InpSlBricks=10`) → **33 decisões / 17 flips IDÊNTICAS** (`verify-parity` exit 0). O **gate-crossing** também foi provado: mesmo fixture com `InpMinEquityAbs=9990` → breaker de conta (código 409) dispara → dois replays → exit 0 (18 decisões). **Determinismo da decisão — do brick ao breaker — PROVADO sobre feed real.** Golden bundle versionado em `tests/golden/e2-decision/`. Falta só o teste headless automatizado do golden. Detalhes no `CHANGELOG.md [Não lançado]`.
+
 Todo o resto do E2 depende disto. O código está pronto e smoke-tested; falta tempo de mercado.
 
 ### Fase A — Capturar (ColorReversal, demo/hedging)
@@ -90,7 +92,9 @@ O E2 prova **DETERMINISMO da camada de decisão** (sim↔sim: runner↔runner e 
 
 ## 7. Config canônica da captura (validada pelo dono nesta sessão)
 
-Brick: `InpBrickSize=3.0`, `L=10`, `K=20`. Estratégia: `InpMagicNumber=527001`, `InpSlPoints=3000` (=10 bricks; ≥ piso 300). Sizing: FIXED `InpFixedLots=0.01`. Risco: `InpMinSlBricks=1`, `InpMaxOpenPositions=1`, `InpMaxLotsPerTrade=1.0`, `InpMaxTotalLots=1.0`, `InpMaxDailyLossPct=5.0`, `InpMaxDrawdownPct=10.0`, `InpMinEquityAbs=0`. **Paridade: `InpRecordMkstick=true`, `InpHistoricalFillDays=0`.** Ambiente confirmado: Exness, conta demo hedging, XAUUSDm digits=3 (~4008 USD).
+Brick: `InpBrickSize=3.0`, `L=10`, `K=20`. Estratégia: `InpMagicNumber=527001`, **`InpSlBricks=10`** (ADR-032 — SL em bricks, broker-agnóstico; = 30 USD = 10 bricks em qualquer `digits`; piso `InpMinSlBricks=1`). Sizing: FIXED `InpFixedLots=0.01`. Risco: `InpMinSlBricks=1`, `InpMaxOpenPositions=1`, `InpMaxLotsPerTrade=1.0`, `InpMaxTotalLots=1.0`, `InpMaxDailyLossPct=5.0`, `InpMaxDrawdownPct=10.0`, `InpMinEquityAbs=0`. **Paridade: `InpRecordMkstick=true`, `InpHistoricalFillDays=0`.** Ambiente confirmado: Exness, conta demo hedging, XAUUSDm digits=3 (~4008 USD).
+
+**Correção de unidade (2026-07-21, ADR-032):** este §7 dizia `InpSlPoints=3000 (=10 bricks; ≥ piso 300)` — errado. Em `digits=3` (`Point()=0.001`, brick `3.0 USD = 3000 pts`), `InpSlPoints=3000` valia **1 brick**, não 10 (o "10 bricks / piso 300" assumia `digits=2`). O input virou **`InpSlBricks`** (bricks, convertido em pontos pelo `Point()` no composition root) — elimina o acoplamento ao broker. `InpSlBricks=10` = 30 USD independente do `digits`. Detalhes na ADR-032.
 
 ---
 

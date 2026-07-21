@@ -63,7 +63,7 @@ Referência cruzada: os IDs entre colchetes (ex.: `[H1]`, `[M9]`, `[cs-recovery-
 
 ## Fase E2 — Fechamento da paridade (o gate central)
 
-**Status:** Não iniciada
+**Status:** Em andamento — **E2.0** (fundação DDR) completa e MT5-verificada; **E2.1 empiricamente VALIDADA (2026-07-21):** `verify-parity` **exit 0** sobre feed REAL (33.546 ticks XAUUSDm/Exness → 33 decisões / 17 flips, dois replays byte-a-byte idênticos). **E2.2 — golden bundle versionado (2026-07-21):** `tests/golden/e2-decision/` (fixture `.mkstick` + 2 journals golden + README); o **gate-crossing** foi provado no mesmo fixture (`InpMinEquityAbs=9990` → breaker 409 dispara; dois replays → exit 0, 18 decisões). O **determinismo da decisão — do brick ao breaker de conta — está provado sobre feed real.** **E2.4** (clock do feed) commitado. Pendente: teste headless automatizado do golden (hoje é procedimento manual + `verify-parity`), **E2.3** (âncora de proveniência no `.mksbk`), verificação do E2.4 na virada de dia, e a decisão da lacuna de cadência do snapshot (checkpoint §5.1).
 **Depende de:** E1.
 **Bloqueia:** Fase 10. **É o item que o dono mais teme** (paridade backtest/live/demo/tester).
 
@@ -93,10 +93,12 @@ Referência cruzada: os IDs entre colchetes (ex.: `[H1]`, `[M9]`, `[cs-recovery-
 
 ## Fase E3 — Robustez do motor Renko
 
-**Status:** Não iniciada
+**Status:** Em andamento — **E3.2** (deadlock de rampa monotônica) e **E3.3** (reset de estado pós-reanchor) corrigidos, e **E3.1** (rede de teste do código 105) escrita, via **ADR-033** (2026-07-21). **MT5-verificado (2026-07-21): `Test_CMksRenkoBuilder` 497/497 assertions, 29 tests, 0 failed.** Pendente só o item de processo do critério de saída (Protocolo 1 exigir duplo-run).
 **Depende de:** E1. **Bloqueia:** Fase 10.
 
-**Por que importa:** o motor é a fundação de tudo. O caminho de soft-recovery (que reescreve a sequência de bricks) está habilitado por default e roda **sem rede de teste**; e o detector de gap pode travar no cenário mais plausível de reabertura.
+**Nota (2026-07-21):** o soft-recovery (105) sai de cobertura ZERO `[H2]` para 6 testes determinísticos (incl. paridade duplo-run pós-recovery). O deadlock `[M2]` foi corrigido trocando a âncora fixa (`m_kFirstMid`) por deslizante (`m_kPrevMid`) — ver ADR-033 e `CHANGELOG.md [Não lançado]`. O achado `[recovery-doc-says-variance]` foi fechado (comentários sincronizados). Falta rodar a suíte no MT5 e alinhar o Protocolo 1.
+
+**Por que importa:** o motor é a fundação de tudo. O caminho de soft-recovery (que reescreve a sequência de bricks) estava habilitado por default e rodava **sem rede de teste**; e o detector de gap travava no cenário mais plausível de reabertura.
 
 **Entregáveis:**
 
@@ -118,7 +120,7 @@ Referência cruzada: os IDs entre colchetes (ex.: `[H1]`, `[M9]`, `[cs-recovery-
 
 ## Fase E4 — Eixo 3 completo (custo sentido no resultado)
 
-**Status:** Não iniciada
+**Status:** Em andamento — **E4.1** (comissão→moeda no journal/report) e **E4.3** (warning de spread inerte) feitos via **ADR-034** (2026-07-21); **E4.2** com os testes de comissão escritos (incl. o `[M1]/[M8]`: dois runs diferindo só na comissão → net diferente). **MT5-verificado (2026-07-21): `Test_CMksTradeJournal` 49/49 (21 tests) + `Test_CMksStressLabReport` 42/42 (8 tests), 0 failed.** Pendente só o sub-teste "`slip>0` reduz o `NetPnLCurrency`". Swap segue OFF (v1, ADR-030) mas a estrutura é swap-aware.
 **Depende de:** E1. **Bloqueia:** Fase 10 (e a credibilidade do StressLab como oráculo de decisão).
 
 **Por que importa:** spread e slippage já entram no fill (bom). Mas **comissão e swap são computados e descartados** — o exato padrão "contabilizado num relatório, nunca aplicado ao equity" do eixo 3 do V5, hoje latente na métrica de decisão do StressLab determinístico.

@@ -2348,6 +2348,118 @@ O `CMksStressLabBroker` passa a **governar a superfície de fill inteira**, com 
 
 ---
 
+### ADR-032: SL da estratégia em bricks (broker-agnóstico), convertido em pontos no composition root
+
+**Data:** 2026-07-21
+**Status:** Aceita
+**Relação:** Item E6 (unidades) do `docs/ROADMAP-CORE-HARDENING.md`. Estende E0.3/M12 (piso de SL ancorado em bricks) e ADR-026 (brick em price units) aplicando a mesma disciplina de unidade ao SL da estratégia.
+
+**Contexto:**
+O input do SL do `ColorReversal` era `InpSlPoints`, em **pontos do símbolo** — uma unidade acoplada ao `digits` do broker. A revisão de 2026-07-21 mostrou o custo desse acoplamento: o comentário do código e o §7 do checkpoint de handoff afirmavam `InpSlPoints=3000 = "10 bricks"`, mas na corretora real (XAUUSDm digits=3, `Point()=0.001`, brick `3.0 USD = 3000 pts`) `3000 pontos = 1 brick` — **10× menor** que a intenção documentada. Pior: mover o EA para uma corretora digits=2 (`Point()=0.01`) mudaria **silenciosamente** a distância do SL de 3 USD para 30 USD com o mesmo número no input. É a classe de erro do eixo 1 do V5-POSTMORTEM (estratégia raciocinando num espaço de preço mal-definido), agora num parâmetro de risco.
+
+**Decisão:**
+O input do SL passa a ser **`InpSlBricks`** (em bricks), convertido em pontos no composition root:
+```
+slPoints = InpSlBricks · (brickSize / Point())
+```
+A distância final do SL em preço = `slPoints · Point() = InpSlBricks · brickSize` (em USD) — o `Point()` se cancela, então o SL é o **mesmo número de bricks** em digits=2 ou digits=3. Auto-configura ao trocar de corretora. A conversão é aplicada **simetricamente nos dois composition roots** — `ColorReversal.mq5` (live) e `DecisionReplayer.mq5` (replay) — usando o `Point()` do símbolo (no replay, o mesmo símbolo/`.mkstick` da captura). O contrato da estratégia (`CMksColorReversalStrategy`) e do `CMksDecisionRunner` **permanece em pontos** (uma ordem precisa de pontos); a fronteira broker-agnóstica é só o input do operador. Default `InpSlBricks=10.0` (= 30 USD com brick 3.0), decidido com o dono em 2026-07-21.
+
+**Alternativas consideradas:**
+- **SL em USD (price units) direto.** Rejeitada. Também é broker-agnóstico, mas menos strategy-meaningful num framework onde tudo se mede em bricks, e não escala se o brick size mudar. Bricks é a unidade natural e simétrica com o `InpMinSlBricks` que já existe.
+- **Manter pontos e só documentar o `digits`.** Rejeitada. É o curativo, não a cura — o acoplamento continua e a próxima corretora repete o footgun. O projeto resolve causa-raiz (REGRA 2), não sintoma.
+- **Converter dentro da estratégia (mudar o contrato dela para bricks).** Rejeitada. Ordem precisa de pontos; a estratégia e o runner são testados em pontos; mudar o contrato ampliaria o blast radius e injetaria responsabilidade de símbolo na lógica de decisão. A conversão pertence ao composition root.
+- **Helper compartilhado único para a conversão.** Considerada, adiada. A fórmula é uma linha e os dois roots já computam `brickSizePts`/piso de forma duplicada (mesmo padrão do piso de SL em bricks). Uma divergência entre os dois seria pega pelo `verify-parity` (journals diferentes → exit 2). Um helper único vira refactor se surgir um 3º consumidor.
+
+**Consequências:**
+- `ColorReversal.mq5` e `DecisionReplayer.mq5`: `InpSlPoints` → `InpSlBricks` (default `10.0`). O guard de anexação M12 passa a comparar o `slPoints` derivado, reduzindo-se a `InpSlBricks < InpMinSlBricks` no espaço de bricks (unidade consistente). Belt absoluto (`InpMinSlFloorPts`) e stops-level do broker seguem em pontos.
+- **Mudança de comportamento no broker digits=3 atual:** o SL efetivo passa de 1 brick (3 USD) para 10 bricks (30 USD) — a intenção sempre documentada, agora real. Consciente e aprovada pelo dono.
+- **Determinismo do E2 preservado:** dois replays do mesmo `.mkstick` usam o mesmo `InpSlBricks` + mesmo `Point()` → mesmo `slPoints` → decisões idênticas. A conversão é função pura de config, idêntica nos dois roots.
+- Estratégia, `CMksDecisionRunner` e todas as suítes de teste **intocados** (contrato em pontos preservado).
+- Comentário enganoso ("=10 bricks" em digits=3) removido; checkpoint 2026-07-21 §7 e `CHANGELOG.md` reconciliados.
+
+**Fronteiras:**
+- Não altera o contrato em pontos da estratégia/runner/ordem — só o input do operador vira broker-agnóstico.
+- Não toca `InpBrickSize` (já em price units por ADR-026/`CMksFixedBrickSizer` — já broker-agnóstico).
+- Não modela o SL dinâmico spread-aware (termo diferido ao E2, §4 desta doc) — este é o piso estático do SL em bricks.
+- **Acoplamento ao `Point()` do terminal (nomeado honestamente, achado da revisão adversarial):** a conversão lê o `Point()` do símbolo VIVO (`SymbolInfoDouble`), não o `point` gravado no header do `.mkstick`. O `Point()` já era load-bearing no replayer antes desta ADR (piso de SL via `SetSlFloorSource`, aplicação do SL em preço), com fail-fast se `Point()<=0` (`DecisionReplayer.mq5`). Determinismo runner↔runner intacto (mesmo terminal → mesmo `Point()`). Consequência: um golden (E2.2) fica **pinado às specs do símbolo da corretora de captura** — replayar um golden numa corretora de `digits` diferente daria `slPoints` diferente. Isso é coerente (os ticks do `.mkstick` são específicos da corretora; replay cross-broker de um golden nunca foi operação suportada), mas é uma dependência de ambiente a manter em mente quando o E2.3 formalizar a asserção de proveniência do header.
+
+---
+
+### ADR-033: Critério de detecção de gap do soft-recovery — âncora deslizante (corrige deadlock em rampa) + reset de estado + rede de teste
+
+**Data:** 2026-07-21
+**Status:** Aceita
+**Relação:** Refina a **nota de 2026-05-26 da ADR-011** (que introduziu o soft-recovery, código 105) — sem editá-la (§6). Executa **E3.1/E3.2/E3.3** do `docs/ROADMAP-CORE-HARDENING.md`; rastreia os achados `[H2]` (105 sem teste), `[M2]`/`[recovery-doc-says-variance]` (deadlock em rampa) e `[recovery-stale-lastDirection]` da auditoria 2026-06-02.
+
+**Contexto:**
+A nota 2026-05-26 da ADR-011 criou o soft-recovery: após `kRecoverAfter` rejeições K consecutivas com "mids agrupados (variância ≤ S)", o builder reanchora `m_lastClose` (código 105) em vez de travar em 102. Três defeitos, confirmados pela auditoria:
+
+1. **Deadlock em rampa monotônica `[M2]`.** O código media `MathAbs(mid − m_kFirstMid) ≤ S` contra um **primeiro-mid congelado**, não a dispersão da janela. Numa reabertura direcional sustentada (o caso mais plausível de segunda-feira, contemplado pela ADR-008), os mids são próximos **entre si** (passo tick-a-tick pequeno) mas se afastam progressivamente da âncora fixa → `gapDetected` fica `false` para sempre → **travamento permanente em 102**, exatamente o que o recovery deveria eliminar. Só o caso "salto+patamar" funcionava; "salto+tendência" não.
+2. **Zero cobertura `[H2]`.** Todo o caminho 105 rodava por *default* (`kRecoverAfter=5`, usado pelos 3 EAs) **sem um único teste**. Uma regressão (`≤`→`<`, ou a âncora) passaria batida até um gap real em produção.
+3. **Estado stale `[recovery-stale-lastDirection]`.** O reanchor não resetava `m_lastDirection`; `GetFormingBrick()` retornava a direção pré-gap (stale) até o 1º brick pós-recovery.
+
+Além disso, doc e código discordavam: o comentário e a ADR-011 diziam "variância ≤ S"; o código media distância a uma âncora fixa (`[recovery-doc-says-variance]`).
+
+**Decisão:**
+1. **Âncora DESLIZANTE.** `m_kFirstMid` (congelado) → `m_kPrevMid` (mid da rejeição anterior). Gap detectado quando `|mid − m_kPrevMid| ≤ S` **e** `run ≥ kRecoverAfter`. Isso operacionaliza "mids agrupados entre si" (dispersão da janela deslizante) e **elimina o deadlock**: uma rampa tem passos tick-a-tick pequenos → recupera no K-ésimo; um platô (o caso que já funcionava) continua recuperando; a 1ª rejeição do run (sem anterior) conta como *tight* — o gate `kRecoverAfter ≥ 2` é o que exige consecutivas de verdade.
+2. **Reset de estado (E3.3).** No reanchor, `m_lastDirection` volta ao inerte do construtor (`MKS_BRICK_BULL`) — simetria com o estado pós-init (`hasFirstBrick=false`), tirando o stale de `GetFormingBrick()`.
+3. **Rede de teste (E3.1/E3.2).** 6 testes determinísticos em `Test_CMksRenkoBuilder`: rampa monotônica recupera (o teste do bug — falha no código antigo), gap-platô com exatamente 1× 105, spike isolado sem 105, tick aceito zera o run, **paridade duplo-run pós-recovery** (bricks idênticos incl. `triggerPrice`/`triggerTickId`), direção inerte pós-reanchor.
+
+**Alternativas consideradas:**
+- **Variância real da janela inteira** (buffer dos N mids, var ≤ S). Rejeitada: mais estado, e uma flag "todos os passos tight" **re-trava** se um passo grande aparecer cedo num run que nunca reseta (gap sustentado) — a âncora deslizante re-checa a cada rejeição e nunca trava. A deslizante é a opção 1 explícita do E3.2 e é deadlock-free.
+- **Manter âncora fixa e só dimensionar K/`fillDays`.** Rejeitada: é a mitigação atual (documentada), não a cura; o deadlock volta em qualquer reabertura direcional forte (REGRA 2 — causa-raiz).
+- **Halt (104) quando os mids são dispersos** em vez de seguir. Rejeitada como fora de escopo: o E3.2 é sobre não travar no gap legítimo; a distinção gap-vs-corrupção-dispersa é tensão inerente, e o L-guard (104) já cobre ticks inválidos. A deslizante segue o último passo tight; a tensão fica documentada.
+- **Documentar o stale de `m_lastDirection`** em vez de resetar (a opção alternativa do E3.3). Rejeitada: resetar é mais limpo e simétrico; o stale seria pegadinha de observabilidade.
+
+**Consequências:**
+- `CMksRenkoBuilder`: `m_kFirstMid` → `m_kPrevMid`; `HandleKExceeded` com âncora deslizante; reanchor reseta `m_lastDirection`. **Determinismo preservado** (função pura do stream; sem RNG/wall-clock) — provado pelo teste de paridade duplo-run.
+- **Comportamento:** rampa monotônica de reabertura agora **RECUPERA** (antes travava em 102 para sempre). Platô e spike isolado inalterados. O reset de direção só afeta `GetFormingBrick()` entre o reanchor e o 1º brick pós-recovery (observabilidade — a lógica de decisão usa o caminho de primeiro-brick).
+- **Cobertura:** o caminho 105 sai de **zero** testes (`[H2]`) para 6, incl. duplo-run. Compila **0/0**; execução no MT5 pendente do dono.
+- **Doc:** comentários do builder sincronizados (não mais "variância ≤ S"/"primeiro mid"); a nota 2026-05-26 da ADR-011 fica **preservada** (não editada, §6) e refinada por esta ADR.
+
+**Fronteiras:**
+- Não muda o critério **K** (magnitude) nem **L** (ticks inválidos) — só o critério de reanchor pós-K.
+- Não decide *halt-vs-follow* para corrupção dispersa sustentada (a deslizante segue o último passo tight; corrupção verdadeiramente aleatória cabe ao L-guard e a hardening futuro).
+- Não altera a paridade do stream de bricks já provada (`fillDays=0`) — só estende a rede de regressão do motor (E3).
+
+---
+
+### ADR-034: Eixo 3 — comissão chega ao resultado em moeda (journal/report) + warning de spread inerte
+
+**Data:** 2026-07-21
+**Status:** Aceita
+**Relação:** Executa **E4.1/E4.2/E4.3** do `docs/ROADMAP-CORE-HARDENING.md`; rastreia `[M1]`, `[M8]`, `[M4]` e `[spread-multiplier-silent-noop]`. Fecha o **eixo 3 do V5-POSTMORTEM** na métrica de decisão do StressLab. Complementa a ADR-030 (StressLab credível) e o `CMksSimAccount` (E2, que já aplica comissão ao equity).
+
+**Contexto:**
+A comissão é **computada** (`CMksCostModel`→`CMksSimulatedBroker`: `r.commission`, `pos.commissionOpen`, `ev.commissionClose`) mas **descartada** no caminho `SimulatedBroker → CMksTradeJournal → CMksStressLabReport`: o journal trabalhava só em pontos, `RecordClose` não tinha parâmetro de comissão, e o report só reportava pontos. É o padrão exato do eixo 3 do V5 (custo contabilizado num relatório, nunca aplicado ao resultado), latente **na métrica que "diz pra ir pra live"**. (Nota: no caminho E2, o `CMksSimAccount` **já** aplica comissão ao equity — `m_realized += pnl − commission`; o gap era só na dupla journal/report do StressLab.) Swap: modelado (`CMksCostModel.SwapForDays`) mas **nunca chamado** (`r.swap=0`), swap OFF em v1 por ADR-030. E o stress de spread tem um no-op silencioso: `spreadMultiplier>1` com `baselineSpreadPoints==0` não faz nada (`SampleSlipPoints`).
+
+**Decisão:**
+1. **`CMksTradeJournal` vira money-aware.** `SetMoneyConversion(tickSize, tickValue)` (fórmula idêntica ao `CMksSimAccount`: `(priceDiff/tickSize)·tickValue·lots`) + campos de comissão (`MksClosedTrade.commission`, `MksOpenPosition.commissionOpen`) + parâmetros de comissão com **default `0.0`** em `RecordOpen`/`RecordClose` (não-breaking) + agregados em moeda (`GrossProfit/LossCurrency`, `TotalCommission`, `TotalSwap`) + **`NetPnLCurrency() = bruto − comissão − swap`**. Sem conversão configurada, os `*Currency` devolvem 0 e `HasMoneyConversion()=false`.
+2. **`CMksStressLabReport` surfacea moeda:** `netPnLCurrency`, `totalCommission`, `grossProfit/LossCurrency`, `totalSwap`, `hasCurrency` — capturados do journal, expostos no `ToJsonLine`/`PrintComparison`.
+3. **Swap OFF (v1, ADR-030)** mas carregado como 0 — a fórmula é swap-aware, pronta para o accrual futuro sem ligar accrual não-testado.
+4. **E4.3:** `CMksStressLabBroker` detecta na construção `spreadMultiplier>1 && baselineSpreadPoints==0`, emite `Print` de WARN uma vez e expõe `SpreadStressInert()` (testável) — simétrico ao argumento da ADR-030 contra o requote inerte.
+5. **Rede de teste:** 4 testes de moeda/comissão no journal (incl. o `[M1]/[M8]`: dois runs diferindo só na comissão → net **diferente**), 2 no report, 1 do spread inerte; a integração do report passa a **repassar `commissionClose`** do auto-close (antes descartado na `RecordClose`).
+
+**Alternativas consideradas:**
+- **Converter pra moeda no report (não no journal).** Rejeitada. O E4.1 pede `NetPnLCurrency` no próprio journal, dono do dado por-trade — fonte única.
+- **Ligar swap accrual agora.** Rejeitada. Swap OFF é decisão consciente da ADR-030/v1; ligar accrual não-testado num turno sem compile-all completo é risco desnecessário. A estrutura fica swap-aware (0).
+- **Reclassificar win/loss por líquido-de-comissão.** Rejeitada para v1: mudaria a semântica de `WinCount`/`WinRate` e quebraria testes; o net-de-custo entra como `NetPnLCurrency`, sem tocar a classificação (que segue por `pnlPoints`).
+- **Comissão via struct nova em `RecordClose`.** Rejeitada: parâmetro com default `0.0` é não-breaking e mais simples; `MksExecutionResult` já carrega `commission`/`swap`.
+
+**Consequências:**
+- `CMksTradeJournal`, `CMksStressLabReport`, `CMksStressLabBroker` estendidos; `MksClosedTrade`/`MksOpenPosition` ganham campos de custo. `RecordOpen`/`RecordClose` ganham parâmetro com default (callers antigos intactos).
+- A métrica de sobrevivência do StressLab passa a **sentir comissão** — o antídoto do eixo 3. O caminho E2 (`CMksSimAccount`) já sentia; agora o caminho StressLab/decisão também.
+- **Disjunção do ColorReversal:** todos os arquivos tocados estão **FORA** do grafo de includes do `ColorReversal` (caminho live). `MksExecutionResult` (DENTRO) **não** foi tocado (já tinha `commission`/`swap`). Editar o E4 recompila só os testes de StressLab + `DecisionReplayer`, nunca o `ColorReversal.ex5` — condição para desenvolver com a captura viva anexada.
+- 7 testes novos; verificados por **compile dirigido dos testes** (não `compile-all`, que recarregaria a captura). Execução no MT5 pendente do dono.
+
+**Fronteiras:**
+- Swap accrual segue OFF (v1); só a estrutura é swap-aware.
+- Não reclassifica win/loss por custo.
+- Não toca o caminho live (`CMksMt5Broker`) — comissão real live vem de `HistoryDeal*`, fora do escopo.
+- O sub-teste do E4.2 "`slip>0` reduz estritamente o `NetPnLCurrency`" (ancorar o efeito do slip no resultado em moeda, não no contador) fica como adição pequena pendente — a comissão (o descarte real do eixo 3) está fechada e provada.
+
+---
+
 ## 4. Decisões pendentes
 
 - **ADR-031 — manter+corrigir o Custom Symbol** (referenciada nas notas da ADR-023-A, ainda **não escrita como seção própria**). Entregável E7.3 do `docs/ROADMAP-CORE-HARDENING.md`: redigir formalmente com o dado do gate empírico (sobrevivência à virada de dia). Bloqueada por E7.1 (gate empírico pendente de dado).
