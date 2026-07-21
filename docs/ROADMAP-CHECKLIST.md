@@ -113,7 +113,7 @@
 
 ### B. StressLab calibrado + liga/desliga — *prioridade Agora (pedido do dono)*
 - [x] **Runner de estresse liga/desliga** — rodar a estratégia SEM o StressLab, depois COM, e comparar lado a lado. *Critério: um EA/script que produz um relatório comparativo (None→Nightmare) de uma corrida sobre `.mkstick`, com o net por nível.* → **FEITO + MT5-verificado (ADR-038, 2026-07-21): `CMksTradeJournalingBroker` + `CMksStressRunner` + `StressReplayer.mq5`; testes 27/27 + 17/17; smoke sobre o golden (33.546 ticks) produziu a tabela None→Nightmare (slippage degrada o net; rejeições reduzem trades). Compila 51/0/0.**
-- [ ] **Calibração ao broker real** — medir spread/slippage/latência reais da Exness (XAU) e ancorar os presets do `CMksStressParams`. *Critério: presets derivados de dado medido, documentados; "sobreviveu ao Nightmare" passa a ter significado.*
+- [~] **Calibração ao broker real** — medir spread/slippage/latência reais da Exness (XAU) e ancorar os presets do `CMksStressParams`. *Critério: presets derivados de dado medido, documentados; "sobreviveu ao Nightmare" passa a ter significado.* → **PARCIAL (ADR-039, 2026-07-21): spread MEDIDO (240 pts / 0.24 USD, 417k ticks) e ancorado no StressReplayer. Latência→drift medido (~0.25 pts/ms adverso) mas não ligado (decisão de modelagem). Slippage puro PENDENTE (precisa dado de ordem real).**
 - [ ] **Fácil de operar** — o liga/desliga como um input/botão, sem montar pipeline à mão. *Critério: operador roda a comparação com ≤ 2 passos.*
 
 ### C. Estratégia lucrativa (Fase 10) — *o maior espaço em branco; precisa do dono*

@@ -2605,11 +2605,48 @@ O pipeline sim+stress+report existe e é provado em pequena escala (`Test_RPT_Ca
 
 ---
 
+### ADR-039: Calibração do StressLab ao broker real (Exness XAU) — spread medido + ancorado; latência/slippage pendentes
+
+**Data:** 2026-07-21
+**Status:** Proposta
+**Relação:** Executa a **fatia 5 (calibração)** da ADR-038 e o item de calibração da **Parte B** do `docs/ROADMAP-CHECKLIST.md`. Fecha a dívida "spread-stress inerte" nomeada na ADR-038.
+
+**Contexto:**
+Os presets do StressLab (`CMksStressParams`) traziam `baselineSpreadPoints=0` (spread-stress inerte) e valores sintéticos de slippage/latência. Sem ancorar ao comportamento medido do broker, "sobreviveu ao Nightmare" não tem significado absoluto — só degradação relativa. O dono pediu calibração ao broker real (Exness XAUUSDm).
+
+**Decisão:**
+1. **Spread — MEDIDO e ancorado.** Parser `.mkstick` fora do MT5 (spread = `(ask−bid)/point` por tick) sobre 417k ticks reais de 3 capturas XAUUSDm/Exness (2026-07-20): **baseline = 240 pts = 0.24 USD** (mediana e moda; muito estável, sd 1–20 pts), p95 260, p99 280, pico máximo 700 (notícia/liquidez fina). Ancoragem no `StressReplayer`: `InpSpreadPts=240` (CostModel, aplica half = 120/lado) + `InpBaselineSpreadPts=240` (composição do stress, `extraHalfSpread=(mult−1)·120`). **Não** duplica: CostModel cobra o baseline, o stress só o excesso. Os **multiplicadores dos presets são mantidos** — com baseline 240 já mapeiam realista (Light 1.2×≈288, Medium 1.8×≈432, **High 3×≈720 ≈ o pico real observado 700**, Nightmare 10× = destruição).
+2. **Latência→drift — MEDIDO, wiring adiado.** Deslocamento líquido `|mid(t+L)−mid(t)|` (não a velocidade ingênua) dá **~0.5 pts/ms** (total) / **~0.25** (adverso) na janela realista ~260ms (bate com o roundtrip do demo da Fase 9, 524ms). O drift/ms cai com L (0.66→0.25 de 260ms→1000ms — random-walk √t), então o modelo linear `latencyDriftPointsPerMs` superestima em L alto (aceitável em Nightmare). **NÃO ligado**: exige `latencyDriftPointsPerMs` no `MksStressRunnerConfig`+EA e uma decisão de modelagem (total vs adverso). Fica como fatia própria.
+3. **Slippage puro — PENDENTE de dado.** Separado do drift de latência (imperfeição de fill do broker). Só há 11 trades do demo da Fase 9 — amostra insuficiente. Presets mantidos até haver dado `requested-vs-filled` de ordem real.
+4. **Achado metodológico registrado.** A 1ª tentativa (velocidade `|Δmid|/Δt` por tick) superestimava o drift **20–50×** — soma o comprimento do caminho (bounce de bid/ask a cada quote), não o deslocamento líquido. Corrigido antes de calibrar (anti-gambiarra). O método válido é deslocamento líquido sobre a janela de latência.
+
+**Alternativas consideradas:**
+- **Deixar tudo sintético (baseline 0).** Rejeitada: "sobreviveu ao Nightmare" fica sem significado absoluto; o dono pediu calibração.
+- **Calibrar os 3 eixos agora.** Rejeitada: latência exige decisão de modelagem + mudança de código no runner recém-verificado; slippage não tem dado. Shipar o eixo sólido (spread) e **nomear** os pendentes é mais honesto que chutar 2 eixos.
+- **Re-escalar os multiplicadores dos presets.** Rejeitada: com baseline 240 eles já mapeiam realista (High ≈ pico real). Mudar seria arbitrário.
+
+**Consequências:**
+- `StressReplayer` default passa a ter **custo de spread real** — o nível None reflete o spread real da Exness (net pior que o run sem custo; honesto). Os níveis estressados compõem por cima.
+- **Não toca** o `DecisionReplayer`/golden (spread 0 lá; paridade E2 intacta) nem os presets/runner.
+- **Dívida nomeada:** (a) ligar o drift de latência (`latencyDriftPointsPerMs`, ~0.25 adverso) no runner+EA; (b) medir slippage de ordem real. Ambos = fatia futura.
+- **Fronteira de amostra:** dado de 1 dia (2026-07-20). O spread é estável, mas ampliar a amostra (multi-sessão, news, rollover) refina p99/max. Os scripts de medição ficam versionáveis se o dono quiser (hoje no scratchpad).
+
+**Fronteiras:**
+- Não liga latência nem slippage (só documenta os valores medidos/pendentes).
+- Não altera `CMksStressParams` nem `CMksStressRunner` (só defaults do EA).
+- Não toca o caminho de paridade.
+
+**Validação contra invariantes (§1):** não afeta — é config de custo do `StressReplayer` (fora do caminho de paridade); o replay segue determinístico por seed.
+
+---
+
 ## 4. Decisões pendentes
 
 - **ADR-031 — manter+corrigir o Custom Symbol** (referenciada nas notas da ADR-023-A, ainda **não escrita como seção própria**). Entregável E7.3 do `docs/ROADMAP-CORE-HARDENING.md`: redigir formalmente com o dado do gate empírico (sobrevivência à virada de dia). Bloqueada por E7.1 (gate empírico pendente de dado).
 - **Termo spread-aware dinâmico do piso de SL** — a fórmula por-tick (que fecha a cauda residual do M12) foi deliberadamente **diferida ao E2** (precisa do runner de replay + spread por-tick no simulador). Decisão de shipar o piso estático de brick agora (E0.3) tomada com o dono em 2026-07-19; o termo dinâmico é decisão arquitetural em aberto para o E2.
 - **Circuit breaker corretivo (`flatten-on-breach`)** — o breaker Por Conta é **preventivo** (bloqueia a abertura), não corretivo (não fecha posição já aberta ao cruzar `minEquityAbs`/`maxDrawdownPct`). A ADR-036 (E5.4) documentou isso e **adiou conscientemente** (decisão do dono, 2026-07-21) a construção de um componente que feche tudo + trave via `OnTick`. Decisão em aberto para uma fatia futura, com teste dedicado.
+
+- **Calibração do StressLab — eixos latência e slippage** (ADR-039, fatia 5 parcial). O spread foi medido e ancorado (240 pts). Faltam: (a) **ligar o drift de latência** — `latencyDriftPointsPerMs` (medido ~0.25 adverso @ ~260ms) precisa entrar no `MksStressRunnerConfig`+`StressReplayer` e uma decisão de modelagem (total vs adverso; o modelo linear superestima em L alto); (b) **medir slippage de ordem real** (requested vs filled) — só há 11 trades do demo, amostra insuficiente. Ambos adiados por dependerem de decisão de modelagem / dado a coletar.
 
 Outras decisões novas são registradas formalmente quando forem enfrentadas, não antes — decidir arquitetura no vazio produz decisões erradas.
 

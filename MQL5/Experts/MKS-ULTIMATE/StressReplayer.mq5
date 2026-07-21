@@ -65,10 +65,10 @@ input double InpRiskPct           = 1.0;
 
 input group "=== Conta sim + CostModel base ==="
 input double InpStartBalance     = 10000.0;
-input double InpSpreadPts         = 0.0;    // spread base do CostModel (pontos)
+input double InpSpreadPts         = 240.0;  // spread base do CostModel (pts). CALIBRADO Exness XAUUSDm (ADR-039): 240 pts = 0.24 USD (mediana de 417k ticks). CostModel aplica half (120/lado). Custom p/ outro símbolo.
 input double InpSlipPts           = 0.0;    // slippage base do CostModel (pontos)
 input double InpCommPerLot        = 0.0;    // comissão por lote (moeda)
-input double InpBaselineSpreadPts = 0.0;    // base p/ o spread-stress compor. 0 = spread-stress INERTE (honesto até calibrar ao broker real)
+input double InpBaselineSpreadPts = 240.0;  // base p/ o spread-stress compor (ADR-027 §7.2). CALIBRADO = 240 (mesmo spread real). Multiplicador do preset compõe: High 3× ≈ 720 ≈ max real (700). 0 = spread-stress inerte.
 
 input group "=== Piso de SL (E0.3/M12) ==="
 input int    InpMinSlBricks      = 1;
