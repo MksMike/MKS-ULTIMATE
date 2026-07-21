@@ -175,29 +175,29 @@ Referência cruzada: os IDs entre colchetes (ex.: `[H1]`, `[M9]`, `[cs-recovery-
 
 ## Fase E6 — Produto operável (UX SaaS)
 
-**Status:** Em andamento — **E6.4 parcial** (2026-07-21): runbook de 1 página (`CHEATSHEET §9.8`) + header do `ColorReversal` corrigido (`[header-describes-nonexistent-stress-runner]`). Compila 0/0. Pendentes: E6.1 (reduzir superfície de ~31 inputs → ≤8 básicos), E6.2 (unidades — grande parte já feita pela ADR-032), E6.3 (presets por instrumento), e a decisão do E6.4 sobre o `Producer` continuar como EA separado.
+**Status:** Em andamento — **E6.1/E6.2/E6.3 feitos + E6.4 parcial** (2026-07-21). ADR-037: superfície de inputs enxuta em 3 níveis (Básico/Avançado/Diagnóstico), K/L fora do dialog (const, valores mantidos → golden E2 intacto), preset por instrumento (`InpInstrumentPreset` Custom/XAU/EURUSD). ADR-032 já fechou o E6.2 (SL em bricks). E6.4: runbook (`CHEATSHEET §9.8`) + header corrigido; Producer **mantido separado** (decisão do dono). Compila 0/0 (48 arquivos). **MT5 pendente** (conferir dialog + preset + tester). Resta o sub-item do E6.1 "unificar `InpHistoricalFillDays` Producer↔ColorReversal".
 **Paralela a E2–E5; pré-requisito de operação real (não de construir o core).**
 
 **Por que importa:** o foco declarado é experiência do usuário — "simples de operar, sem confundir com opções demais". Hoje a superfície de configuração e o fluxo de operação contradizem essa meta, e um default (`InpSlPoints=30`) já quebrou em produção.
 
 **Entregáveis:**
 
-- **E6.1 — Reduzir a superfície de configuração** `[input-surface-too-large, k-l-defaults-coupled]`
-  - Agrupar inputs em **Básico** (instrumento, brick size, modo de lote/risco, limites de risco) vs **Avançado/Diagnóstico** (L/K, flags de log, cores).
-  - Esconder K/L atrás de defaults no composition root (já têm justificativa em ADR — não precisam ser inputs); derivar K automaticamente de `fillDays`/`brickSize` (`K = max(20, ceil(gapEsperado/S))`).
-  - Unificar o default de `InpHistoricalFillDays` entre Producer e ColorReversal (ou documentar por que diferem).
-- **E6.2 — Unidades explícitas** `[pts-naming-misleading]`
-  - Padronizar a unidade do SL para a mesma do brick (preço, ou múltiplos de `brickSize`); eliminar "Pts" do naming onde o valor não é ponto do símbolo.
-- **E6.3 — Presets por instrumento**
-  - Um preset por instrumento (XAU, EURUSD…) que pré-popula brick/SL/limites sãos — o operador escolhe o instrumento, não 30 números.
+- **E6.1 — Reduzir a superfície de configuração** `[input-surface-too-large, k-l-defaults-coupled]` — **feito (ADR-037, 2026-07-21; MT5 pendente)**
+  - ✅ Agrupar inputs em **Básico** (instrumento, brick, SL, modo de lote/risco, limites de conta) vs **Avançado** (risco fino/histórico) vs **Diagnóstico** (paridade/captura/visualização).
+  - ✅ Esconder K/L atrás de defaults no composition root (const `kThresholdLimit`/`kInvalidTickLimit`, não mais inputs). **NÃO** auto-derivei K (mudaria o valor → risco de paridade com o golden E2; decisão do dono de manter paridade-safe).
+  - ⬜ Unificar o default de `InpHistoricalFillDays` entre Producer e ColorReversal (ou documentar por que diferem) — **sub-item pequeno remanescente**.
+- **E6.2 — Unidades explícitas** `[pts-naming-misleading]` — **feito (herdado da ADR-032)**
+  - ✅ SL já está em bricks (ADR-032); o único "Pts" restante (`InpMinSlFloorPts`) é legitimamente pontos (belt absoluto). Nada a padronizar além de agrupar/comentar (ADR-037).
+- **E6.3 — Presets por instrumento** — **feito (ADR-037, 2026-07-21; MT5 pendente)**
+  - ✅ `InpInstrumentPreset` (Custom/XAU/EURUSD); `!= Custom` pré-popula brick/SL/pisos sãos no OnInit (preset vence, precedência logada). XAU = produção; EURUSD = valores iniciais a ajustar.
 - **E6.4 — Runbook de primeira execução + consolidação de artefatos** `[run-ea-flow-manual-multistep, header-describes-nonexistent-stress-runner]` — **parcial (2026-07-21)**
   - ✅ Runbook de 1 página no `CHEATSHEET.md §9.8` (ordem dos passos, anexar no símbolo real, conta hedging, qual EA para quê, mapa das recusas do OnInit).
-  - ⬜ Avaliar se o `Producer` ainda precisa existir como EA separado para o operador final (útil para dev, confunde como produto) — **decisão do dono pendente**.
+  - ✅ `Producer` **mantido** como EA separado (dev/visualização) — decisão do dono.
   - ✅ Corrigir o `@responsibility` de `ColorReversal.mq5` (narrava stress runner inexistente).
 
 **Critério de saída:**
-- Operador roda com ≤ ~8 inputs básicos, defaults sãos por instrumento, sem aritmética manual de config.
-- Runbook de 1 página existe; o fluxo de "primeira execução" tem caminho único documentado.
+- 🟢 Operador roda com ≤ ~8 inputs básicos, defaults sãos por instrumento (preset), sem aritmética manual de config (ADR-037; MT5 pendente).
+- ✅ Runbook de 1 página existe; o fluxo de "primeira execução" tem caminho único documentado (`CHEATSHEET §9.8`).
 
 ---
 

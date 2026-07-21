@@ -2531,6 +2531,43 @@ A comissão é **computada** (`CMksCostModel`→`CMksSimulatedBroker`: `r.commis
 
 ---
 
+### ADR-037: Superfície de inputs enxuta (3 níveis) + presets por instrumento no ColorReversal (E6.1/E6.3)
+
+**Data:** 2026-07-21
+**Status:** Aceita
+**Relação:** Executa **E6.1/E6.3** do `docs/ROADMAP-CORE-HARDENING.md`; rastreia `[input-surface-too-large]` e `[k-l-defaults-coupled]`. Fecha, com a **ADR-032** (que já resolveu a unidade do SL), o eixo do **E6.2**. Complementa a ADR-006 (L), ADR-011 (K) e ADR-032 (SL em bricks).
+
+**Contexto:**
+O `ColorReversal.mq5` expunha **~31 inputs** num nível plano — o oposto da meta do produto ("simples de operar, sem confundir com opções demais"), e um default já quebrou em produção (origem da ADR-032). Dentre os 31, **K** (ADR-011) e **L** (ADR-006) são defaults ADR-justificados que o operador não deveria tocar, mas estavam no dialog `[k-l-defaults-coupled]`. E não havia "escolher o instrumento" — o operador setava brick/SL/pisos à mão por símbolo.
+
+**Decisão:**
+1. **Superfície em 3 níveis (E6.1).** Inputs reagrupados em **BÁSICO** (instrumento: preset+brick+SL; lote/risco: modo+lote/pct+3 limites de conta) / **AVANÇADO** (risco fino: magic, requireSl/Tp, maxLots, pisos, maxOpen/TotalLots, histórico) / **DIAGNÓSTICO** (paridade/captura + visualização). O operador decide ~8 no BÁSICO; o resto tem defaults sãos.
+2. **K e L saem do dialog (E6.1).** `InpInvalidTickLimit`(L) e `InpThresholdLimit`(K) deixam de ser inputs → const de arquivo (`kInvalidTickLimit=10`, `kThresholdLimit=20`) no composition root, fonte única. **Valores MANTIDOS** (K=20/L=10) → a config do golden do E2 (o `DecisionReplayer` usa os mesmos) fica intacta. **Deliberadamente NÃO** auto-derivei K de gap/brick (a opção do roadmap): mudaria o valor de K e quebraria o alinhamento com o golden — decisão do dono de manter paridade-safe agora.
+3. **Preset por instrumento (E6.3).** Enum `InpInstrumentPreset` (Custom/XAU/EURUSD). `!= Custom` **SOBREPÕE** brick/SL/pisos com valores sãos no OnInit (ponto ÚNICO de resolução → `eff*`); Custom usa os inputs Básicos. Precedência explícita e **logada**; os inputs sobrepostos são marcados "Ignorado se preset != Custom" no dialog. XAU = brick 3.0 / SL 10 bricks / piso 1 (valores de produção conhecidos); EURUSD = brick 0.0010 / SL 10 bricks / piso 1 (valores iniciais, a ajustar com dado).
+4. **E6.2 fechado por herança:** a unidade do SL já virou bricks (ADR-032); o único "Pts" remanescente (`InpMinSlFloorPts`) é legitimamente pontos (belt absoluto). Só agrupar/comentar.
+5. **Producer mantido como EA separado (E6.4, decisão do dono):** ferramenta de dev/visualização; não vira produto do operador nem é aposentado agora.
+
+**Alternativas consideradas:**
+- **Só regrupar (manter os 31 inputs).** Rejeitada: reduz a confusão pela metade (ainda mostra K/L, ainda sem presets); o E6.1 pede esconder os defaults ADR-justificados.
+- **Auto-derivar K de gap/brick.** Rejeitada AGORA: muda o valor de K → risco de paridade com o golden do E2 (exigiria re-capturar/re-validar). Fica como possibilidade futura se o golden for regenerado.
+- **Presets via `.set` versionados** (em vez de enum no EA). Rejeitada: o enum "escolhe o instrumento" no próprio dialog (mais descoberta, menos arquivo solto); o dono escolheu o enum.
+- **Preset que só pré-preenche defaults dos inputs** (sem sobrepor). Rejeitada: MQL5 não muda defaults de input em runtime; a sobreposição no OnInit com precedência logada é o mecanismo viável e claro.
+
+**Consequências:**
+- `ColorReversal.mq5`: bloco de inputs reorganizado; `InpInvalidTickLimit`/`InpThresholdLimit` removidos (→ const); `InpInstrumentPreset` adicionado; ~15 sites de OnInit/IngestOne passam a consumir `eff*`/const. Compila **0/0** (48 arquivos).
+- **Mudança de comportamento (consciente):** com preset `!= Custom`, brick/SL/pisos vêm do preset (os inputs correspondentes ficam inertes). Com **preset=Custom (default)**, comportamento **idêntico** ao anterior (mesmos inputs). K/L inalterados (mesmos valores). O `DecisionReplayer` (golden E2) **NÃO** foi tocado — mantém K/L=20/10 como inputs; paridade intacta.
+- **Disjunção:** `ColorReversal.mq5` é o EA da captura; recompila. Feito sem captura viva (PC de casa).
+- Fecha `[input-surface-too-large]`, `[k-l-defaults-coupled]`. E6.1/E6.2/E6.3 concluídos; E6.4 parcial (runbook+header feitos; Producer decidido = manter).
+- **PENDENTE no MT5 (dono):** anexar o ColorReversal e conferir (a) o dialog nos 3 níveis; (b) um preset (XAU) sobrepõe brick/SL (log `starting` deve mostrar `preset:XAU, S:3.0, slBricks:10`); (c) Custom preserva o comportamento anterior; (d) um tester run abre/fecha ordens como antes.
+
+**Fronteiras:**
+- Os valores do preset **EURUSD** são iniciais (não validados com dado) — ajustar quando EURUSD entrar em uso real.
+- Não toca o `DecisionReplayer` nem o golden (K/L seguem inputs lá; paridade preservada).
+- Auto-derivação de K fica fora (paridade); reconsiderar só se o golden for regenerado.
+- Não consolida/aposenta o `Producer` (decisão do dono: manter separado).
+
+---
+
 ## 4. Decisões pendentes
 
 - **ADR-031 — manter+corrigir o Custom Symbol** (referenciada nas notas da ADR-023-A, ainda **não escrita como seção própria**). Entregável E7.3 do `docs/ROADMAP-CORE-HARDENING.md`: redigir formalmente com o dado do gate empírico (sobrevivência à virada de dia). Bloqueada por E7.1 (gate empírico pendente de dado).

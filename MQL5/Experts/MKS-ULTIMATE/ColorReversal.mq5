@@ -70,63 +70,69 @@
 #include <MKS-ULTIMATE/Core/Types/Error.mqh>
 
 //--- Inputs --------------------------------------------------------
-input group "=== Brick (classic geometry — ADR-026) ==="
-input double InpBrickSize           = 3.0;   // Tamanho do brick (price units; XAU em USD)
-input int    InpInvalidTickLimit    = 10;    // L (ADR-006)
-input int    InpThresholdLimit      = 20;    // K (ADR-011)
+// E6.1/E6.3 (ADR-037): superfície enxuta em 3 níveis. BÁSICO = o que o
+// operador decide; AVANÇADO = risco fino / histórico; DIAGNÓSTICO = dev /
+// visual / paridade. K (ADR-011) e L (ADR-006) NÃO são mais inputs — viram
+// consts ADR-justificadas no composition root (kThresholdLimit/
+// kInvalidTickLimit), com os MESMOS valores (paridade E2 intacta). Um preset
+// por instrumento pré-popula brick/SL/pisos; Custom usa os inputs Básicos.
 
-input group "=== Estratégia ==="
-input long   InpMagicNumber         = 527001; // Identificador único desta estratégia
-input double InpSlBricks             = 10.0;  // SL em BRICKS (broker-agnóstico, ADR-032). Distância = InpSlBricks·InpBrickSize (USD), idêntica em qualquer digits — o EA converte para pontos via Point() em runtime. OnInit recusa anexar se < piso = max(InpMinSlFloorPts, InpMinSlBricks·brickSize) — E0.3/M12.
+input group "=== BÁSICO — instrumento ==="
+enum ENUM_CR_PRESET
+{
+   CR_PRESET_CUSTOM = 0,  // usa os inputs Básicos abaixo (InpBrickSize/InpSlBricks/pisos)
+   CR_PRESET_XAU    = 1,  // XAUUSD: brick 3.0, SL 10 bricks, piso 1 brick
+   CR_PRESET_EURUSD = 2   // EURUSD: brick 0.0010, SL 10 bricks, piso 1 brick (valores iniciais — ajuste com dado)
+};
+input ENUM_CR_PRESET InpInstrumentPreset = CR_PRESET_CUSTOM; // != Custom SOBREPÕE brick/SL/pisos
+input double InpBrickSize           = 3.0;   // tamanho do brick em preço (XAU em USD). Ignorado se preset != Custom
+input double InpSlBricks             = 10.0; // SL em BRICKS (broker-agnóstico, ADR-032; distância = SlBricks·brickSize). Ignorado se preset != Custom
 
-input group "=== Sizing ==="
+input group "=== BÁSICO — lote / risco ==="
 enum ENUM_CR_LOT_MODE
 {
    CR_LOT_FIXED = 0,    // Lots fixos
    CR_LOT_PERCENT = 1   // % do balance / SL distance
 };
-input ENUM_CR_LOT_MODE InpLotMode   = CR_LOT_FIXED;
-input double InpFixedLots           = 0.01;  // Usado se InpLotMode = FIXED
-input double InpRiskPct             = 0.5;   // Usado se InpLotMode = PERCENT (% do balance por trade)
+input ENUM_CR_LOT_MODE InpLotMode   = CR_LOT_FIXED; // FIXED | PERCENT
+input double InpFixedLots           = 0.01;  // lote (se FIXED)
+input double InpRiskPct             = 0.5;   // % do balance por trade (se PERCENT)
+input double InpMaxDailyLossPct     = 5.0;   // trava NOVAS entradas ao perder X% no dia (0 = off)
+input double InpMaxDrawdownPct      = 10.0;  // trava ao cair X% do pico de equity (0 = off)
+input double InpMinEquityAbs        = 0.0;   // circuit breaker absoluto em equity (0 = off)
 
-input group "=== Risk Manager — Por Trade ==="
-input bool   InpRequireSl           = true;
-input bool   InpRequireTp           = false; // Por design (color reversal não usa TP)
+input group "=== AVANÇADO — risco fino / histórico ==="
+input long   InpMagicNumber         = 527001; // id único desta estratégia (só troque se rodar >1 no mesmo símbolo)
+input bool   InpRequireSl           = true;   // exige SL em toda ordem (lição V5)
+input bool   InpRequireTp           = false;  // color reversal não usa TP
 input double InpMaxLotsPerTrade     = 1.0;
-input int    InpMinSlBricks         = 1;     // Piso de SL em bricks (>=1; mata o M12: StopsLevel=0 não desliga o gate)
-input double InpMinSlFloorPts       = 0.0;   // Belt absoluto opcional do piso, em pontos (0 = só o piso de brick)
-
-input group "=== Risk Manager — Por Estratégia ==="
-input int    InpMaxOpenPositions    = 1;     // Color reversal: máx 1 posição
+input int    InpMinSlBricks         = 1;      // piso de SL em bricks (>=1; mata o M12). Ignorado se preset != Custom
+input double InpMinSlFloorPts       = 0.0;    // belt absoluto do piso, em pontos (0 = só o piso de brick). Ignorado se preset != Custom
+input int    InpMaxOpenPositions    = 1;      // color reversal: máx 1 posição
 input double InpMaxTotalLots        = 1.0;
+input int    InpHistoricalFillDays  = 3;      // dias de bricks históricos no CS/.mksbk (0 = só live). Estratégia NÃO opera no histórico
 
-input group "=== Risk Manager — Por Conta ==="
-input double InpMaxDailyLossPct     = 5.0;
-input double InpMaxDrawdownPct      = 10.0;
-input double InpMinEquityAbs        = 0.0;   // 0 = sem circuit breaker absoluto
-
-input group "=== Custom Symbol ==="
+input group "=== DIAGNÓSTICO — paridade / captura ==="
+input bool   InpRecordMkstick         = false; // grava o .mkstick EXATO do feed (replay de decisão, E2.1). Live-only; EXIGE InpHistoricalFillDays=0
 input bool   InpResetCustomSymbolBars = true;
 input bool   InpShowWicksInCS         = false;
+input bool   InpPrintBricks           = false;
+input bool   InpLogToFile             = true;
+input bool   InpAlsoWriteAudit        = true;  // audit.tsv complementar ao .mksbk
 
-input group "=== Visualização (ADR-028) ==="
-input bool   InpShowTradeMarkers      = true;  // setas de entrada/saída + linha P&L no chart (live: sobre CS; tester: sobre M1)
+input group "=== DIAGNÓSTICO — visualização (ADR-028) ==="
+input bool   InpShowTradeMarkers      = true;  // setas de entrada/saída + linha P&L (live: sobre CS; tester: sobre M1)
 input color  InpVizArrowBuy           = clrDodgerBlue;  // seta de entrada BUY
 input color  InpVizArrowSell          = clrOrangeRed;   // seta de entrada SELL
 input color  InpVizArrowBorder        = clrWhite;       // borda (halo) das setas
 input color  InpVizLineProfit         = clrLimeGreen;   // linha conectora — trade com lucro
 input color  InpVizLineLoss           = clrCrimson;     // linha conectora — trade com prejuízo
 
-input group "=== Histórico ==="
-input int    InpHistoricalFillDays    = 3;     // dias de bricks históricos no CS/.mksbk no live (0 = só live). Estratégia NÃO opera no histórico.
-
-input group "=== Paridade de decisão (E2.1) ==="
-input bool   InpRecordMkstick         = false; // grava o .mkstick EXATO do feed live (para replay de decisão via DecisionReplayer). Live-only; EXIGE InpHistoricalFillDays=0 (builder começa limpo).
-
-input group "=== Logging ==="
-input bool   InpPrintBricks         = false;
-input bool   InpLogToFile           = true;
-input bool   InpAlsoWriteAudit      = true;  // audit.tsv complementar ao .mksbk
+// K (ADR-011) e L (ADR-006) saíram do dialog (E6.1) — defaults ADR-justificados,
+// não parâmetros de operador. Valores MANTIDOS (K=20/L=10) → a config do golden
+// do E2 (DecisionReplayer usa os mesmos) fica intacta. Fonte única aqui.
+const int kInvalidTickLimit = 10;  // L (ADR-006)
+const int kThresholdLimit   = 20;  // K (ADR-011)
 
 //--- State global --------------------------------------------------
 string                g_symbol         = "";
@@ -461,12 +467,33 @@ int OnInit()
       return INIT_PARAMETERS_INCORRECT;
    }
 
+   // E6.3 (ADR-037): preset por instrumento. != Custom SOBREPÕE brick/SL/
+   // pisos com valores sãos; Custom usa os inputs Básicos. Precedência clara:
+   // o preset vence, e os inputs correspondentes ficam inertes (o dialog os
+   // marca "Ignorado se preset != Custom"). Ponto ÚNICO de resolução — o
+   // resto do OnInit consome eff* (nunca os Inp* de brick/SL/piso).
+   double effBrickSize     = InpBrickSize;
+   double effSlBricks      = InpSlBricks;
+   int    effMinSlBricks   = InpMinSlBricks;
+   double effMinSlFloorPts = InpMinSlFloorPts;
+   string presetName       = "custom";
+   if(InpInstrumentPreset == CR_PRESET_XAU)
+   {
+      effBrickSize = 3.0;    effSlBricks = 10.0; effMinSlBricks = 1; effMinSlFloorPts = 0.0;
+      presetName = "XAU";
+   }
+   else if(InpInstrumentPreset == CR_PRESET_EURUSD)
+   {
+      effBrickSize = 0.0010; effSlBricks = 10.0; effMinSlBricks = 1; effMinSlFloorPts = 0.0;
+      presetName = "EURUSD";
+   }
+
    g_logger.Info("ColorReversal", "starting",
-      StringFormat("\"magic\":%I64d,\"S\":%.4f,\"slBricks\":%.2f,\"lotMode\":\"%s\","
+      StringFormat("\"preset\":\"%s\",\"magic\":%I64d,\"S\":%.5f,\"slBricks\":%.2f,\"lotMode\":\"%s\","
                    "\"fixedLots\":%.4f,\"riskPct\":%.4f,"
                    "\"maxLotsPerTrade\":%.4f,\"maxOpenPos\":%d,\"maxTotalLots\":%.4f,"
                    "\"maxDailyLossPct\":%.4f,\"maxDrawdownPct\":%.4f",
-                   InpMagicNumber, InpBrickSize, InpSlBricks,
+                   presetName, InpMagicNumber, effBrickSize, effSlBricks,
                    (InpLotMode == CR_LOT_FIXED ? "fixed" : "percent"),
                    InpFixedLots, InpRiskPct,
                    InpMaxLotsPerTrade, InpMaxOpenPositions, InpMaxTotalLots,
@@ -485,7 +512,7 @@ int OnInit()
    g_iClock    = g_feedClock;
 
    //--- 3. Brick sizer (Fixed somente nesta versão) ---------------+
-   g_brickSizer = new CMksFixedBrickSizer(InpBrickSize);
+   g_brickSizer = new CMksFixedBrickSizer(effBrickSize);
    MksError err;
    if(!g_brickSizer.Validate(err))
    {
@@ -518,7 +545,7 @@ int OnInit()
    }
    MksRenkoGeometry geom = MksGeometryClassic();
    if(!g_writer.WriteHeader(g_broker, g_account, g_symbol, g_digits,
-                            geom, InpBrickSize, err))
+                            geom, effBrickSize, err))
    {
       g_logger.Error("ColorReversal", "writer.WriteHeader failed",
          StringFormat("\"err\":\"%s\"", MksJsonEscape(err.ToString())));
@@ -575,7 +602,7 @@ int OnInit()
    }
    else
    {
-      g_csName = BuildCustomSymbolName(g_symbol, InpBrickSize);
+      g_csName = BuildCustomSymbolName(g_symbol, effBrickSize);
       if(!EnsureCustomSymbolReady(g_csName, g_iSymbol, err))
       {
          g_logger.Error("ColorReversal", "EnsureCustomSymbolReady failed",
@@ -634,7 +661,7 @@ int OnInit()
       g_csSink = new CMksCustomSymbolSink();
       g_csSink.csName       = g_csName;
       g_csSink.nextBarTime  = g_nextBarTime;
-      g_csSink.brickSizePts = InpBrickSize;
+      g_csSink.brickSizePts = effBrickSize;
       g_csSink.showWicks    = InpShowWicksInCS;
       g_multiSink.Add(g_csSink);
    }
@@ -645,7 +672,7 @@ int OnInit()
       if(g_auditSink.Open(g_auditPath))
       {
          g_auditSink.WriteHeader(g_symbol, g_broker, g_account, g_digits,
-                                 InpBrickSize, "classic");
+                                 effBrickSize, "classic");
          g_multiSink.Add(g_auditSink);
          g_logger.Info("ColorReversal", "audit sink enabled",
             StringFormat("\"path\":\"%s\"", MksJsonEscape(g_auditPath)));
@@ -689,30 +716,34 @@ int OnInit()
    int    stopsLevelPts = g_iSymbol.StopsLevel();
    double brickSizePts  = (g_iSymbol.Point() > 0.0)
                           ? (g_brickSizer.SizePoints() / g_iSymbol.Point()) : 0.0;
-   double configFloor   = MathMax(InpMinSlFloorPts, InpMinSlBricks * brickSizePts);
+   double configFloor   = MathMax(effMinSlFloorPts, effMinSlBricks * brickSizePts);
 
    // ADR-032: SL em BRICKS → pontos, pelo Point() do símbolo. A distância
-   // final em preço = slPoints·Point() = InpSlBricks·brickSize (USD), então
+   // final em preço = slPoints·Point() = effSlBricks·brickSize (USD), então
    // o SL é o MESMO número de bricks em digits=2 ou digits=3 (o Point() se
-   // cancela). É a mesma conversão do DecisionReplayer (paridade E2).
-   double slPoints = InpSlBricks * brickSizePts;
+   // cancela). É a mesma conversão do DecisionReplayer (paridade E2). O
+   // effSlBricks vem do preset (E6.3) ou do input Básico (Custom).
+   double slPoints = effSlBricks * brickSizePts;
 
-   if(InpMinSlBricks < 1)
+   if(effMinSlBricks < 1)
    {
-      Alert("MKS ColorReversal: InpMinSlBricks deve ser >= 1 (piso de SL fail-closed).");
-      g_logger.Error("ColorReversal", "InpMinSlBricks < 1",
-         StringFormat("\"minSlBricks\":%d", InpMinSlBricks));
+      Alert("MKS ColorReversal: piso de SL em bricks deve ser >= 1 (fail-closed). "
+            "Ajuste InpMinSlBricks (ou use um preset) e reanexe.");
+      g_logger.Error("ColorReversal", "effMinSlBricks < 1",
+         StringFormat("\"minSlBricks\":%d,\"preset\":\"%s\"", effMinSlBricks, presetName));
       Cleanup();
       return INIT_PARAMETERS_INCORRECT;
    }
    if(configFloor < (double)stopsLevelPts)
    {
       Alert(StringFormat(
-         "MKS ColorReversal: piso de SL configurado (%.0f pts) abaixo do stops level "
-         "do broker (%d pts). Suba InpMinSlBricks ou InpMinSlFloorPts e reanexe.",
-         configFloor, stopsLevelPts));
+         "MKS ColorReversal: piso de SL efetivo (%.0f pts, preset=%s) abaixo do stops "
+         "level do broker (%d pts). Suba o piso (InpMinSlBricks/InpMinSlFloorPts em "
+         "Custom, ou ajuste o preset) e reanexe.",
+         configFloor, presetName, stopsLevelPts));
       g_logger.Error("ColorReversal", "piso de SL abaixo do stops level do broker",
-         StringFormat("\"configFloor\":%.1f,\"stopsLevel\":%d", configFloor, stopsLevelPts));
+         StringFormat("\"configFloor\":%.1f,\"stopsLevel\":%d,\"preset\":\"%s\"",
+                      configFloor, stopsLevelPts, presetName));
       Cleanup();
       return INIT_PARAMETERS_INCORRECT;
    }
@@ -725,14 +756,15 @@ int OnInit()
       // (bate com InpMinSlBricks quando o belt=0, e reflete o belt quando ele
       // é o gargalo — o hint continua correto nos dois casos).
       double reqBricks = (brickSizePts > 0.0) ? (configFloor / brickSizePts)
-                                              : (double)InpMinSlBricks;
+                                              : (double)effMinSlBricks;
       Alert(StringFormat(
-         "MKS ColorReversal: InpSlBricks=%.2f (=%.0f pts) abaixo do piso mínimo "
-         "(%.0f pts = %.2f brick(s)). Suba InpSlBricks para >= %.2f e reanexe.",
-         InpSlBricks, slPoints, configFloor, reqBricks, reqBricks));
-      g_logger.Error("ColorReversal", "InpSlBricks abaixo do piso de SL",
-         StringFormat("\"slBricks\":%.2f,\"slPoints\":%.1f,\"configFloor\":%.1f",
-                      InpSlBricks, slPoints, configFloor));
+         "MKS ColorReversal: SL=%.2f brick(s) (=%.0f pts) abaixo do piso mínimo "
+         "(%.0f pts = %.2f brick(s)). Suba InpSlBricks (ou use um preset) para "
+         ">= %.2f e reanexe.",
+         effSlBricks, slPoints, configFloor, reqBricks, reqBricks));
+      g_logger.Error("ColorReversal", "SL em bricks abaixo do piso de SL",
+         StringFormat("\"slBricks\":%.2f,\"slPoints\":%.1f,\"configFloor\":%.1f,\"preset\":\"%s\"",
+                      effSlBricks, slPoints, configFloor, presetName));
       Cleanup();
       return INIT_PARAMETERS_INCORRECT;
    }
@@ -741,7 +773,7 @@ int OnInit()
    rtp.requireSl       = InpRequireSl;
    rtp.requireTp       = InpRequireTp;
    rtp.maxLotsPerTrade = InpMaxLotsPerTrade;
-   rtp.minSlPoints     = InpMinSlFloorPts; // belt absoluto; piso de brick via SetSlFloorSource
+   rtp.minSlPoints     = effMinSlFloorPts; // belt absoluto; piso de brick via SetSlFloorSource
 
    CMksRiskStrategyParams rsp;
    rsp.maxOpenPositions = InpMaxOpenPositions;
@@ -756,7 +788,7 @@ int OnInit()
    g_risk = new CMksRiskManager(rtp, rsp, rap, g_book, g_snapshot, NULL, g_logger);
    // E0.3: injeta a fonte do piso de SL em bricks ANTES de Validate (que
    // checa o wiring fail-closed). Piso = max(belt, InpMinSlBricks·brickSize).
-   g_risk.SetSlFloorSource(g_brickSizer, g_iSymbol, InpMinSlBricks);
+   g_risk.SetSlFloorSource(g_brickSizer, g_iSymbol, effMinSlBricks);
    if(!g_risk.Validate(err))
    {
       g_logger.Error("ColorReversal", "risk manager invalid",
@@ -901,7 +933,7 @@ int OnInit()
 
    //--- 13. Builder -----------------------------------------------+
    g_builder = new CMksRenkoBuilder(geom, g_brickSizer, g_multiSink,
-                                     InpInvalidTickLimit, InpThresholdLimit);
+                                     kInvalidTickLimit, kThresholdLimit);
 
    //--- 14. Anchor inicial via SymbolInfoTick + EventSetTimer -----+
    MqlTick anchor;
@@ -1035,7 +1067,7 @@ void IngestOne(const MksTick &tick)
    {
       if(g_auditSink != NULL)
          g_auditSink.RecordKExceeded(tick.seq, (tick.bid + tick.ask) / 2.0,
-                                      InpThresholdLimit + 1);
+                                      kThresholdLimit + 1);
       g_logger.Warn("ColorReversal", "threshold K exceeded",
          StringFormat("\"err\":\"%s\"", MksJsonEscape(err.ToString())));
    }
@@ -1050,7 +1082,7 @@ void IngestOne(const MksTick &tick)
    {
       g_streamHalted = true;
       if(g_auditSink != NULL)
-         g_auditSink.RecordStreamHalted(tick.seq, InpInvalidTickLimit);
+         g_auditSink.RecordStreamHalted(tick.seq, kInvalidTickLimit);
       g_logger.Error("ColorReversal", "tick stream corrupt — halted",
          StringFormat("\"err\":\"%s\"", MksJsonEscape(err.ToString())));
 
