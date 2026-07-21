@@ -56,6 +56,15 @@ struct CMksStressLabReport
    int    maxConsecutiveWins;
    int    maxConsecutiveLosses;
 
+   // Resultado em MOEDA — eixo 3 (E4.1/ADR-034). hasCurrency=false quando o
+   // journal não teve SetMoneyConversion (os campos abaixo ficam 0).
+   bool   hasCurrency;
+   double netPnLCurrency;       // líquido = bruto − comissão − swap
+   double grossProfitCurrency;
+   double grossLossCurrency;
+   double totalCommission;
+   double totalSwap;
+
    CMksStressLabReport()
    {
       levelName = ""; rngSeed = 0;
@@ -70,6 +79,9 @@ struct CMksStressLabReport
       avgWinPoints = 0.0; avgLossPoints = 0.0;
       largestWinPoints = 0.0; largestLossPoints = 0.0;
       maxConsecutiveWins = 0; maxConsecutiveLosses = 0;
+      hasCurrency = false;
+      netPnLCurrency = 0.0; grossProfitCurrency = 0.0; grossLossCurrency = 0.0;
+      totalCommission = 0.0; totalSwap = 0.0;
    }
 
    // Captura snapshot de uma corrida. Caller invoca depois de
@@ -103,6 +115,16 @@ struct CMksStressLabReport
       largestLossPoints    = j.LargestLossPoints();
       maxConsecutiveWins   = j.MaxConsecutiveWins();
       maxConsecutiveLosses = j.MaxConsecutiveLosses();
+
+      // Eixo 3 (E4.1): resultado em moeda + custo. Só válido se o journal
+      // tem conversão de moeda; senão os campos ficam 0 e hasCurrency=false.
+      // TotalCommission é dado bruto e é capturado sempre (é só uma soma).
+      hasCurrency         = j.HasMoneyConversion();
+      totalCommission     = j.TotalCommission();
+      totalSwap           = j.TotalSwap();
+      grossProfitCurrency = j.GrossProfitCurrency();
+      grossLossCurrency   = j.GrossLossCurrency();
+      netPnLCurrency      = j.NetPnLCurrency();
    }
 
    // Linha resumo em formato JSON-line (alinhado a ADR-007).
@@ -112,12 +134,14 @@ struct CMksStressLabReport
          "{\"level\":\"%s\",\"seed\":%u,"
          "\"trades\":%d,\"wins\":%d,\"losses\":%d,"
          "\"winRate\":%.4f,\"profitFactor\":%.4f,\"netPnLPts\":%.2f,"
-         "\"sendRej\":%I64d,\"slipTotPts\":%.2f,\"slipMaxPts\":%.2f}",
+         "\"sendRej\":%I64d,\"slipTotPts\":%.2f,\"slipMaxPts\":%.2f,"
+         "\"hasCcy\":%s,\"netPnLCcy\":%.2f,\"commission\":%.2f}",
          levelName, rngSeed,
          tradesClosed, wins, losses,
          winRate, profitFactor, netPnLPoints,
          (sendsRejectedPre + sendsRejectedRequote),
-         slippageTotalPoints, slippageMaxPoints);
+         slippageTotalPoints, slippageMaxPoints,
+         (hasCurrency ? "true" : "false"), netPnLCurrency, totalCommission);
    }
 };
 
@@ -137,9 +161,9 @@ void MksStressLabPrintComparison(const CMksStressLabReport &reports[])
    Print("=========================================================================================");
    Print("StressLab — Comparativo Multi-Nivel");
    Print("=========================================================================================");
-   Print(StringFormat("%-12s %6s %6s %6s %8s %8s %10s %8s %8s",
+   Print(StringFormat("%-12s %6s %6s %6s %8s %8s %10s %8s %8s %11s %10s",
                       "Level", "Trades", "Wins", "Loss", "WinRate", "PF", "NetPnLpts",
-                      "Rej", "SlipPts"));
+                      "Rej", "SlipPts", "NetPnLccy", "Comm"));
    Print("-----------------------------------------------------------------------------------------");
 
    double prevNet = 0.0; bool hasPrev = false;
@@ -152,7 +176,7 @@ void MksStressLabPrintComparison(const CMksStressLabReport &reports[])
       string marker = " ";
       if(hasPrev && reports[i].netPnLPoints < prevNet) marker = "v";
 
-      Print(StringFormat("%s%-11s %6d %6d %6d %8.4f %s %10.2f %8I64d %8.2f",
+      Print(StringFormat("%s%-11s %6d %6d %6d %8.4f %s %10.2f %8I64d %8.2f %11.2f %10.2f",
                          marker,
                          reports[i].levelName,
                          reports[i].tradesClosed,
@@ -162,7 +186,9 @@ void MksStressLabPrintComparison(const CMksStressLabReport &reports[])
                          pf,
                          reports[i].netPnLPoints,
                          totalRej,
-                         reports[i].slippageTotalPoints));
+                         reports[i].slippageTotalPoints,
+                         reports[i].netPnLCurrency,
+                         reports[i].totalCommission));
       prevNet = reports[i].netPnLPoints;
       hasPrev = true;
    }

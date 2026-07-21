@@ -221,6 +221,82 @@ void Test_TJ_Reset()
    MKS_ASSERT_EQ_INT(0, j.ClosedCount(), "closed zerado");
 }
 
+//==================================================================
+// Eixo 3 — comissão e resultado em MOEDA (E4.1/E4.2/ADR-034)
+// tickSize=0.01, tickValue=1.0 (XAU-like: 0.01 de preço = 1 USD/lote).
+//==================================================================
+
+void Test_TJ_CommissionAndNetCurrency()
+{
+   CMksTradeJournal j(POINT);
+   j.SetMoneyConversion(0.01, 1.0);
+   MKS_ASSERT_TRUE(j.HasMoneyConversion(), "conversão de moeda ativa");
+
+   j.RecordOpen(1, MKS_ORDER_BUY, 0.1, 2000.0, 0, 2.0);  // commissionOpen = 2
+   j.RecordClose(1, 2003.0, 1, 3.0);                     // commissionClose = 3
+
+   MksClosedTrade t = j.ClosedAt(0);
+   MKS_ASSERT_NEAR_DOUBLE(300.0, t.pnlPoints,  TJ_TOL, "pnl 300 pts");
+   MKS_ASSERT_NEAR_DOUBLE(5.0,   t.commission, TJ_TOL, "commission = open+close = 5");
+   // PnlCurrency bruto = (3.0/0.01)*1.0*0.1 = 30
+   MKS_ASSERT_NEAR_DOUBLE(30.0,  j.GrossProfitCurrency(), TJ_TOL, "bruto em moeda = 30");
+   MKS_ASSERT_NEAR_DOUBLE(5.0,   j.TotalCommission(),     TJ_TOL, "comissão total 5");
+   MKS_ASSERT_NEAR_DOUBLE(25.0,  j.NetPnLCurrency(),      TJ_TOL, "líquido = 30 - 5 = 25");
+}
+
+void Test_TJ_CommissionReducesNetCurrency()
+{
+   // [M1]/[M8]: dois journals idênticos exceto a comissão → net em moeda
+   // DIFERE. Antes do E4 seriam iguais (comissão descartada) — o sintoma
+   // exato do eixo 3 do V5.
+   CMksTradeJournal jFree(POINT); jFree.SetMoneyConversion(0.01, 1.0);
+   CMksTradeJournal jComm(POINT); jComm.SetMoneyConversion(0.01, 1.0);
+
+   jFree.RecordOpen(1, MKS_ORDER_BUY, 0.1, 2000.0, 0, 0.0);
+   jFree.RecordClose(1, 2003.0, 1, 0.0);
+   jComm.RecordOpen(1, MKS_ORDER_BUY, 0.1, 2000.0, 0, 0.0);
+   jComm.RecordClose(1, 2003.0, 1, 7.0);                  // única diferença: comissão 7
+
+   MKS_ASSERT_NEAR_DOUBLE(30.0, jFree.NetPnLCurrency(), TJ_TOL, "sem comissão: líquido 30");
+   MKS_ASSERT_NEAR_DOUBLE(23.0, jComm.NetPnLCurrency(), TJ_TOL, "comissão 7: líquido 23");
+   MKS_ASSERT_TRUE(jFree.NetPnLCurrency() > jComm.NetPnLCurrency(),
+                   "comissão reduz estritamente o líquido (eixo 3 fechado)");
+}
+
+void Test_TJ_CurrencyMixedWinLoss()
+{
+   // Win + loss em moeda + comissão nos dois. Cobre GrossProfit/LossCurrency.
+   CMksTradeJournal j(POINT);
+   j.SetMoneyConversion(0.01, 1.0);
+   j.RecordOpen(1, MKS_ORDER_BUY, 0.1, 2000.0, 0, 1.0);
+   j.RecordClose(1, 2003.0, 1, 1.0);                      // +30 moeda, comm 2
+   j.RecordOpen(2, MKS_ORDER_BUY, 0.1, 2000.0, 2, 1.0);
+   j.RecordClose(2, 1998.0, 3, 1.0);                      // -20 moeda, comm 2
+
+   MKS_ASSERT_NEAR_DOUBLE(30.0, j.GrossProfitCurrency(), TJ_TOL, "gross+ moeda 30");
+   MKS_ASSERT_NEAR_DOUBLE(20.0, j.GrossLossCurrency(),   TJ_TOL, "gross- moeda 20");
+   MKS_ASSERT_NEAR_DOUBLE(4.0,  j.TotalCommission(),     TJ_TOL, "comissão total 4");
+   // líquido = (30 - 20) - 4 = 6
+   MKS_ASSERT_NEAR_DOUBLE(6.0,  j.NetPnLCurrency(),      TJ_TOL, "líquido = grossnet 10 - comm 4 = 6");
+}
+
+void Test_TJ_NoMoneyConversionZeroCurrency()
+{
+   // Sem SetMoneyConversion: agregados em moeda ficam 0 (mas comissão, que é
+   // dado bruto já em moeda, ainda é somada). RecordOpen/Close com comissão
+   // continuam compilando (params default) — não quebra callers antigos.
+   CMksTradeJournal j(POINT);
+   j.RecordOpen(1, MKS_ORDER_BUY, 0.1, 2000.0, 0, 2.0);
+   j.RecordClose(1, 2003.0, 1, 3.0);
+
+   MKS_ASSERT_FALSE(j.HasMoneyConversion(), "conversão de moeda desligada");
+   MKS_ASSERT_NEAR_DOUBLE(0.0, j.GrossProfitCurrency(), TJ_TOL, "gross moeda 0 sem conversão");
+   MKS_ASSERT_NEAR_DOUBLE(0.0, j.NetPnLCurrency(),      TJ_TOL, "líquido 0 sem conversão");
+   MKS_ASSERT_NEAR_DOUBLE(5.0, j.TotalCommission(),     TJ_TOL, "comissão somada = 5");
+   // pnlPoints intacto (não depende da conversão de moeda)
+   MKS_ASSERT_NEAR_DOUBLE(300.0, j.ClosedAt(0).pnlPoints, TJ_TOL, "pnlPoints 300 preservado");
+}
+
 //+------------------------------------------------------------------+
 void OnStart()
 {
@@ -249,6 +325,12 @@ void OnStart()
    MKS_RUN(Test_TJ_MaxConsecutiveLosses);
 
    MKS_RUN(Test_TJ_Reset);
+
+   // Eixo 3 — comissão e moeda (E4.1/E4.2/ADR-034)
+   MKS_RUN(Test_TJ_CommissionAndNetCurrency);
+   MKS_RUN(Test_TJ_CommissionReducesNetCurrency);
+   MKS_RUN(Test_TJ_CurrencyMixedWinLoss);
+   MKS_RUN(Test_TJ_NoMoneyConversionZeroCurrency);
 
    g_mksTestRunner.Summary();
 }

@@ -36,6 +36,8 @@ struct MksClosedTrade
    long   openTimeMsc;
    long   closeTimeMsc;
    double pnlPoints;
+   double commission;   // custo total do trade (abertura + fechamento), em moeda — E4.1/ADR-034
+   double swap;         // swap acumulado, em moeda (0 em v1 — swap OFF, ADR-030)
 };
 
 // Posicao em aberto. Quando RecordClose for chamado, vira MksClosedTrade.
@@ -46,12 +48,18 @@ struct MksOpenPosition
    double lots;
    double openPrice;
    long   openTimeMsc;
+   double commissionOpen; // comissão paga na abertura, em moeda — E4.1
 };
 
 class CMksTradeJournal
 {
 private:
    double m_pointSize;  // tamanho do point do simbolo — usado p/ pnlPoints
+   // Conversao pontos->moeda (E4.1/ADR-034). 0 = nao configurada: os
+   // agregados em MOEDA (currency) devolvem 0 e HasMoneyConversion()=false.
+   // Fórmula idêntica à do CMksSimAccount: (priceDiff/tickSize)·tickValue·lots.
+   double m_tickSize;
+   double m_tickValue;
    MksOpenPosition m_open[];
    MksClosedTrade  m_closed[];
 
@@ -78,14 +86,36 @@ private:
       return (diff * sign) / m_pointSize;
    }
 
+   // PnL em MOEDA de um trade (bruto, antes de comissão/swap). Função pura
+   // de (open, close, side, lots, tickSize, tickValue). 0 se a conversão de
+   // moeda não foi configurada. E4.1/ADR-034.
+   double PnlCurrency(const MksClosedTrade &t) const
+   {
+      if(m_tickSize <= 0.0 || m_tickValue <= 0.0) return 0.0;
+      double diff = t.closePrice - t.openPrice;
+      double sign = (t.side == MKS_ORDER_BUY) ? 1.0 : -1.0;
+      return ((diff * sign) / m_tickSize) * m_tickValue * t.lots;
+   }
+
 public:
    CMksTradeJournal(double pointSize = 0.01)
    {
       m_pointSize = (pointSize > 0.0) ? pointSize : 0.01;
+      m_tickSize  = 0.0;  // conversão de moeda desligada até SetMoneyConversion
+      m_tickValue = 0.0;
    }
 
    void SetPointSize(double v) { if(v > 0.0) m_pointSize = v; }
    double PointSize() const { return m_pointSize; }
+
+   // Habilita os agregados em MOEDA. tickSize/tickValue do símbolo (mesma
+   // convenção do sizer/conta). Ambos > 0 → HasMoneyConversion()=true.
+   void SetMoneyConversion(double tickSize, double tickValue)
+   {
+      m_tickSize  = (tickSize  > 0.0) ? tickSize  : 0.0;
+      m_tickValue = (tickValue > 0.0) ? tickValue : 0.0;
+   }
+   bool HasMoneyConversion() const { return m_tickSize > 0.0 && m_tickValue > 0.0; }
 
    //--- Coleta ------------------------------------------------------+
 
@@ -93,15 +123,17 @@ public:
    // bem-sucedido. Se positionId ja estiver em aberto, sobrescreve
    // (defensive — caller bug, mas evita estado corrompido).
    void RecordOpen(ulong positionId, ENUM_MKS_ORDER_SIDE side,
-                   double lots, double openPrice, long openTimeMsc)
+                   double lots, double openPrice, long openTimeMsc,
+                   double commissionOpen = 0.0)
    {
       int idx = FindOpenIndex(positionId);
       MksOpenPosition pos;
-      pos.positionId  = positionId;
-      pos.side        = side;
-      pos.lots        = lots;
-      pos.openPrice   = openPrice;
-      pos.openTimeMsc = openTimeMsc;
+      pos.positionId     = positionId;
+      pos.side           = side;
+      pos.lots           = lots;
+      pos.openPrice      = openPrice;
+      pos.openTimeMsc    = openTimeMsc;
+      pos.commissionOpen = commissionOpen;
       if(idx >= 0)
       {
          m_open[idx] = pos;
@@ -116,7 +148,8 @@ public:
 
    // Registra fechamento. Move da lista de abertas para fechadas,
    // computa pnlPoints. Retorna false se positionId nao estava aberta.
-   bool RecordClose(ulong positionId, double closePrice, long closeTimeMsc)
+   bool RecordClose(ulong positionId, double closePrice, long closeTimeMsc,
+                    double commissionClose = 0.0)
    {
       int idx = FindOpenIndex(positionId);
       if(idx < 0) return false;
@@ -131,6 +164,8 @@ public:
       t.openTimeMsc   = pos.openTimeMsc;
       t.closeTimeMsc  = closeTimeMsc;
       t.pnlPoints     = ComputePnlPoints(t);
+      t.commission    = pos.commissionOpen + commissionClose; // custo total do trade
+      t.swap          = 0.0;                                  // swap OFF em v1 (ADR-030)
 
       int nc = ArraySize(m_closed);
       ArrayResize(m_closed, nc + 1);
@@ -207,6 +242,55 @@ public:
    }
 
    double NetPnLPoints() const { return GrossProfitPoints() - GrossLossPoints(); }
+
+   //--- Agregados em MOEDA (E4.1/ADR-034) ---------------------------+
+   // Fecham o eixo 3 do V5-POSTMORTEM: o custo (comissão) deixa de ser
+   // computado-e-descartado e passa a reduzir o resultado. Classificação
+   // win/loss segue por pnlPoints (mesmo sinal que PnlCurrency). Sem
+   // SetMoneyConversion, os *Currency devolvem 0 (HasMoneyConversion()=false).
+
+   // Soma do PnL em moeda dos trades vencedores (bruto, sem custo).
+   double GrossProfitCurrency() const
+   {
+      double s = 0.0; int n = ArraySize(m_closed);
+      for(int i = 0; i < n; i++)
+         if(m_closed[i].pnlPoints > 0.0) s += PnlCurrency(m_closed[i]);
+      return s;
+   }
+
+   // Soma absoluta (positiva) do PnL em moeda dos trades perdedores.
+   double GrossLossCurrency() const
+   {
+      double s = 0.0; int n = ArraySize(m_closed);
+      for(int i = 0; i < n; i++)
+         if(m_closed[i].pnlPoints < 0.0) s -= PnlCurrency(m_closed[i]);
+      return s;
+   }
+
+   // Comissão total acumulada (abertura + fechamento de todos os trades).
+   double TotalCommission() const
+   {
+      double s = 0.0; int n = ArraySize(m_closed);
+      for(int i = 0; i < n; i++) s += m_closed[i].commission;
+      return s;
+   }
+
+   // Swap total acumulado (0 em v1 — swap OFF, ADR-030).
+   double TotalSwap() const
+   {
+      double s = 0.0; int n = ArraySize(m_closed);
+      for(int i = 0; i < n; i++) s += m_closed[i].swap;
+      return s;
+   }
+
+   // Resultado LÍQUIDO em moeda = bruto − comissão − swap. É a métrica que
+   // "diz pra ir pra live" sentindo o custo. 0 sem conversão de moeda.
+   double NetPnLCurrency() const
+   {
+      if(!HasMoneyConversion()) return 0.0;
+      return (GrossProfitCurrency() - GrossLossCurrency())
+             - TotalCommission() - TotalSwap();
+   }
 
    double AvgWinPoints() const
    {

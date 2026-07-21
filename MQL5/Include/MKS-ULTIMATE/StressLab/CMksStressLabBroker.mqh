@@ -101,6 +101,7 @@ private:
    CMksRandom           m_rng;
    CMksStressMetrics    m_metrics;
    MksSimAutoCloseEvent m_autoCloseEvents[]; // auto-closes ja estressados (drenar via PollAutoCloses)
+   bool                 m_spreadStressInert; // spreadMultiplier>1 mas baselineSpreadPoints==0 → no-op (E4.3)
 
    double SampleSlippage()
    {
@@ -172,6 +173,18 @@ public:
       m_symbol     = symbol;
       m_params     = params;
       ArrayResize(m_autoCloseEvents, 0);
+
+      // E4.3/ADR-034: stress de spread inerte — multiplicador configurado mas
+      // baselineSpreadPoints==0 → o excesso de half-spread é sempre 0 (no-op
+      // silencioso, ver SampleSlipPoints). Simétrico ao argumento da ADR-030
+      // contra o requote inerte: gritar em vez de fingir que estressou. Warn
+      // uma vez na construção; SpreadStressInert() expõe para asserção.
+      m_spreadStressInert = (m_params.spreadMultiplier > 1.0
+                             && m_params.baselineSpreadPoints <= 0.0);
+      if(m_spreadStressInert)
+         Print("[StressLab] WARN: spreadMultiplier=", m_params.spreadMultiplier,
+               " > 1 mas baselineSpreadPoints=0 — stress de spread INERTE (no-op). ",
+               "Informe baselineSpreadPoints (ADR-027 7.2) para o multiplicador ter efeito.");
    }
 
    //--- IBroker overrides -------------------------------------------+
@@ -318,6 +331,11 @@ public:
    //--- Inspecao -----------------------------------------------------+
 
    CMksStressMetrics Metrics() const { return m_metrics; }
+
+   // E4.3: true se o stress de spread foi configurado mas é inerte
+   // (spreadMultiplier>1 && baselineSpreadPoints==0). Warn emitido na
+   // construção; getter para asserção em teste.
+   bool SpreadStressInert() const { return m_spreadStressInert; }
 
    void ResetMetrics()
    {
