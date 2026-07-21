@@ -16,8 +16,9 @@ Continuação direta de `CHECKPOINT-2026-07-21-hardening-e2-e4.md` (PC de trabal
 1. `git pull` em `C:\dev\MKS-ULTIMATE`. Tudo em `origin/main` (últimos commits desta sessão: `8efd993`→`03c4964` + este checkpoint).
 2. Se o terminal MT5 não mostrar a pasta MKS-ULTIMATE, recriar as 5 junctions (`docs/CHEATSHEET.md §9.5`). Antes de desinstalar qualquer MT5, ver §9.6.
 3. `tools/compile-all.ps1` — esperado **48 arquivos, 0/0**.
-4. Ler este checkpoint + `docs/ROADMAP-CORE-HARDENING.md` (E5 ✅, E6 quase) + `CHANGELOG.md [Não lançado]` + as ADRs **035/036/037**.
+4. Ler este checkpoint + **`docs/ROADMAP-CHECKLIST.md`** (inventário mensurável: o que está pronto vs o que falta, com critério de pronto — melhor ponto de entrada) + `docs/ROADMAP-CORE-HARDENING.md` (E5 ✅, E6 quase) + `CHANGELOG.md [Não lançado]` + as ADRs **035/036/037**.
 5. **Pendência de verificação MT5 (única em aberto):** o smoke test do **E6.1/E6.3** — ver §5.
+6. **Próximo trabalho JÁ DECIDIDO (ver §4):** o **runner de estresse liga/desliga + calibração ao broker real**. Começar por aí.
 
 ## 1. O que foi feito (4 commits, tudo em `origin/main`)
 
@@ -43,14 +44,16 @@ O E5 era a peça que respondia à ausência que quebrou o V5 (gestão reativa). 
 - **E7** ⬜ (CS/meia-noite — 4 fixes aplicados; sobrevivência à virada de dia pende de DADO de captura cruzando a meia-noite. ADR-031 não escrita).
 - **E8** ⬜ (fundação de indicadores — depende do E7).
 
-## 4. Próximo passo: debate de rumo (decisão do dono)
+## 4. Próximo passo: runner de estresse liga/desliga + calibração (DECIDIDO)
 
-O gate abriu a Fase 10, mas o `ROADMAP.md` **não pré-define estratégias** ("conforme oportunidade e estudo"). Então o próximo passo é uma **decisão de rumo** entre:
-- **Fase 10** — primeira estratégia real (exige o dono decidir/descrever a estratégia: regra, instrumento, brick).
-- **Fechar o E6** (o sub-item pequeno + o smoke test) para "produto operável" antes de operar de verdade.
-- **E7/E8** — CS robusto + indicadores (E7 pende de dado de captura cruzando meia-noite).
+O debate de rumo aconteceu ao fim desta sessão. **Desfecho (decisões do dono):**
+- **Edge:** SEM hipótese concreta ainda ("só possibilidades"). → **NÃO** construir estratégia agora (seria overfitting). Quando houver tese, dissecar no modo `##Estrategia##`. A Fase 10 fica em espera **do dono**, não do código.
+- **StressLab liga/desliga:** SIM, é o próximo trabalho. O dono quer poder rodar uma estratégia **sem** o StressLab, depois **com**, e **comparar** — como um liga/desliga fácil de operar. Na prática é o **slice-2 da Fase 9** (runner que pluga `CMksColorReversalStrategy` sobre `CMksSimulatedBroker` + `CMksStressLabBroker` por níveis None→Nightmare e agrega via `CMksStressLabReport`). **+ Calibrar** os presets ao broker real (medir spread/slippage/latência da Exness XAU) — é o que dá sentido a "sobreviveu ao Nightmare".
+- **Dashboard (E9):** adiado — só depois de haver EA/indicador substancial.
 
-O dono pediu para debater estado/ideias/roadmap ao fim desta sessão. Este checkpoint é o insumo do debate.
+**Portanto, o trabalho concreto para a próxima sessão é o runner de estresse liga/desliga (Parte 2 §B do `ROADMAP-CHECKLIST.md`), com a calibração desenhada junto.**
+
+Insumos criados nesta sessão para o debate: `docs/ROADMAP-CHECKLIST.md` (inventário mensurável) e um panorama visual para leigo (Artifact privado; não versionado no repo).
 
 ## 5. Pendências
 
