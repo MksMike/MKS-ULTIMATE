@@ -83,7 +83,7 @@
 - [x] `CMksColorReversalStrategy` (reversão de cor pura, IRenkoSink, auto-detach, adoção de órfã, flatten-on-halt, **sem exposição dupla no flip** E5.3/ADR-036) — *medida: `Test_CMksColorReversalStrategy` 22 tests, 0 failed (MT5).*
 - [x] `ColorReversal.mq5` composition root completo (builder + sinks + risco 3-camadas + broker gateado + visualização) — *medida: validado em tester + demo live (11 ordens reais Exness).*
 - [x] Visualização de trades (ADR-028: `ITradeVisualizer` + `CMksChartPainter`), timeline híbrida (ADR-023) — *medida: paridade viz on/off provada em teste.*
-- [~] **Slice-2: runner de stress liga/desliga** (estratégia sobre `SimulatedBroker` + `StressLabBroker` por níveis, comparando com/sem) — *critério: um relatório comparativo None→Nightmare de uma corrida.* → **code-complete (ADR-038, 2026-07-21): decorator + runner + `StressReplayer.mq5`, 51/0/0. Falta o smoke MT5.** Ver Parte 2 §B.
+- [x] **Slice-2: runner de stress liga/desliga** (estratégia sobre `SimulatedBroker` + `StressLabBroker` por níveis, comparando com/sem) — *critério: um relatório comparativo None→Nightmare de uma corrida.* → **FEITO + MT5-verificado (ADR-038, 2026-07-21): smoke sobre o golden gerou a tabela comparativa. Core sobreviveu aos 5 níveis sem quebrar.** Ver Parte 2 §B.
 
 ### 12. Paridade de DECISÃO — o gate central (E2)
 - [x] Runner DDR: `CMksDecisionRunner` + `CMksJournalingBroker` + `CMksDecisionJournal` + `CMksSimAccount` — *medida: `Test_CMksDecisionRunner` 36/36 (MT5).*
@@ -112,7 +112,7 @@
 - [ ] **Preset EURUSD validado** — os valores (brick 0.0010 / SL 10 bricks) são chute inicial. *Critério: validar com dado real de EURUSD.*
 
 ### B. StressLab calibrado + liga/desliga — *prioridade Agora (pedido do dono)*
-- [~] **Runner de estresse liga/desliga** — rodar a estratégia SEM o StressLab, depois COM, e comparar lado a lado. *Critério: um EA/script que produz um relatório comparativo (None→Nightmare) de uma corrida sobre `.mkstick`, com o net por nível.* → **code-complete (ADR-038, 2026-07-21): `CMksTradeJournalingBroker` + `CMksStressRunner` + `StressReplayer.mq5`, compila 51/0/0. FALTA: rodar os 2 testes no MT5 (verde) + o smoke do StressReplayer sobre um `.mkstick` com flips (tabela comparativa).**
+- [x] **Runner de estresse liga/desliga** — rodar a estratégia SEM o StressLab, depois COM, e comparar lado a lado. *Critério: um EA/script que produz um relatório comparativo (None→Nightmare) de uma corrida sobre `.mkstick`, com o net por nível.* → **FEITO + MT5-verificado (ADR-038, 2026-07-21): `CMksTradeJournalingBroker` + `CMksStressRunner` + `StressReplayer.mq5`; testes 27/27 + 17/17; smoke sobre o golden (33.546 ticks) produziu a tabela None→Nightmare (slippage degrada o net; rejeições reduzem trades). Compila 51/0/0.**
 - [ ] **Calibração ao broker real** — medir spread/slippage/latência reais da Exness (XAU) e ancorar os presets do `CMksStressParams`. *Critério: presets derivados de dado medido, documentados; "sobreviveu ao Nightmare" passa a ter significado.*
 - [ ] **Fácil de operar** — o liga/desliga como um input/botão, sem montar pipeline à mão. *Critério: operador roda a comparação com ≤ 2 passos.*
 

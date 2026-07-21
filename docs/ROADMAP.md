@@ -293,7 +293,7 @@ Este documento define **o que construir e em que ordem**. Cada fase tem entregá
 
 ## Fase 9 — Primeiro EA de validação end-to-end
 
-**Status:** Em andamento — MVP entregue e validado em 3 ambientes. Falta o slice 2 (stress runner) para declarar 100% concluída.
+**Status:** Concluída — MVP validado em 3 ambientes + slice 2 (stress runner) entregue e MT5-verificado (ADR-038, 2026-07-21). O `StressReplayer` produziu a tabela comparativa None→Nightmare sobre o golden; o core sobreviveu aos 5 níveis sem quebrar. **Nota honesta:** a estratégia ColorReversal é não-lucrativa por design (net −10661 pts no baseline) — a Fase 9 valida o CORE, não a lucratividade. A calibração dos presets do StressLab ao broker real fica como fatia futura (dívida nomeada na ADR-038).
 
 **Nota (sync auditoria 2026-05-29):** o label anterior "Não iniciada" estava desatualizado — a Fase 9 foi entregue entre 2026-05-27 e 2026-05-28. Materializado em disco: `Strategy/CMksColorReversalStrategy.mqh` (reversão de cor pura, implementa `IRenkoSink`), `Experts/MKS-ULTIMATE/ColorReversal.mq5` (composition root), `Scripts/.../Tests/Test_CMksColorReversalStrategy.mq5`, e a camada de visualização de trades (ADR-028: `ITradeVisualizer` + `CMksChartPainter`) com a ADR-023 (timeline híbrida) promovida a Aceita. Validação empírica acumulada:
 - **Testes unitários:** 46/46 assertions, 11 tests, 0 falhas.
@@ -312,7 +312,7 @@ Detalhes em `docs/CHECKPOINT-2026-05-27-night.md` e `docs/CHECKPOINT-2026-05-27-
 
 **Critério de saída:**
 - ✅ Paridade backtest/live validada por log-diff — `.log` + `.mksbk` + audit TSV no mesmo formato nos 3 ambientes
-- ⏳ EA sobrevive a stress médio sem quebrar core — **pendente** do slice 2 (stress runner = E2.1); os 3 furos do StressLab já foram fechados (ADR-030)
+- ✅ EA sobrevive a stress médio sem quebrar core — **fechado** pelo slice 2 (stress runner, ADR-038, 2026-07-21): o core rodou os 5 níveis (None→Nightmare) sobre o golden sem crash/erro; os 3 furos do StressLab já haviam sido fechados (ADR-030)
 - ✅ Zero crash, zero vazamento de handles, zero `_LastError` não tratado — confirmado em tester e demo live
 
 **Por que importa:** Primeira hora da verdade. Se paridade falhar aqui, voltamos e consertamos o core antes de ir adiante.
