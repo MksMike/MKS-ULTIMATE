@@ -2571,7 +2571,7 @@ O `ColorReversal.mq5` expunha **~31 inputs** num nível plano — o oposto da me
 ### ADR-038: Runner de estresse liga/desliga — bridge estratégia→trade journal + orquestrador multi-nível + EA de replay (slice-2 da Fase 9 / Parte B)
 
 **Data:** 2026-07-21
-**Status:** Proposta
+**Status:** Aceita (2026-07-21 — desenho validado pelo smoke verde do StressReplayer sobre o golden; fatias 1-3 MT5-verificadas)
 **Relação:** Executa o **slice-2 da Fase 9** (`ROADMAP.md` — último ⏳ do critério de saída) e a **Parte B** do `docs/ROADMAP-CHECKLIST.md` (pedido do dono). Consome o StressLab da Fase 7 (ADR-027/030) e espelha o padrão runner do `CMksDecisionRunner` (E2).
 
 **Contexto:**
