@@ -239,6 +239,13 @@ public:
          m_consecutiveInvalid++;
          if(m_consecutiveInvalid >= m_invalidLimit)
          {
+            // Latch TERMINAL por design (ADR-006 §5: "interrupção reportada,
+            // não emissão"; §6: continuar/parar/notificar é da camada de EA,
+            // não do builder). NÃO adicionar auto-recuperação aqui — o EA
+            // consulta IsStreamCorrupt() e decide re-Init. A assimetria com o
+            // run de K-excedido (que se re-ancora) é correta: K-excedido é
+            // condição normal de mercado; feed corrupto é anormal e o builder
+            // se recusa a adivinhar sobre ele.
             m_streamCorrupt = true;
             MKS_SET_ERROR(err, MKS_ERR_RENKO_TICK_STREAM_CORRUPT,
                           "L ticks inválidos consecutivos — feed corrupto",

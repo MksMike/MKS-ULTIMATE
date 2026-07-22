@@ -580,6 +580,36 @@ void Test_Risk_Acct_Validate_NegativeDrawdownFails()
    MKS_ASSERT_FALSE(risk.Validate(err), "Validate falha — drawdown<0");
 }
 
+void Test_Risk_Acct_Validate_DailyLossGe100Fails()
+{
+   CMksFakeAccount acc; CMksFakeClock clk;
+   CMksAccountSnapshot snap(GetPointer(acc), GetPointer(clk));
+   SetupSnapshot(acc, clk, 10000.0, 10000.0, snap);
+
+   CMksRiskTradeParams p;
+   CMksRiskStrategyParams sp;
+   CMksRiskAccountParams ap;
+   ap.maxDailyLossPct = 100.0;
+   CMksRiskManager risk(p, sp, ap, NULL, GetPointer(snap));
+   MksError err;
+   MKS_ASSERT_FALSE(risk.Validate(err), "Validate falha — dailyLoss>=100 (inerte)");
+}
+
+void Test_Risk_Acct_Validate_DrawdownGe100Fails()
+{
+   CMksFakeAccount acc; CMksFakeClock clk;
+   CMksAccountSnapshot snap(GetPointer(acc), GetPointer(clk));
+   SetupSnapshot(acc, clk, 10000.0, 10000.0, snap);
+
+   CMksRiskTradeParams p;
+   CMksRiskStrategyParams sp;
+   CMksRiskAccountParams ap;
+   ap.maxDrawdownPct = 150.0;
+   CMksRiskManager risk(p, sp, ap, NULL, GetPointer(snap));
+   MksError err;
+   MKS_ASSERT_FALSE(risk.Validate(err), "Validate falha — drawdown>=100 (inerte)");
+}
+
 void Test_Risk_Acct_Validate_NegativeMinEquityFails()
 {
    CMksFakeAccount acc; CMksFakeClock clk;
@@ -1203,7 +1233,9 @@ void OnStart()
    MKS_RUN(Test_Risk_Acct_Validate_OkWithSnapshot);
    MKS_RUN(Test_Risk_Acct_Validate_ActiveWithoutSnapshotFails);
    MKS_RUN(Test_Risk_Acct_Validate_NegativeDailyLossFails);
+   MKS_RUN(Test_Risk_Acct_Validate_DailyLossGe100Fails);
    MKS_RUN(Test_Risk_Acct_Validate_NegativeDrawdownFails);
+   MKS_RUN(Test_Risk_Acct_Validate_DrawdownGe100Fails);
    MKS_RUN(Test_Risk_Acct_Validate_NegativeMinEquityFails);
    MKS_RUN(Test_Risk_Acct_Validate_InactiveWithoutSnapshotOk);
    MKS_RUN(Test_Risk_Acct_DailyLoss_BelowLimit);

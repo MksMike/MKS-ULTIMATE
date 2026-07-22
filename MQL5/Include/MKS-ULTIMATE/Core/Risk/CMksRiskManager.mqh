@@ -98,6 +98,9 @@ struct CMksRiskStrategyParams
 // maxDrawdownPct:  0.0 = sem limite. Ex 10.0 = bloqueia se equity
 //                  estiver ≥ 10% abaixo do peak observado desde Init
 //                  do snapshot.
+// Faixa válida de maxDailyLossPct/maxDrawdownPct: [0,100). ≥100 é rejeitado
+// no Validate — um limite de 100% nunca protege (o broker liquida antes),
+// então passar ≥100 desligaria o disjuntor em silêncio (ver auditoria §10).
 // minEquityAbs:    0.0 = sem limite. Ex 5000.0 = circuit breaker
 //                  absoluto, bloqueia se equity < 5000 (moeda da conta).
 //                  Defesa de "tela vermelha" — fechar tudo manualmente
@@ -379,10 +382,30 @@ public:
                        StringFormat("maxDailyLossPct=%.4f", m_acctParams.maxDailyLossPct));
          return false;
       }
+      // Teto de sanidade: um limite ≥100% nunca protege (o broker liquida a
+      // conta antes de perda/rebaixamento chegar a 100%) — provável typo (ex.:
+      // 1000 pensando em basis points) que DESLIGA o disjuntor em silêncio.
+      // 0.0 = off; faixa útil é [0,100). Mesmo padrão de partialClosePct
+      // (rejeita ≥100) — validador de dinheiro precisa de piso E teto
+      // (auditoria 2026-07-22 §10, classe do bug B).
+      if(m_acctParams.maxDailyLossPct >= 100.0)
+      {
+         MKS_SET_ERROR(err, MKS_ERR_RISK_INVALID_PARAM,
+                       "maxDailyLossPct >= 100 (limite inerte — broker liquida antes)",
+                       StringFormat("maxDailyLossPct=%.4f", m_acctParams.maxDailyLossPct));
+         return false;
+      }
       if(m_acctParams.maxDrawdownPct < 0.0)
       {
          MKS_SET_ERROR(err, MKS_ERR_RISK_INVALID_PARAM,
                        "maxDrawdownPct < 0",
+                       StringFormat("maxDrawdownPct=%.4f", m_acctParams.maxDrawdownPct));
+         return false;
+      }
+      if(m_acctParams.maxDrawdownPct >= 100.0)
+      {
+         MKS_SET_ERROR(err, MKS_ERR_RISK_INVALID_PARAM,
+                       "maxDrawdownPct >= 100 (limite inerte — broker liquida antes)",
                        StringFormat("maxDrawdownPct=%.4f", m_acctParams.maxDrawdownPct));
          return false;
       }
