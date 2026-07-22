@@ -7,7 +7,15 @@
 //|                   ticks. Abre o .mksbk, carrega CopyTicksRange na
 //|                   janela em que os bricks se formaram, roda algoritmo
 //|                   classico minimo (mid-driven, threshold +/-S simetrico,
-//|                   guarda K e L), e compara campo-a-campo. ESBOCO inicial.
+//|                   guarda K e L), e compara campo-a-campo.
+//|                   FERRAMENTA MANUAL / LEGADO (E2.2, 2026-07-23): NAO esta na
+//|                   suite automatizada. A rede de regressao feed->brick agora e
+//|                   Test_RealTickGolden (Layer A: CMksRenkoBuilder real sobre
+//|                   fixture .mkstick, hermetico, compara triggerTickId/high/low
+//|                   contra golden .mksbk). Este script fica como cross-check
+//|                   INDEPENDENTE (reconstrucao textbook != builder) — util para
+//|                   abencoar um golden novo, mas NAO hermetico (usa
+//|                   CopyTicksRange, ticks do historico vivo).
 //| @depends_on     : Core/Data/CMksBrickFileReader.mqh,
 //|                   Core/Types/Brick.mqh, Core/Types/Tick.mqh,
 //|                   Core/Types/Error.mqh, Core/Types/RenkoGeometry.mqh
