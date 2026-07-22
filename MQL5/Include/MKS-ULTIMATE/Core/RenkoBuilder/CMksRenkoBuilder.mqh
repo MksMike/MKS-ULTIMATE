@@ -187,6 +187,14 @@ public:
       m_thresholdLimit = thresholdLimit;
       m_consecutiveInvalid = 0;
       m_streamCorrupt = false;
+      // Defesa (auditoria 2026-07-22): geometria inválida (po>=1 etc.) faria o
+      // builder consumir ticks sem NUNCA emitir brick nem erro (falha escondida).
+      // Se o composition root esqueceu de validar, recusamos ALTO via
+      // m_streamCorrupt (IngestTick retorna false com STREAM_CORRUPT). Geometria
+      // válida (classic) passa e não muda nada.
+      MksError geomErr;
+      if(!m_geometry.Validate(geomErr))
+         m_streamCorrupt = true;
       m_initialized = false;
       m_hasFirstBrick = false;
       m_lastClose = 0.0;

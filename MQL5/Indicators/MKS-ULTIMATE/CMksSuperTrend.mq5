@@ -147,7 +147,19 @@ int OnCalculate(const int rates_total,
 
    int start;
    if(prev_calculated <= 0)
+   {
       start = minBars;
+      // Auditoria 2026-07-22: limpar o warm-up [0..start-1] (buffers novos = 0.0,
+      // não EMPTY_VALUE) senão as bandas plotam mergulho até zero. Trend=0.0
+      // deixa isFirst=true no 1o bar calculado (i==minBars) — seed intacto.
+      for(int j = 0; j < start; j++)
+      {
+         BullBuffer[j]       = EMPTY_VALUE;
+         BearBuffer[j]       = EMPTY_VALUE;
+         TrendBuffer[j]      = 0.0;
+         ActiveStopBuffer[j] = 0.0;
+      }
+   }
    else
       start = MathMax(prev_calculated - 1, minBars);
 

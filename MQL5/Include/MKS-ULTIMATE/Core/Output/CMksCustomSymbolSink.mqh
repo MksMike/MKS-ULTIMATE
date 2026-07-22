@@ -193,8 +193,10 @@ public:
       else
       {
          barsPushed++;
+         lastBarTime = brickTime;   // ADR-028: âncora p/ marcadores — SÓ em barra efetivamente gravada (auditoria 2026-07-22)
       }
-      lastBarTime = brickTime;                                  // ADR-028: âncora p/ marcadores
+      // nextBarTime avança mesmo em falha (não travar a timeline); lastBarTime NÃO
+      // (senão o marcador da ADR-028 ancora num slot sem barra).
       nextBarTime = (datetime)((long)brickTime + 60);           // próximo slot mínimo
    }
 

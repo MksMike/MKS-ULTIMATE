@@ -131,6 +131,18 @@ public:
                                     m_minSize, m_maxSize));
          return false;
       }
+      // Auditoria 2026-07-22: o size de WARM-UP (m_currentSize=defaultSize, sem
+      // clamp até N bricks) alimenta a ESTRATÉGIA. Se defaultSize estiver fora
+      // de [min,max], os 1os N bricks furam o teto/piso que o operador definiu,
+      // em silêncio. Rejeitar aqui (o clamp pós-warm-up NÃO cobre esse caso).
+      if(m_defaultSize < m_minSize || m_defaultSize > m_maxSize)
+      {
+         MKS_SET_ERROR(err, MKS_ERR_RENKO_INVALID_BRICK_SIZE,
+                       "defaultSize fora de [minSize,maxSize] — bricks de warm-up furariam o teto/piso",
+                       StringFormat("default=%.4f min=%.4f max=%.4f",
+                                    m_defaultSize, m_minSize, m_maxSize));
+         return false;
+      }
       return true;
    }
 

@@ -768,7 +768,11 @@ int OnInit()
          g_logger.Info("Producer", "CS corrompido recriado limpo (auto-recovery)", "");
       }
    }
-   g_nextBarTime = AlignDownToM1(TimeCurrent());
+   // ADR-023 regra 1: nextBarTime parte de 0 (epoch) — o 1o brick semeia o
+   // slot com seu closeTimeMsc real. AlignDownToM1(TimeCurrent()) fazia todo
+   // brick do fill cair no bump+teto (realTime<nextBarTime) e a série
+   // histórica sair ~6h no futuro em vez de nos dias reais (auditoria 2026-07-22).
+   g_nextBarTime = 0;
 
    // Sinks: writer (.mksbk) + Custom Symbol (chart). Agregados via
    // multiSink, que apenas referencia — Cleanup deleta cada um.
@@ -796,6 +800,7 @@ int OnInit()
       // .mkstick paralelo — mesmo formato do TickRecorder Service,
       // mesmo CMksTickFileWriter. Nome distingue: sufixo _parity para
       // não confundir com captura contínua do Service.
+      FolderCreate("MKS-ULTIMATE\\Ticks"); // FileOpen não cria subpasta (auditoria 2026-07-22; espelha ColorReversal/TickRecorder)
       g_tickPath = StringFormat("MKS-ULTIMATE\\Ticks\\%s_%s_parity.mkstick",
                                  g_symbol, stamp);
       g_tickWriter = new CMksTickFileWriter();

@@ -102,7 +102,17 @@ int OnCalculate(const int rates_total,
 
    int start;
    if(prev_calculated <= 0)
+   {
       start = minBars - 1;
+      // Auditoria 2026-07-22: buffers novos valem 0.0 (não EMPTY_VALUE); sem
+      // limpar, [0..start-1] plota mergulho até zero no canto do chart. RSI/MACD
+      // já limpam explicitamente — igualar o padrão.
+      for(int j = 0; j < start; j++)
+      {
+         UpperBuffer[j] = EMPTY_VALUE;
+         LowerBuffer[j] = EMPTY_VALUE;
+      }
+   }
    else
       start = MathMax(prev_calculated - 1, minBars - 1);
 

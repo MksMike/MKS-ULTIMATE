@@ -61,6 +61,13 @@ void Test_ValidateRejectsBadParams()
 
    CMksAtrBrickSizer s6(14, 0.5, 3.0, 10.0, 5.0);
    MKS_ASSERT_FALSE(s6.Validate(err), "min>max");
+
+   // Auditoria 2026-07-22: defaultSize (size de warm-up, sem clamp) fora de
+   // [min,max] fura o teto/piso durante o warm-up — deve ser rejeitado.
+   CMksAtrBrickSizer s7(14, 0.5, 3.0, 0.0, 1.0);   // default 3.0 > max 1.0
+   MKS_ASSERT_FALSE(s7.Validate(err), "defaultSize > maxSize");
+   CMksAtrBrickSizer s8(14, 0.5, 3.0, 5.0, 10.0);  // default 3.0 < min 5.0
+   MKS_ASSERT_FALSE(s8.Validate(err), "defaultSize < minSize");
 }
 
 //+------------------------------------------------------------------+
