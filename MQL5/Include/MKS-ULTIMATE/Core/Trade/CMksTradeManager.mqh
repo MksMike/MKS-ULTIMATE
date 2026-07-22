@@ -235,6 +235,22 @@ public:
                        StringFormat("offset=%.4f", m_params.beOffsetPoints));
          return false;
       }
+      // No gatilho, profit >= beActivation (>=) ⇒ bid ≈ entry + beActivation·point
+      // (BUY). O SL de BE vai para entry + beOffset·point. Se beOffset >= beActivation
+      // o SL cai no/acima do preço corrente → Modify inválido / stop-out imediato.
+      // Mesma álgebra no SELL (bid/ask e sinais se cancelam). '>=' rejeita o caso ==
+      // (SL == preço no gatilho já é inválido). NÃO cobre SYMBOL_TRADE_STOPS_LEVEL —
+      // ver follow-up: StopsLevel fica fora do runtime por paridade (decisão de ADR).
+      if(m_params.beEnabled
+         && m_params.beOffsetPoints >= m_params.beActivationPoints)
+      {
+         MKS_SET_ERROR(err, MKS_ERR_TRADE_MANAGER_INVALID_PARAM,
+                       "beOffsetPoints >= beActivationPoints (SL ficaria >= preço no gatilho de BE)",
+                       StringFormat("offset=%.4f act=%.4f",
+                                    m_params.beOffsetPoints,
+                                    m_params.beActivationPoints));
+         return false;
+      }
       if(m_params.trailEnabled
          && (m_params.trailStartPoints <= 0.0 || m_params.trailStepPoints <= 0.0))
       {

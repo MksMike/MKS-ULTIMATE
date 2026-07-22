@@ -112,6 +112,28 @@ void Test_TM_Validate_BeNegativeOffsetFails()
    MKS_ASSERT_FALSE(tm.Validate(err), "Validate falha — beOffset<0");
 }
 
+void Test_TM_Validate_BeOffsetGtActivationFails()
+{
+   CMksRecordingBroker br;
+   CMksFakeSymbol sym; sym.SetPoint(POINT_XAU);
+   CMksTradeManagerParams p;
+   p.beEnabled = true; p.beActivationPoints = 50.0; p.beOffsetPoints = 60.0;
+   CMksTradeManager tm(GetPointer(br), GetPointer(sym), p);
+   MksError err;
+   MKS_ASSERT_FALSE(tm.Validate(err), "Validate falha — beOffset>beActivation (SL >= preço)");
+}
+
+void Test_TM_Validate_BeOffsetEqActivationFails()
+{
+   CMksRecordingBroker br;
+   CMksFakeSymbol sym; sym.SetPoint(POINT_XAU);
+   CMksTradeManagerParams p;
+   p.beEnabled = true; p.beActivationPoints = 50.0; p.beOffsetPoints = 50.0;
+   CMksTradeManager tm(GetPointer(br), GetPointer(sym), p);
+   MksError err;
+   MKS_ASSERT_FALSE(tm.Validate(err), "Validate falha — beOffset==beActivation (SL == preço no gatilho)");
+}
+
 void Test_TM_Validate_TrailBadParamsFails()
 {
    CMksRecordingBroker br;
@@ -555,6 +577,8 @@ void OnStart()
    MKS_RUN(Test_TM_Validate_NullBrokerFails);
    MKS_RUN(Test_TM_Validate_BeBadActivationFails);
    MKS_RUN(Test_TM_Validate_BeNegativeOffsetFails);
+   MKS_RUN(Test_TM_Validate_BeOffsetGtActivationFails);
+   MKS_RUN(Test_TM_Validate_BeOffsetEqActivationFails);
    MKS_RUN(Test_TM_Validate_TrailBadParamsFails);
    MKS_RUN(Test_TM_Validate_PartialBadPctFails);
 

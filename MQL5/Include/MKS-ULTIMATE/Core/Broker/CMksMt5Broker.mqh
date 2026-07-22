@@ -61,7 +61,7 @@ private:
    //--- Estado pós-Init
    bool                       m_initialized;
    ENUM_ORDER_TYPE_FILLING    m_effectiveFilling;
-   bool                       m_fillingFallbackDone;
+   bool                       m_fillingFallbackUsed;   // observável: houve fallback de filling nesta sessão (não é gate)
    ENUM_ACCOUNT_MARGIN_MODE   m_marginMode;
 
    //--- Estado de sincronização com OnTradeTransaction
@@ -213,7 +213,7 @@ public:
       m_retryDelayMs         = retryDelayMs;
       m_initialized          = false;
       m_effectiveFilling     = ORDER_FILLING_RETURN;
-      m_fillingFallbackDone  = false;
+      m_fillingFallbackUsed  = false;
       m_marginMode           = ACCOUNT_MARGIN_MODE_RETAIL_HEDGING;
       ResetPending();
    }
@@ -242,7 +242,7 @@ public:
          return false;
       }
       m_effectiveFilling     = PickInitialFilling();
-      m_fillingFallbackDone  = false;
+      m_fillingFallbackUsed  = false;
       m_initialized          = true;
       return true;
    }
@@ -367,12 +367,16 @@ public:
             return MakeError(MKS_ERR_BROKER_TIMEOUT, attempts);
          }
 
-         // INVALID_FILL: tenta fallback uma única vez.
-         if(lastRetcode == TRADE_RETCODE_INVALID_FILL && !m_fillingFallbackDone)
+         // INVALID_FILL: regride o filling na cadeia FOK→IOC→RETURN, um passo
+         // por retcode, até um filling aceito ou a cadeia esgotar
+         // (TryFillingFallback devolve false em RETURN → MakeRejected). Termina:
+         // cadeia finita (máx 2 avanços). m_fillingFallbackUsed é só observável
+         // (getter), NÃO trava mais — travar aqui impedia o 2º passo IOC→RETURN.
+         if(lastRetcode == TRADE_RETCODE_INVALID_FILL)
          {
             if(TryFillingFallback())
             {
-               m_fillingFallbackDone = true;
+               m_fillingFallbackUsed = true;
                attempts--;          // não consome tentativa real
                continue;
             }
@@ -464,6 +468,22 @@ public:
             return MakeError(MKS_ERR_BROKER_TIMEOUT, attempts);
          }
 
+         // INVALID_FILL: mesma cadeia de fallback do Send() (FOK→IOC→RETURN, um
+         // passo por retcode). Twin-path obrigatório: sem isto o FlattenAll do
+         // circuit breaker (ADR-040) receberia INVALID_FILL a cada tick e NUNCA
+         // fecharia a posição — a defesa central contra a lição do V5 falharia
+         // em silêncio. m_effectiveFilling é compartilhado com Send.
+         if(lastRetcode == TRADE_RETCODE_INVALID_FILL)
+         {
+            if(TryFillingFallback())
+            {
+               m_fillingFallbackUsed = true;
+               attempts--;
+               continue;
+            }
+            return MakeRejected(MKS_ERR_BROKER_INVALID_FILL, attempts);
+         }
+
          if(IsRetryable(lastRetcode))
          {
             Sleep(m_retryDelayMs);
@@ -500,7 +520,7 @@ public:
 
    //--- Observabilidade (testes/diagnóstico) ---
    ENUM_ORDER_TYPE_FILLING EffectiveFilling() const { return m_effectiveFilling; }
-   bool                    FillingFallbackDone() const { return m_fillingFallbackDone; }
+   bool                    FillingFallbackUsed() const { return m_fillingFallbackUsed; }
    ENUM_ACCOUNT_MARGIN_MODE MarginMode() const { return m_marginMode; }
    bool                    IsInitialized() const { return m_initialized; }
 };

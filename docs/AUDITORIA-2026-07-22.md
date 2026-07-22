@@ -154,3 +154,25 @@ Verificação à mão (leitura de código, sem workflow) dos 5 achados de dinhei
 **Método (lição da retrospectiva aplicada):** peguei o dado (código real) ANTES de consertar. O achado #1 prova o valor disso — a auditoria o pintou como o pior risco de dinheiro e era o único falso. Consertar-no-chute teria "corrigido" um `filledLots` que já estava certo.
 
 **Fixes recomendados (Lote C-fix, a greenlight do dono):** #2 (reset da flag por Send) e #5 (check no Validate) são pontuais e de baixo risco. #3 e #4 são durabilidade (Lote D, junto do known-open #6). **Não apliquei nada** — Lote C é verify-only por instrução; e sem MT5-verde à mão eu não toco no caminho do broker live no escuro.
+
+## 10. Lote C-fix — aplicado (2026-07-23)
+
+Aplicados os fixes confirmados no §9, **após verificação adversarial dos patches** (workflow de 5 lentes: terminação, caminhos-gêmeos, invariante, varredura-de-config, crítico-de-completude — consenso `patchSafe` nas 5, zero regressões). `compile-all`: **52/52 limpos, 0/0**.
+
+**Aplicado:**
+
+1. **`CMksMt5Broker` Send() — removido o gate `!m_fillingFallbackDone` (linha 371).** A cadeia FOK→IOC→RETURN agora percorre inteira num único Send (termina porque `TryFillingFallback` devolve `false` em RETURN; cadeia finita, máx 2 avanços). Estritamente mais completo que o "resetar a flag por Send" cogitado no §9 — aquele ainda travava o 2º degrau IOC→RETURN dentro do mesmo Send. O membro/getter foram **renomeados** `m_fillingFallbackDone`→`m_fillingFallbackUsed` / `FillingFallbackUsed()` (viraram puramente observáveis; o nome "Done" induziria um leitor futuro a reintroduzir o gate — armadilha).
+
+2. **`CMksMt5Broker` Close() — espelhado o mesmo branch de fallback (BLOCKER descoberto na verificação).** Close **não tinha** fallback de INVALID_FILL: o `FlattenAll` do circuit breaker (ADR-040) re-tenta Close a cada tick e, se o broker recusasse o filling, receberia INVALID_FILL **para sempre → nunca fecharia** — a defesa central contra a lição do V5 falhava em silêncio. É a lição #2 da retrospectiva (Send↔Close, checar os dois lados) na prática. Agora simétrico.
+
+3. **`CMksTradeManager` Validate() — adicionado `beOffsetPoints >= beActivationPoints → reject`.** Invariante matematicamente exato (operador `>=`: no gatilho `profit>=beActivation`, então `beOffset>=beActivation` poria o SL no/acima do preço). Cobre BUY e SELL (a álgebra bid/ask se cancela). + 2 casos em `Test_CMksTradeManager.mq5` (`>` e o boundary `==`). Varredura confirmou: **nenhuma config existente** (testes/EAs/runners) usa `beOffset>=beActivation` → zero regressão.
+
+**Follow-ups análogos descobertos pelo crítico-de-completude (NÃO aplicados — precisam de decisão):**
+
+| Item | Classe | Nota |
+|---|---|---|
+| **StopsLevel no Modify de BE/trail** (`CMksTradeManager`) | validador insuficiente | O check `beOffset<beActivation` não cobre `SYMBOL_TRADE_STOPS_LEVEL`: se `(beActivation−beOffset) < StopsLevel`, o broker recusa o Modify e o **BE falha em silêncio** (ramo WARN 327-344; posição segue com o SL original, mais frouxo — degrada, não perde). **Sensível a paridade:** o projeto mantém StopsLevel fora do runtime de propósito (backtest não modela StopsLevel; usá-lo bifurcaria live↔sim = eixo-2 do V5). **Decisão de ADR**, não fix silencioso. |
+| **`CMksRiskManager` `maxDailyLossPct`/`maxDrawdownPct` sem teto** | validador sem limite superior (classe do bug B) | Validados só contra piso (`<0`). Um valor `>=100` passa mas é **estruturalmente inerte** (drawdown não excede ~100%) → gate de segurança silenciosamente desligado. Contraste: `partialClosePct` e `riskPercent` já têm teto. Fix candidato: rejeitar `>=100`. |
+| **`CMksRenkoBuilder` `m_streamCorrupt` latch sem recovery** | latch terminal (classe do bug A) | Após L ticks inválidos, `IngestTick` retorna `false` para sempre, sem recovery — assimétrico ao run de K-exceeded (que reancoragem via `kRecoverAfter`). Provável intenção (ADR-006 §5: feed corrupto = terminal). **Confirmar intenção** antes de mexer. |
+
+Os follow-ups entram no radar do Lote D / decisões de ADR. O `beOffset` e o `maxDailyLossPct/maxDrawdownPct` são a mesma família do bug B (validador de dinheiro sem teto) — vale um sweep dedicado nos validators do core.
