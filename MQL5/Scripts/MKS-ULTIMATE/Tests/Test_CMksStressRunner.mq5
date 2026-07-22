@@ -154,6 +154,43 @@ void Test_SR_SlippageDegradesVsNone()
 }
 
 //==================================================================
+// Eixo 3 (E4.2 / ADR-034) — slippage é sentido no resultado em MOEDA,
+// não só em pontos. Dois runs idênticos exceto slippage; comissão > 0
+// nos DOIS exercita o caminho de moeda completo e isola o delta ao slip.
+//==================================================================
+void Test_SR_SlippageDegradesNetCurrency()
+{
+   CMksFakeSymbol sym;                 // tickSize=0.01, tickValue=1.0 → hasCurrency
+   MksStressRunnerConfig cfg = MakeCfg();
+   cfg.commissionPerLot = 3.0;         // comissão real em moeda/lote (igual nos 2 runs)
+   MksTick ticks[]; GenZigzag(ticks);
+   MksError err;
+
+   CMksStressParams none;
+   CMksStressRunner base(GetPointer(sym), cfg, none, "None$");
+   MKS_ASSERT_TRUE(base.Init(err), "baseline init");
+   RunFeed(base, ticks);
+   CMksStressLabReport rBase = base.Report();
+
+   CMksStressParams slip;                       // só slippage, determinístico
+   slip.slippageDist = MKS_STRESS_DIST_FIXED;
+   slip.slippageMean = 2.0;                     // 2 pts adversos por fill
+   CMksStressRunner st(GetPointer(sym), cfg, slip, "Slip$");
+   MKS_ASSERT_TRUE(st.Init(err), "stress init");
+   RunFeed(st, ticks);
+   CMksStressLabReport rSt = st.Report();
+
+   MKS_ASSERT_TRUE(rBase.hasCurrency && rSt.hasCurrency,
+                   "conversão de moeda ativa (tickSize/tickValue > 0)");
+   MKS_ASSERT_TRUE(rBase.totalCommission > 0.0,
+                   "comissão chega ao resultado em moeda (eixo 3)");
+   MKS_ASSERT_EQ_INT(rBase.tradesClosed, rSt.tradesClosed,
+                     "mesmo nº de trades (slippage não muda a decisão)");
+   MKS_ASSERT_TRUE(rSt.netPnLCurrency < rBase.netPnLCurrency,
+                   "slippage adverso degrada estritamente o net em MOEDA (E4.2)");
+}
+
+//==================================================================
 // Drift de latência (ADR-039) — ligado vs desligado
 //==================================================================
 
@@ -217,6 +254,7 @@ void OnStart()
    MKS_RUN(Test_SR_InitAndRunNoneProducesTrades);
    MKS_RUN(Test_SR_DeterministicDoubleRun);
    MKS_RUN(Test_SR_SlippageDegradesVsNone);
+   MKS_RUN(Test_SR_SlippageDegradesNetCurrency);
    MKS_RUN(Test_SR_LatencyDriftDegradesVsOff);
    MKS_RUN(Test_SR_NullSymbolInitFails);
 

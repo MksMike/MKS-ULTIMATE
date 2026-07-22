@@ -93,7 +93,7 @@ Referência cruzada: os IDs entre colchetes (ex.: `[H1]`, `[M9]`, `[cs-recovery-
 
 ## Fase E3 — Robustez do motor Renko
 
-**Status:** Em andamento — **E3.2** (deadlock de rampa monotônica) e **E3.3** (reset de estado pós-reanchor) corrigidos, e **E3.1** (rede de teste do código 105) escrita, via **ADR-033** (2026-07-21). **MT5-verificado (2026-07-21): `Test_CMksRenkoBuilder` 497/497 assertions, 29 tests, 0 failed.** Pendente só o item de processo do critério de saída (Protocolo 1 exigir duplo-run).
+**Status:** ✅ **Concluída** — **E3.2** (deadlock de rampa monotônica) e **E3.3** (reset de estado pós-reanchor) corrigidos, e **E3.1** (rede de teste do código 105) escrita, via **ADR-033** (2026-07-21). **MT5-verificado (2026-07-21): `Test_CMksRenkoBuilder` 497/497 assertions, 29 tests, 0 failed.** **Último item fechado (2026-07-23):** o Protocolo 1 §determinismo foi reforçado para exigir **teste duplo-run automatizado** (roda 2× e compara, não inspeção) — cumpre o 3º critério de saída. **E3 fecha o gate.**
 **Depende de:** E1. **Bloqueia:** Fase 10.
 
 **Nota (2026-07-21):** o soft-recovery (105) sai de cobertura ZERO `[H2]` para 6 testes determinísticos (incl. paridade duplo-run pós-recovery). O deadlock `[M2]` foi corrigido trocando a âncora fixa (`m_kFirstMid`) por deslizante (`m_kPrevMid`) — ver ADR-033 e `CHANGELOG.md [Não lançado]`. O achado `[recovery-doc-says-variance]` foi fechado (comentários sincronizados). Falta rodar a suíte no MT5 e alinhar o Protocolo 1.
@@ -120,7 +120,7 @@ Referência cruzada: os IDs entre colchetes (ex.: `[H1]`, `[M9]`, `[cs-recovery-
 
 ## Fase E4 — Eixo 3 completo (custo sentido no resultado)
 
-**Status:** Em andamento — **E4.1** (comissão→moeda no journal/report) e **E4.3** (warning de spread inerte) feitos via **ADR-034** (2026-07-21); **E4.2** com os testes de comissão escritos (incl. o `[M1]/[M8]`: dois runs diferindo só na comissão → net diferente). **MT5-verificado (2026-07-21): `Test_CMksTradeJournal` 49/49 (21 tests) + `Test_CMksStressLabReport` 42/42 (8 tests), 0 failed.** Pendente só o sub-teste "`slip>0` reduz o `NetPnLCurrency`". Swap segue OFF (v1, ADR-030) mas a estrutura é swap-aware.
+**Status:** ✅ **Concluída** (MT5-verificado 2026-07-23) — **E4.1** (comissão→moeda no journal/report) e **E4.3** (warning de spread inerte) feitos via **ADR-034** (2026-07-21); **E4.2** com os testes de comissão escritos (incl. o `[M1]/[M8]`: dois runs diferindo só na comissão → net diferente). **MT5-verificado (2026-07-21): `Test_CMksTradeJournal` 49/49 (21 tests) + `Test_CMksStressLabReport` 42/42 (8 tests), 0 failed.** **Último sub-teste fechado (2026-07-23):** `Test_SR_SlippageDegradesNetCurrency` prova que `slip>0` reduz **estritamente** o `netPnLCurrency` (comissão>0 exercita o caminho de moeda completo — o eixo 3 sentido em MOEDA, não só em pontos). **MT5-verificado (2026-07-23): `Test_CMksStressRunner` 30/30 assertions, 6 tests, 0 failed.** Swap segue OFF (v1, ADR-030) mas a estrutura é swap-aware.
 **Depende de:** E1. **Bloqueia:** Fase 10 (e a credibilidade do StressLab como oráculo de decisão).
 
 **Por que importa:** spread e slippage já entram no fill (bom). Mas **comissão e swap são computados e descartados** — o exato padrão "contabilizado num relatório, nunca aplicado ao equity" do eixo 3 do V5, hoje latente na métrica de decisão do StressLab determinístico.
