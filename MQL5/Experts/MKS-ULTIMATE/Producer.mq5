@@ -312,6 +312,37 @@ bool EnsureCustomSymbolReady(const string &cs, ISymbol *src, MksError &err)
 }
 
 //+------------------------------------------------------------------+
+//| Recupera um CS CORROMPIDO: o wipe (CustomRatesDelete) deu erro —   |
+//| sinal de arquivo de histórico podre (ex.: containers em 1970.01.01 |
+//| de um crash/run antiga; o MT5 recusa apagar e atualizar). NÃO      |
+//| seguir em cima do arquivo podre (congela o CS): fecha charts do    |
+//| CS, deseleciona do Market Watch, APAGA o símbolo (limpa o arquivo  |
+//| no disco) e recria limpo. Se nem recriar der (chart do CS travado  |
+//| que não fecha), retorna false e o caller faz fail-fast barulhento. |
+//| NUNCA fecha o chart do próprio Producer (roda no símbolo real).    |
+//+------------------------------------------------------------------+
+bool RecreateCorruptedCustomSymbol(const string &cs, ISymbol *src, MksError &err)
+{
+   long chId = ChartFirst();
+   while(chId >= 0)
+   {
+      long nextId = ChartNext(chId);
+      if(chId != ChartID() && ChartSymbol(chId) == cs)
+         ChartClose(chId);
+      chId = nextId;
+   }
+   SymbolSelect(cs, false); // CustomSymbolDelete exige não-selecionado no MW
+   if(!CustomSymbolDelete(cs))
+   {
+      MKS_SET_ERROR(err, MKS_ERR_DATA_FILE_IO,
+                    "CustomSymbolDelete falhou (CS corrompido ainda em uso?)",
+                    StringFormat("cs=%s lastErr=%d", cs, GetLastError()));
+      return false;
+   }
+   return EnsureCustomSymbolReady(cs, src, err); // recria do zero
+}
+
+//+------------------------------------------------------------------+
 //| Alinha um datetime para o início do minuto (M1 boundary).         |
 //+------------------------------------------------------------------+
 datetime AlignDownToM1(datetime t)
@@ -699,11 +730,43 @@ int OnInit()
    if(InpResetCustomSymbolBars)
    {
       if(!g_isTesting) g_panel.UpdateSubtitle("Limpando histórico anterior...");
-      if(!CustomRatesDelete(g_csName, 0, LONG_MAX))
-         g_logger.Warn("Producer", "CustomRatesDelete failed (continues without wipe)",
-            StringFormat("\"lastErr\":%d", GetLastError()));
-      else
+      // Mede o ERRO do wipe, não o retorno: um CS vazio devolve "nada a apagar"
+      // sem erro (lastErr==0, benigno); um CS CORROMPIDO devolve erro real
+      // (ex.: 4102 — o MT5 recusa apagar barras inválidas). O erro é o sinal
+      // confiável de corrupção, independente do tipo de retorno.
+      ResetLastError();
+      CustomRatesDelete(g_csName, 0, LONG_MAX);
+      int wipeErr = GetLastError();
+      if(wipeErr == 0)
          g_logger.Info("Producer", "cs bars wiped", "");
+      else if(g_isTesting)
+         // Tester: mantém o comportamento antigo (loga e segue). O CS do tester
+         // não é o caminho de visualização live; não fazer delete+recriar aqui.
+         g_logger.Warn("Producer", "CustomRatesDelete erro no tester (segue sem wipe)",
+            StringFormat("\"lastErr\":%d", wipeErr));
+      else
+      {
+         // LIVE: erro real no wipe → CS corrompido. Auto-recupera (apaga o
+         // símbolo + recria limpo) em vez de congelar em cima do arquivo podre.
+         // Se nem isso der (chart do CS travado), fail-fast BARULHENTO — o
+         // operador nunca fica preso num CS corrompido em silêncio.
+         g_logger.Warn("Producer", "CustomRatesDelete erro — CS corrompido? auto-recriando limpo",
+            StringFormat("\"lastErr\":%d", wipeErr));
+         MksError recErr;
+         if(!RecreateCorruptedCustomSymbol(g_csName, g_iSymbol, recErr))
+         {
+            g_logger.Error("Producer", "auto-recovery do CS corrompido falhou",
+               StringFormat("\"err\":\"%s\"", MksJsonEscape(recErr.ToString())));
+            Alert(StringFormat(
+               "Producer: Custom Symbol '%s' corrompido e NAO pode ser recriado "
+               "(grafico do CS aberto?). Feche os graficos de '%s' e reanexe.",
+               g_csName, g_csName));
+            g_panel.ShowError("CS corrompido — feche os graficos do CS e reanexe");
+            Cleanup();
+            return INIT_FAILED;
+         }
+         g_logger.Info("Producer", "CS corrompido recriado limpo (auto-recovery)", "");
+      }
    }
    g_nextBarTime = AlignDownToM1(TimeCurrent());
 
