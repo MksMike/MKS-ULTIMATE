@@ -37,7 +37,7 @@
 // BRICK RECORD (72 bytes, repetido `brickCount` vezes após o header):
 //   off  size  tipo     campo
 //   ---  ----  -------  ---------------------------------------------
-//     0     4  int32    direction (ENUM_MKS_BRICK_DIR: 0=BULL, 1=BEAR)
+//     0     4  int32    direction (ENUM_MKS_BRICK_DIR: -1=BEAR, 1=BULL)
 //     4     4  int32    thresholdsCrossed
 //     8     8  double   open
 //    16     8  double   close
