@@ -2677,6 +2677,46 @@ O breaker Por Conta era só **PREVENTIVO**: o `CMksRiskManager.CheckOrder` bloqu
 
 ---
 
+### ADR-041: Distância mínima de SL para gestão (BE/trailing) ancorada em bricks
+
+**Data:** 2026-07-23
+**Status:** Proposta
+**Relação:** Estende a ADR-032 (SL da estratégia em bricks) e o piso de SL de entrada (M12) à camada de **gestão** (`CMksTradeManager`). Fecha o follow-up #1 da auditoria 2026-07-22 (§10 de `docs/AUDITORIA-2026-07-22.md`), descoberto na verificação adversarial do Lote C-fix.
+
+**Contexto:**
+O `CMksTradeManager` move o SL via `broker.Modify()` no break-even e no trailing. O broker **live** exige `SYMBOL_TRADE_STOPS_LEVEL` (distância mínima entre preço e SL); o `CMksSimulatedBroker` (backtest) **não modela** essa restrição e aceita qualquer `Modify`. Se o SL de BE/trail ficar perto demais do preço, o live **rejeita** o `Modify` (→ WARN, mantém o SL antigo, mais frouxo) enquanto o backtest **aplica** — os SLs divergem, as saídas divergem, o P&L diverge. É o **eixo 2 do V5-POSTMORTEM** (custo/regra de execução diferente entre ambientes) num parâmetro de gestão. O check `beOffsetPoints < beActivationPoints` (Lote C-fix) só impede o SL de **cruzar** o preço; não garante distância mínima. O furo é hoje **dormente** — o `CMksTradeManager` ainda não está no caminho live (o `ColorReversal` envia ordens direto) —, o que torna este o momento certo de fixar o padrão antes de o TM ser ligado.
+
+**Decisão:**
+BE e trailing ganham uma **distância mínima de SL ancorada em bricks**, no mesmo molde do piso de SL de entrada (M12 / ADR-032):
+- O input do operador é broker-agnóstico: **`InpManageMinSlBricks`** (em bricks).
+- O **composition root** converte para pontos — `manageMinSlPoints = InpManageMinSlBricks · brickSize / Point()` — e injeta o número em `CMksTradeManagerParams`. O contrato do `CMksTradeManager` **permanece em pontos**, como o resto da gestão.
+- O `Validate()` do TM passa a exigir, no espaço de pontos:
+  - BE:    `beActivationPoints − beOffsetPoints ≥ manageMinSlPoints` (subsume e fortalece o check atual, que é o caso `manageMinSlPoints = 0`)
+  - Trail: `trailStepPoints ≥ manageMinSlPoints`
+- **`StopsLevel` fica FORA do runtime** — entra apenas como *fail-fast de anexação* no composition root (idêntico ao piso de SL de entrada). O enforcement é **config-time**; o runtime segue puro e determinístico, sem clamp.
+- Default `InpManageMinSlBricks = 0.0` (floor desligado → zero mudança de comportamento retroativa). O valor de produção é decidido com o dono quando o TM entrar no caminho live.
+
+**Alternativas consideradas:**
+- **`StopsLevel` no `Modify` em runtime.** Rejeitada — é a causa direta da divergência: uma propriedade live-only governando o SL, o eixo 2 do V5. O projeto já baniu `StopsLevel` do número de runtime (ADR-032, M12).
+- **Modelar `StopsLevel` no `CMksSimulatedBroker`** (ambos rejeitam igual). Rejeitada por ora — restauraria a paridade, mas injeta uma propriedade dependente-de-broker no motor de backtest e exige que o valor seja fixo/replayável; complexidade desproporcional para um `Modify` de gestão. Fica como alternativa futura se o realismo do backtest exigir.
+- **Clamp em runtime** (o TM empurra o SL até o floor em vez de rejeitar a config). Rejeitada — muda a semântica de decisão da gestão em silêncio; config-time (rejeitar cedo e alto) é mais honesto e mantém o runtime uma função pura da config.
+- **Apenas documentar** (o operador configura com margem). Rejeitada — é o curativo, não a cura; o mesmo footgun retorna na próxima config (REGRA 2 — causa-raiz, não sintoma).
+
+**Consequências:**
+- `CMksTradeManagerParams` ganha `manageMinSlPoints` (pontos; default `0.0` = sem floor, compat retroativa). `ColorReversal.mq5` e os replayers ganham `InpManageMinSlBricks`, convertido **simetricamente** nos dois composition roots (paridade do replay).
+- `Validate()` rejeita configs de BE/trail que violem o floor. Os testes atuais (beActivation=50, beOffset∈{0,5}, trailStep>0) seguem verdes com default `0.0`; casos novos cobrem floor>0.
+- Determinismo do E2 preservado: `manageMinSlPoints` é função pura de `InpManageMinSlBricks · brickSize / Point()`, idêntica nos dois roots.
+- Estratégia, `CMksDecisionRunner` e suítes existentes **intocados** (contrato em pontos preservado).
+
+**Fronteiras:**
+- Cobre só a gestão (BE/trail). O piso do SL de **entrada** já é coberto por M12 / ADR-032.
+- Não modela `StopsLevel` no backtest — a paridade vem de **proibir** configs perto demais, não de simular a rejeição.
+- Acoplamento ao `Point()` / brickSize do momento do setup (mesmo caveat da ADR-032 com ATR brick size variável): o floor é computado no setup e constante pela vida da posição.
+
+**Validação contra invariantes (§1):** passa — **reforça** a paridade backtest/live (o floor é replayável, `StopsLevel` fica fora do runtime); caminho único (mesma conversão nos dois roots); abstração (`ISymbol` para Point/brickSize); determinismo (função pura de config); zero código fechado.
+
+---
+
 ## 4. Decisões pendentes
 
 - **ADR-031 — manter+corrigir o Custom Symbol** (referenciada nas notas da ADR-023-A, ainda **não escrita como seção própria**). Entregável E7.3 do `docs/ROADMAP-CORE-HARDENING.md`: redigir formalmente com o dado do gate empírico (sobrevivência à virada de dia). Bloqueada por E7.1 (gate empírico pendente de dado).
