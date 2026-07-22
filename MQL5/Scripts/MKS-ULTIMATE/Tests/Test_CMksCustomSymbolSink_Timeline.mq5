@@ -179,6 +179,20 @@ void Test_CloseNeverEmitsEpochForValidTick()
 }
 
 //+------------------------------------------------------------------+
+//| Test 12: corpo da caixinha (showWicks=false) — high/low = extremos |
+//| do corpo (open/close), SEM pavio. Usado por close E forming.       |
+//+------------------------------------------------------------------+
+void Test_BoxBodyBoundsAreBodyExtremes()
+{
+   // Bull (open<close): high=close, low=open.
+   MKS_ASSERT_NEAR_DOUBLE(4001.0, CMksCustomSymbolSink::BoxBodyHigh(4000.0, 4001.0), 1e-9, "bull: high=close");
+   MKS_ASSERT_NEAR_DOUBLE(4000.0, CMksCustomSymbolSink::BoxBodyLow (4000.0, 4001.0), 1e-9, "bull: low=open");
+   // Bear (open>close): high=open, low=close.
+   MKS_ASSERT_NEAR_DOUBLE(4000.0, CMksCustomSymbolSink::BoxBodyHigh(4000.0, 3999.0), 1e-9, "bear: high=open");
+   MKS_ASSERT_NEAR_DOUBLE(3999.0, CMksCustomSymbolSink::BoxBodyLow (4000.0, 3999.0), 1e-9, "bear: low=close");
+}
+
+//+------------------------------------------------------------------+
 void OnStart()
 {
    Print("=== Test_CMksCustomSymbolSink_Timeline ===");
@@ -195,6 +209,7 @@ void OnStart()
 
    MKS_RUN(Test_GuardRejectsEpochZeroBarTime);
    MKS_RUN(Test_CloseNeverEmitsEpochForValidTick);
+   MKS_RUN(Test_BoxBodyBoundsAreBodyExtremes);
 
    g_mksTestRunner.Summary();
 }

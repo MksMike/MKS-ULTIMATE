@@ -109,6 +109,13 @@ public:
    // (ADR-020: o CS é só desenho, a estratégia não o lê). Testável sem CS.
    static bool IsRenderableBarTime(datetime t) { return t > (datetime)0; }
 
+   // Bordas do CORPO da caixinha renko (high/low SEM pavio de excursão) =
+   // extremos entre open e close visual. Usadas por OnBrickClose E
+   // OnBrickForming quando showWicks=false (ADR-020/022 regra 3). Puras,
+   // testáveis sem CS.
+   static double BoxBodyHigh(double open, double close) { return MathMax(open, close); }
+   static double BoxBodyLow (double open, double close) { return MathMin(open, close); }
+
    void OnBrickClose(const MksBrick &brick) override
    {
       if(StringLen(csName) == 0) return;
@@ -160,8 +167,8 @@ public:
       }
       else
       {
-         rates[0].high = MathMax(brick.open, visualClose);
-         rates[0].low  = MathMin(brick.open, visualClose);
+         rates[0].high = BoxBodyHigh(brick.open, visualClose);
+         rates[0].low  = BoxBodyLow (brick.open, visualClose);
       }
       rates[0].tick_volume = brick.thresholdsCrossed; // não é volume real
       rates[0].spread      = 0;
@@ -193,9 +200,9 @@ public:
 
    // ADR-021: a cada tick, atualiza a bar PARCIAL no slot atual de
    // nextBarTime (a próxima bar, ainda não confirmada por brick fechado).
-   // Empurra COM wicks — excursão durante a formação é informação. Quando
-   // o brick fechar, OnBrickClose vai sobrescrever este mesmo slot com a
-   // bar definitiva sem wicks (ADR-020 regra 3) e incrementar nextBarTime.
+   // RESPEITA showWicks (igual ao OnBrickClose): com wicks o parcial mostra a
+   // excursão; sem, caixinha limpa. Quando o brick fechar, OnBrickClose
+   // sobrescreve este slot com a bar definitiva e incrementa nextBarTime.
    void OnBrickForming(const MksFormingBrick &fb) override
    {
       if(!fb.hasData) return;
@@ -217,9 +224,21 @@ public:
       MqlRates rates[1];
       rates[0].time        = nextBarTime;
       rates[0].open        = fb.open;
-      rates[0].high        = fb.high;          // wicks de excursão
-      rates[0].low         = fb.low;
       rates[0].close       = fb.currentMid;    // preço atual
+      // BUG 2026-07-22: o forming ignorava showWicks e escrevia SEMPRE
+      // fb.high/fb.low → o CS mostrava pavios mesmo com wicks=false (na barra
+      // viva E nas parciais órfãs de slot). Agora respeita showWicks igual ao
+      // OnBrickClose. O .mksbk preserva a excursão real de qualquer forma.
+      if(showWicks)
+      {
+         rates[0].high = fb.high;
+         rates[0].low  = fb.low;
+      }
+      else
+      {
+         rates[0].high = BoxBodyHigh(fb.open, fb.currentMid);
+         rates[0].low  = BoxBodyLow (fb.open, fb.currentMid);
+      }
       rates[0].tick_volume = 0;
       rates[0].spread      = 0;
       rates[0].real_volume = 0;
