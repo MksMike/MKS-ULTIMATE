@@ -2680,7 +2680,7 @@ O breaker Por Conta era só **PREVENTIVO**: o `CMksRiskManager.CheckOrder` bloqu
 ### ADR-041: Distância mínima de SL para gestão (BE/trailing) ancorada em bricks
 
 **Data:** 2026-07-23
-**Status:** Proposta
+**Status:** Aceita (aceite do dono em 2026-07-23). **Implementação faseada:** o núcleo — `manageMinSlPoints` em `CMksTradeManagerParams` + os checks no `Validate()` + testes — entra agora; o input do operador `InpManageMinSlBricks` e a conversão bricks→pontos nascem **quando o `CMksTradeManager` for ligado num EA** (hoje o TM só existe em testes — adicionar o input a um EA que não constrói os params seria input morto). Coerente com a natureza dormente registrada abaixo.
 **Relação:** Estende a ADR-032 (SL da estratégia em bricks) e o piso de SL de entrada (M12) à camada de **gestão** (`CMksTradeManager`). Fecha o follow-up #1 da auditoria 2026-07-22 (§10 de `docs/AUDITORIA-2026-07-22.md`), descoberto na verificação adversarial do Lote C-fix.
 
 **Contexto:**

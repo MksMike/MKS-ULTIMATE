@@ -134,6 +134,56 @@ void Test_TM_Validate_BeOffsetEqActivationFails()
    MKS_ASSERT_FALSE(tm.Validate(err), "Validate falha — beOffset==beActivation (SL == preço no gatilho)");
 }
 
+void Test_TM_Validate_NegativeManageFloorFails()
+{
+   CMksRecordingBroker br;
+   CMksFakeSymbol sym; sym.SetPoint(POINT_XAU);
+   CMksTradeManagerParams p;
+   p.manageMinSlPoints = -1.0;
+   CMksTradeManager tm(GetPointer(br), GetPointer(sym), p);
+   MksError err;
+   MKS_ASSERT_FALSE(tm.Validate(err), "Validate falha — manageMinSlPoints<0 (ADR-041)");
+}
+
+void Test_TM_Validate_BeBelowManageFloorFails()
+{
+   CMksRecordingBroker br;
+   CMksFakeSymbol sym; sym.SetPoint(POINT_XAU);
+   CMksTradeManagerParams p;
+   // dist BE = 50-48 = 2 < floor 5 → rejeita (ADR-041)
+   p.beEnabled = true; p.beActivationPoints = 50.0; p.beOffsetPoints = 48.0;
+   p.manageMinSlPoints = 5.0;
+   CMksTradeManager tm(GetPointer(br), GetPointer(sym), p);
+   MksError err;
+   MKS_ASSERT_FALSE(tm.Validate(err), "Validate falha — dist de BE < manageMinSlPoints");
+}
+
+void Test_TM_Validate_TrailBelowManageFloorFails()
+{
+   CMksRecordingBroker br;
+   CMksFakeSymbol sym; sym.SetPoint(POINT_XAU);
+   CMksTradeManagerParams p;
+   // trailStep 3 < floor 5 → rejeita (ADR-041)
+   p.trailEnabled = true; p.trailStartPoints = 100.0; p.trailStepPoints = 3.0;
+   p.manageMinSlPoints = 5.0;
+   CMksTradeManager tm(GetPointer(br), GetPointer(sym), p);
+   MksError err;
+   MKS_ASSERT_FALSE(tm.Validate(err), "Validate falha — trailStep < manageMinSlPoints");
+}
+
+void Test_TM_Validate_ManageFloorSatisfiedPasses()
+{
+   CMksRecordingBroker br;
+   CMksFakeSymbol sym; sym.SetPoint(POINT_XAU);
+   CMksTradeManagerParams p;
+   // dist BE = 50-40 = 10 >= floor 5; trail/partial off → passa (ADR-041)
+   p.beEnabled = true; p.beActivationPoints = 50.0; p.beOffsetPoints = 40.0;
+   p.manageMinSlPoints = 5.0;
+   CMksTradeManager tm(GetPointer(br), GetPointer(sym), p);
+   MksError err;
+   MKS_ASSERT_TRUE(tm.Validate(err), "Validate ok — dist de BE >= manageMinSlPoints");
+}
+
 void Test_TM_Validate_TrailBadParamsFails()
 {
    CMksRecordingBroker br;
@@ -579,6 +629,10 @@ void OnStart()
    MKS_RUN(Test_TM_Validate_BeNegativeOffsetFails);
    MKS_RUN(Test_TM_Validate_BeOffsetGtActivationFails);
    MKS_RUN(Test_TM_Validate_BeOffsetEqActivationFails);
+   MKS_RUN(Test_TM_Validate_NegativeManageFloorFails);
+   MKS_RUN(Test_TM_Validate_BeBelowManageFloorFails);
+   MKS_RUN(Test_TM_Validate_TrailBelowManageFloorFails);
+   MKS_RUN(Test_TM_Validate_ManageFloorSatisfiedPasses);
    MKS_RUN(Test_TM_Validate_TrailBadParamsFails);
    MKS_RUN(Test_TM_Validate_PartialBadPctFails);
 

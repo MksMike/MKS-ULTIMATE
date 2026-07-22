@@ -65,6 +65,14 @@ struct CMksTradeManagerParams
    double partialTriggerPoints;
    double partialClosePct;
 
+   // Piso de distância mínima do SL de GESTÃO (BE/trail) em pontos (ADR-041).
+   // 0.0 = sem piso (default). O composition root o deriva de bricks
+   // (InpManageMinSlBricks · brickSize/Point) — StopsLevel fica FORA do runtime,
+   // só como fail-fast de anexação. Enforce em Validate (config-time): sem ele,
+   // um SL de BE/trail perto demais seria rejeitado no broker live (StopsLevel)
+   // mas aplicado no sim → divergência backtest/live (eixo 2 do V5).
+   double manageMinSlPoints;
+
    CMksTradeManagerParams()
    {
       beEnabled            = false;
@@ -78,6 +86,8 @@ struct CMksTradeManagerParams
       partialEnabled       = false;
       partialTriggerPoints = 0.0;
       partialClosePct      = 0.0;
+
+      manageMinSlPoints    = 0.0;
    }
 };
 
@@ -239,8 +249,8 @@ public:
       // (BUY). O SL de BE vai para entry + beOffset·point. Se beOffset >= beActivation
       // o SL cai no/acima do preço corrente → Modify inválido / stop-out imediato.
       // Mesma álgebra no SELL (bid/ask e sinais se cancelam). '>=' rejeita o caso ==
-      // (SL == preço no gatilho já é inválido). NÃO cobre SYMBOL_TRADE_STOPS_LEVEL —
-      // ver follow-up: StopsLevel fica fora do runtime por paridade (decisão de ADR).
+      // (SL == preço no gatilho já é inválido). Este check é o piso do caso
+      // manageMinSlPoints=0; o floor de gestão (ADR-041) abaixo o fortalece.
       if(m_params.beEnabled
          && m_params.beOffsetPoints >= m_params.beActivationPoints)
       {
@@ -251,6 +261,30 @@ public:
                                     m_params.beActivationPoints));
          return false;
       }
+      // Piso de gestão >= 0 (defensivo — o composition root o deriva de bricks,
+      // sempre >= 0 por construção). ADR-041.
+      if(m_params.manageMinSlPoints < 0.0)
+      {
+         MKS_SET_ERROR(err, MKS_ERR_TRADE_MANAGER_INVALID_PARAM,
+                       "manageMinSlPoints < 0",
+                       StringFormat("manageMinSl=%.4f", m_params.manageMinSlPoints));
+         return false;
+      }
+      // Floor de BE (ADR-041): no gatilho, a distância SL↔preço é
+      // beActivation − beOffset. Precisa ser >= o piso de gestão, senão o Modify
+      // de BE seria rejeitado no broker live (StopsLevel) mas aplicado no sim →
+      // divergência (eixo 2 do V5). StopsLevel fica fora do runtime; o piso é
+      // ancorado em bricks (replayável) no composition root.
+      if(m_params.beEnabled
+         && (m_params.beActivationPoints - m_params.beOffsetPoints) < m_params.manageMinSlPoints)
+      {
+         MKS_SET_ERROR(err, MKS_ERR_TRADE_MANAGER_INVALID_PARAM,
+                       "distância de BE (beActivation-beOffset) < manageMinSlPoints",
+                       StringFormat("dist=%.4f floor=%.4f",
+                                    m_params.beActivationPoints - m_params.beOffsetPoints,
+                                    m_params.manageMinSlPoints));
+         return false;
+      }
       if(m_params.trailEnabled
          && (m_params.trailStartPoints <= 0.0 || m_params.trailStepPoints <= 0.0))
       {
@@ -259,6 +293,18 @@ public:
                        StringFormat("start=%.4f step=%.4f",
                                     m_params.trailStartPoints,
                                     m_params.trailStepPoints));
+         return false;
+      }
+      // Floor de trail (ADR-041): o SL de trail fica a trailStep do preço; precisa
+      // ser >= o piso de gestão (mesma razão de paridade do floor de BE).
+      if(m_params.trailEnabled
+         && m_params.trailStepPoints < m_params.manageMinSlPoints)
+      {
+         MKS_SET_ERROR(err, MKS_ERR_TRADE_MANAGER_INVALID_PARAM,
+                       "trailStepPoints < manageMinSlPoints",
+                       StringFormat("step=%.4f floor=%.4f",
+                                    m_params.trailStepPoints,
+                                    m_params.manageMinSlPoints));
          return false;
       }
       if(m_params.partialEnabled
