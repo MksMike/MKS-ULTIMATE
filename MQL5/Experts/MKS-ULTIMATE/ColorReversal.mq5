@@ -697,6 +697,13 @@ int OnInit()
    // no epoch, e o 1º tick forçaria um rollover imediato (re-baseline). Se
    // não houver tick (mercado fechado no attach), Init cai no epoch e o 1º
    // tick auto-corrige via rollover — degrada com graça, não quebra.
+   // Cadência do snapshot (decisão 2026-07-24, ROADMAP-CORE-HARDENING E2):
+   // este seed vem do último tick PRÉ-attach (SymbolInfoTick); o replay
+   // (CMksDecisionRunner) faz Init LAZY no 1º tick do .mkstick. Assimetria
+   // ACEITA e bounded — mesmo dia UTC no attach → mesmo rollover; auto-corrige
+   // na virada. A paridade sim↔sim (Test_DecisionGolden, ambos lazy) é
+   // bit-exata; live↔replay é estruturalmente não-bit-exato. Simetria total
+   // (lazy aqui também) fica diferida — sem ganho de paridade hoje.
    {
       MqlTick seedTick;
       if(SymbolInfoTick(g_symbol, seedTick) && seedTick.time_msc > 0)
