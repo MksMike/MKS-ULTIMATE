@@ -67,7 +67,11 @@ feed real. Ver `CHANGELOG.md [Não lançado]` e a Fase E2 de `docs/ROADMAP-CORE-
 - A âncora do E2.3 (`seedMid`/`seedTickSeq`) já aparece no header do journal (linha `# ANCHOR`) —
   ignorada no diff, mas reforça a proveniência.
 
+O `Test_DecisionGolden` automatiza **as duas configs**: A (`Test_DecisionGolden_MatchesBaseline`,
+gates off → `baseline.golden.tsv`) e B (`Test_DecisionGolden_MatchesGate`, `minEquityAbs=9990` →
+`gate-minequity.golden.tsv`). Setup: copiar o fixture **e os dois** `*.golden.tsv` para
+`<terminal>\MQL5\Files\MKS-ULTIMATE\golden\`.
+
 ## Pendente
 
-- Automatizar também a **config B** (gate-crossing, `InpMinEquityAbs=9990` → `gate-minequity.golden.tsv`)
-  no mesmo molde do `Test_DecisionGolden` (hoje só a config A está automatizada).
+- Decisão da lacuna de cadência do snapshot (checkpoint §5.1) — item de E2 fora do escopo do golden.
