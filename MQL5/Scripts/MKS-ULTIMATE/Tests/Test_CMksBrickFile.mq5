@@ -233,6 +233,65 @@ void Test_GoldenFileRewrite()
 }
 
 //+------------------------------------------------------------------+
+//| Test 2b (E2.3): ancora da escada (seedMid/seedTickSeq) round-trip  |
+//+------------------------------------------------------------------+
+void Test_SeedRoundtrip()
+{
+   const string path = "MKS-ULTIMATE/test_brickfile_seed.mksbk";
+   DeleteIfExists(path);
+
+   MksRenkoGeometry geom = MksGeometryMedian();
+   MksBrick samples[]; BuildSampleBricks(samples);
+   MksError err;
+   const double seedMid     = 4499.750;
+   const ulong  seedTickSeq = 42;
+
+   CMksBrickFileWriter w;
+   MKS_ASSERT_TRUE(w.Open(path, err), "seed.w.Open");
+   MKS_ASSERT_TRUE(w.WriteHeader("Exness Technologies Ltd", 1, "XAUUSDm", 3, geom, 3.0, err),
+                   "seed.w.WriteHeader");
+   for(int i = 0; i < SAMPLE_N; i++) w.WriteBrick(samples[i], err);
+   w.SetSeed(seedMid, seedTickSeq);            // E2.3: setar antes do Close
+   MKS_ASSERT_TRUE(w.Close(err, 1700000700000), "seed.w.Close");
+
+   CMksBrickFileReader r;
+   MKS_ASSERT_TRUE(r.Open(path, err), "seed.r.Open");
+   MKS_ASSERT_TRUE(r.HasSeed(), "reader.HasSeed=true apos SetSeed");
+   MKS_ASSERT_NEAR_DOUBLE(seedMid, r.SeedMid(), BRICKFILE_DOUBLE_TOL, "reader.SeedMid");
+   MKS_ASSERT_EQ_LONG((long)seedTickSeq, r.SeedTickSeq(), "reader.SeedTickSeq");
+   // Bricks intactos (a seed vive no header, nao toca os records).
+   MKS_ASSERT_EQ_LONG(SAMPLE_N, r.BrickCount(), "seed: bricks intactos");
+   r.Close();
+}
+
+//+------------------------------------------------------------------+
+//| Test 2c (E2.3): sem SetSeed => ancora ausente (0/0), backward-compat|
+//| com arquivos pre-E2.3.                                             |
+//+------------------------------------------------------------------+
+void Test_SeedAbsentWhenNotSet()
+{
+   const string path = "MKS-ULTIMATE/test_brickfile_noseed.mksbk";
+   DeleteIfExists(path);
+
+   MksRenkoGeometry geom = MksGeometryMedian();
+   MksBrick samples[]; BuildSampleBricks(samples);
+   MksError err;
+
+   CMksBrickFileWriter w;
+   w.Open(path, err);
+   w.WriteHeader("B", 1, "S", 2, geom, 1.0, err);
+   for(int i = 0; i < SAMPLE_N; i++) w.WriteBrick(samples[i], err);
+   MKS_ASSERT_TRUE(w.Close(err, 1700000800000), "noseed.w.Close"); // SEM SetSeed
+
+   CMksBrickFileReader r;
+   MKS_ASSERT_TRUE(r.Open(path, err), "noseed.r.Open");
+   MKS_ASSERT_FALSE(r.HasSeed(), "reader.HasSeed=false sem SetSeed");
+   MKS_ASSERT_NEAR_DOUBLE(0.0, r.SeedMid(), BRICKFILE_DOUBLE_TOL, "reader.SeedMid=0");
+   MKS_ASSERT_EQ_LONG(0, r.SeedTickSeq(), "reader.SeedTickSeq=0");
+   r.Close();
+}
+
+//+------------------------------------------------------------------+
 //| Test 3: arquivo com magic inválido é rejeitado                    |
 //+------------------------------------------------------------------+
 void Test_RejectsInvalidMagic()
@@ -317,6 +376,8 @@ void OnStart()
 
    MKS_RUN(Test_RoundtripFields);
    MKS_RUN(Test_GoldenFileRewrite);
+   MKS_RUN(Test_SeedRoundtrip);
+   MKS_RUN(Test_SeedAbsentWhenNotSet);
    MKS_RUN(Test_RejectsInvalidMagic);
    MKS_RUN(Test_ReadBeyondTotalFails);
 

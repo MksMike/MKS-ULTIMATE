@@ -37,6 +37,8 @@ private:
    bool   m_hasFirst;
    bool   m_headerWritten;
    bool   m_closed;
+   double m_seedMid;       // E2.3: ancora da escada (0 = nao setada / ausente)
+   long   m_seedTickSeq;
 
    bool WriteFixedString(const string &s, int fixedLen, MksError &err)
    {
@@ -82,6 +84,19 @@ public:
       m_hasFirst = false;
       m_headerWritten = false;
       m_closed = false;
+      m_seedMid = 0.0;
+      m_seedTickSeq = 0;
+   }
+
+   // E2.3 (nota ADR-024): ancora da escada — seedMid = mid do 1o tick que
+   // semeou o builder; seedTickSeq = seq desse tick. So existe APOS o 1o tick,
+   // entao o composition root a busca do builder (SeedMid/SeedTickSeq) e chama
+   // isto antes do Close/Checkpoint. Nao chamar = 0/0 (= ancora ausente,
+   // backward-compat). Patchada no header (offset 192/200).
+   void SetSeed(double seedMid, ulong seedTickSeq)
+   {
+      m_seedMid     = seedMid;
+      m_seedTickSeq = (long)seedTickSeq;
    }
 
    ~CMksBrickFileWriter()
@@ -240,6 +255,10 @@ public:
       FileWriteLong(m_handle, m_timeMscFirst);
       FileWriteLong(m_handle, m_timeMscLast);
 
+      FileSeek(m_handle, MKS_BRICKFILE_OFF_SEED_MID, SEEK_SET);  // E2.3: ancora
+      FileWriteDouble(m_handle, m_seedMid);
+      FileWriteLong(m_handle, m_seedTickSeq);
+
       FileSeek(m_handle, (long)endPos, SEEK_SET);
       FileFlush(m_handle);
       return true;
@@ -283,6 +302,10 @@ public:
       FileWriteLong(m_handle, m_timeMscFirst);
       FileWriteLong(m_handle, m_timeMscLast);
       FileWriteLong(m_handle, createdAt);
+
+      FileSeek(m_handle, MKS_BRICKFILE_OFF_SEED_MID, SEEK_SET);  // E2.3: ancora
+      FileWriteDouble(m_handle, m_seedMid);
+      FileWriteLong(m_handle, m_seedTickSeq);
 
       FileClose(m_handle);
       m_handle = INVALID_HANDLE;

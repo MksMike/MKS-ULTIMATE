@@ -12,7 +12,7 @@
 //
 // Layout do arquivo .mksbk v1 (little-endian, sem padding entre campos):
 //
-// HEADER (256 bytes, dos quais 200 usados e 56 reservados zero-fill):
+// HEADER (256 bytes, dos quais 208 usados e 48 reservados zero-fill):
 //   off  size  tipo     campo
 //   ---  ----  -------  ---------------------------------------------
 //     0     8  char[8]  magic = "MKSBRK01"
@@ -32,7 +32,15 @@
 //   168     8  int64    timeMscFirst (close do 1º brick)
 //   176     8  int64    timeMscLast  (close do último brick)
 //   184     8  int64    createdAtMsc (TimeCurrent na hora do Close)
-//   192    64  bytes    reserved (zero-fill, header termina em 256)
+//   192     8  double   seedMid     (ancora da escada: mid do 1o tick; 0=ausente) [E2.3]
+//   200     8  int64    seedTickSeq (seq do tick que semeou;         0=ausente) [E2.3]
+//   208    48  bytes    reserved (zero-fill, header termina em 256)
+//
+// Nota E2.3 (extensao da ADR-024, forward-compat): seedMid/seedTickSeq ocupam
+// espaco antes reservado -> arquivos pre-E2.3 leem 0/0 (= "ancora ausente"),
+// formatVersion permanece 1. Sao patchados no Close (a seed so existe apos o
+// 1o tick). Servem para o reader validar que duas series partem do MESMO ponto
+// antes de compara-las (paridade a prova de operador).
 //
 // BRICK RECORD (72 bytes, repetido `brickCount` vezes após o header):
 //   off  size  tipo     campo
@@ -82,5 +90,7 @@
 #define MKS_BRICKFILE_OFF_TIME_FIRST      168
 #define MKS_BRICKFILE_OFF_TIME_LAST       176
 #define MKS_BRICKFILE_OFF_CREATED_AT      184
+#define MKS_BRICKFILE_OFF_SEED_MID        192  // E2.3 (nota ADR-024): ancora da escada
+#define MKS_BRICKFILE_OFF_SEED_TICKSEQ    200  // E2.3: seq do tick que semeou (0=ausente)
 
 #endif // MKS_ULTIMATE_CORE_DATA_BRICKFILEFORMAT_MQH

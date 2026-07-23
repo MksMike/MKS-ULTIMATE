@@ -36,6 +36,8 @@ private:
    long   m_timeMscFirst;
    long   m_timeMscLast;
    long   m_createdAtMsc;
+   double m_seedMid;       // E2.3: ancora da escada (0 = ausente / pre-E2.3)
+   long   m_seedTickSeq;
 
    bool ReadFixedString(int fixedLen, string &out, MksError &err)
    {
@@ -63,6 +65,7 @@ public:
       m_accountLogin = 0; m_digits = 0;
       m_brickSizePoints = 0.0;
       m_brickCount = 0; m_timeMscFirst = 0; m_timeMscLast = 0; m_createdAtMsc = 0;
+      m_seedMid = 0.0; m_seedTickSeq = 0;
    }
 
    ~CMksBrickFileReader()
@@ -149,6 +152,10 @@ public:
       m_timeMscLast  = FileReadLong(m_handle);
       m_createdAtMsc = FileReadLong(m_handle);
 
+      // Seed anchor (E2.3, nota ADR-024). 0/0 = ausente (arquivos pre-E2.3).
+      m_seedMid     = FileReadDouble(m_handle);  // @192
+      m_seedTickSeq = FileReadLong(m_handle);    // @200
+
       // Pula reserved2 até headerSize
       FileSeek(m_handle, MKS_BRICKFILE_HEADER_SIZE, SEEK_SET);
 
@@ -221,6 +228,13 @@ public:
    long   TimeMscFirst()   const { return m_timeMscFirst; }
    long   TimeMscLast()    const { return m_timeMscLast; }
    long   CreatedAtMsc()   const { return m_createdAtMsc; }
+   double SeedMid()        const { return m_seedMid; }       // E2.3 (0 = ausente)
+   long   SeedTickSeq()    const { return m_seedTickSeq; }   // E2.3 (0 = ausente)
+   // Ancora presente se qualquer campo != 0. seedTickSeq e 1-based no feed
+   // atual (Producer g_seq++ inicia em 1) e seedMid e um preco (nunca 0 real);
+   // a OR defende contra um tick source futuro 0-based (achado da verificacao
+   // adversarial E2.3, minor). Ausente = 0/0 (arquivos pre-E2.3).
+   bool   HasSeed()        const { return m_seedTickSeq != 0 || m_seedMid != 0.0; }
    long   BricksRead()     const { return m_bricksRead; }
    bool   HasMore()        const { return m_bricksRead < m_brickCount; }
 };

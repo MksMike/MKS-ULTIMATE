@@ -119,6 +119,33 @@ void Test_Determinism()
 //+------------------------------------------------------------------+
 //| 2. Continuação BULL canônica (median S=10 → degrau 5)             |
 //+------------------------------------------------------------------+
+void Test_SeedCaptured()
+{
+   // E2.3: a ancora da escada = mid e seq do 1o tick que semeia o builder.
+   MksRenkoGeometry geom = MksGeometryClassic();
+   CMksFixedBrickSizer sizer(10.0);
+   CMksCapturingSink sink;
+   CMksRenkoBuilder b(geom, GetPointer(sizer), GetPointer(sink));
+   MksError err;
+
+   MKS_ASSERT_FALSE(b.HasSeed(), "sem tick: HasSeed=false");
+
+   MksTick t0 = MakeTickByMid(2000.0, 7, 1000);
+   b.IngestTick(t0, err);
+   MKS_ASSERT_TRUE(b.HasSeed(), "apos 1o tick: HasSeed=true");
+   MKS_ASSERT_NEAR_DOUBLE(2000.0, b.SeedMid(), 1e-9, "SeedMid = mid do 1o tick");
+   MKS_ASSERT_EQ_ULONG((ulong)7, b.SeedTickSeq(), "SeedTickSeq = seq do 1o tick");
+
+   // Ticks subsequentes (formam bricks) NAO mudam a ancora — a origem da serie
+   // e o que valida comparabilidade, nao os reanchors posteriores.
+   MksTick t1 = MakeTickByMid(2010.0, 8, 2000);
+   MksTick t2 = MakeTickByMid(2020.0, 9, 3000);
+   b.IngestTick(t1, err);
+   b.IngestTick(t2, err);
+   MKS_ASSERT_NEAR_DOUBLE(2000.0, b.SeedMid(), 1e-9, "SeedMid inalterado apos bricks");
+   MKS_ASSERT_EQ_ULONG((ulong)7, b.SeedTickSeq(), "SeedTickSeq inalterado apos bricks");
+}
+
 void Test_BullContinuation()
 {
    MksTick ticks[4];
@@ -868,6 +895,7 @@ void OnStart()
    Print("=== Test_CMksRenkoBuilder ===");
 
    MKS_RUN(Test_Determinism);
+   MKS_RUN(Test_SeedCaptured);
    MKS_RUN(Test_BullContinuation);
    MKS_RUN(Test_BearContinuation);
    MKS_RUN(Test_SimpleReversal);

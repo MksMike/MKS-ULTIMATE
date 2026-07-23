@@ -47,6 +47,8 @@ private:
    int                   m_thresholdLimit;
    int                   m_consecutiveInvalid;
    bool                  m_streamCorrupt;
+   double                m_seedMid;       // E2.3: ancora da escada (mid do 1o tick)
+   ulong                 m_seedTickSeq;   // E2.3: seq do tick que semeou
 
    bool                  m_initialized;
    bool                  m_hasFirstBrick;
@@ -198,6 +200,8 @@ public:
       m_initialized = false;
       m_hasFirstBrick = false;
       m_lastClose = 0.0;
+      m_seedMid = 0.0;       // E2.3
+      m_seedTickSeq = 0;
       m_lastDirection = MKS_BRICK_BULL; // valor inerte até m_hasFirstBrick = true
       m_formingHigh = 0.0;
       m_formingLow = 0.0;
@@ -268,7 +272,9 @@ public:
       {
          m_initialized = true;
          m_lastClose = mid;
-         m_formingHigh = mid;
+         m_seedMid     = mid;        // E2.3: ancora da escada — NAO muda em reanchor
+         m_seedTickSeq = tick.seq;   //       (a origem da serie e o que valida
+         m_formingHigh = mid;        //       comparabilidade entre duas series)
          m_formingLow = mid;
          EmitFormingIfEnabled();
          return true;
@@ -408,6 +414,13 @@ public:
    // true após L ticks inválidos consecutivos terem disparado 104.
    // Sink/EA pode consultar para decidir se ainda confia no feed (ADR-006 §5).
    bool IsStreamCorrupt() const { return m_streamCorrupt; }
+   // E2.3: ancora da escada — mid e seq do 1o tick que semeou o builder. Setada
+   // uma vez na inicializacao; NAO muda em reanchor de gap. Valida apos o 1o
+   // tick (HasSeed). O composition root a grava no header do .mksbk (offset
+   // 192/200) para o reader validar que duas series partem do mesmo ponto.
+   double SeedMid()     const { return m_seedMid; }
+   ulong  SeedTickSeq() const { return m_seedTickSeq; }
+   bool   HasSeed()     const { return m_initialized; }
 
    // Snapshot do brick em formação (ADR-010 §6). Não emite evento;
    // chamador consulta sob demanda. Antes do primeiro tick válido,

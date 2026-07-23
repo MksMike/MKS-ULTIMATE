@@ -1837,6 +1837,14 @@ Existem ainda `MKS_ERR_DATA_TRUNCATED`=804, `_STATE_INVALID`=805, `_FILE_EXISTS`
 
 A ADR-024 não é alterada; esta nota registra a reconciliação dos nomes provisórios contra os códigos reais materializados.
 
+**Nota E2.3 (2026-07-24) — âncora de proveniência no header do `.mksbk`:** o `ROADMAP-CORE-HARDENING` E2.3 pede gravar a **âncora da escada** (`seedMid` + `seedTickSeq`) no header do `.mksbk`, para o reader validar que duas séries partem do MESMO ponto antes de compará-las (paridade à prova de operador). Materialização, **forward-compatible dentro do design da ADR-024** (não é ADR nova):
+- Dois campos no **espaço reservado** do header — `seedMid` (double) em **offset 192**, `seedTickSeq` (int64) em **200**. `formatVersion` permanece **1**; arquivos pré-E2.3 leem **0/0 = "âncora ausente"** (`CMksBrickFileReader.HasSeed()` retorna false). Reservado restante: 208–255.
+- `seedMid` = mid do 1º tick que semeou o builder; `seedTickSeq` = seq desse tick. Setados **uma vez** na inicialização do `CMksRenkoBuilder` (getters `SeedMid()`/`SeedTickSeq()`/`HasSeed()`), **não** mudam em reanchor de gap (a *origem* da série é o que valida comparabilidade).
+- A seed só existe **após o 1º tick**, então é **patchada no `Close`/`Checkpoint`** do writer (mesmo padrão de `brickCount`/`timeMscFirst/Last`), via `CMksBrickFileWriter.SetSeed(...)` chamado pelo composition root (Producer/Replayer) a partir do builder.
+- **`verify-parity` intacto:** dois runs do mesmo feed produzem o mesmo 1º tick → mesma seed → bytes 192–207 idênticos (e a seed passa a *reforçar* a comparação). O campo wall-clock ignorado segue sendo só `createdAtMsc` (184–191).
+- Companheiro no mesmo E2.3: `InpParityRunMode` no Producer agora **fail-fast** se `InpHistoricalFillDays != 0` (o `.mksbk` de paridade só pode ter bricks de ticks live).
+- Pendente do E2.3: snapshot do sizer ATR no header (só relevante quando `InpSizerMode=ATR`; o caminho de paridade atual é classic/fixed).
+
 ---
 
 ### ADR-008: Tratamento de reabertura de mercado (gap de fim-de-semana) no RenkoBuilder

@@ -526,6 +526,9 @@ void FinishReplay()
    long fileBricks = (g_writer != NULL) ? g_writer.BrickCount() : 0;
    if(g_writer != NULL)
    {
+      // E2.3: grava a ancora da escada (seedMid/seedTickSeq) no header antes do Close.
+      if(g_builder != NULL)
+         g_writer.SetSeed(g_builder.SeedMid(), g_builder.SeedTickSeq());
       if(!g_writer.Close(err))
          g_logger.Error("Replayer", "writer.Close failed",
             StringFormat("\"err\":\"%s\"", MksJsonEscape(err.ToString())));
@@ -582,7 +585,12 @@ void OnDeinit(const int reason)
    if(!g_eof && !g_halted)
    {
       MksError err;
-      if(g_writer != NULL) g_writer.Close(err);
+      if(g_writer != NULL)
+      {
+         if(g_builder != NULL)  // E2.3: ancora tambem no fecho por deinit precoce
+            g_writer.SetSeed(g_builder.SeedMid(), g_builder.SeedTickSeq());
+         g_writer.Close(err);
+      }
       if(g_logger != NULL)
       {
          g_logger.Info("Replayer", "deinit before EOF",

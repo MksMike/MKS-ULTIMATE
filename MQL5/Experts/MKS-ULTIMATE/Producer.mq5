@@ -643,6 +643,20 @@ int OnInit()
       StringFormat("\"preset\":\"classic\",\"pro\":%.4f,\"po\":%.4f",
                    geom.pro, geom.po));
 
+   // E2.3: paridade a prova de operador. Em InpParityRunMode o .mksbk deve ter
+   // SO bricks de ticks live (o replay le so o .mkstick, fillDays=0). Com
+   // fillDays>0 o .mksbk incluiria bricks de fill historico que o replay nunca
+   // reproduz -> divergencia garantida. Fail-fast ANTES de abrir qualquer arquivo.
+   if(InpParityRunMode && InpHistoricalFillDays != 0)
+   {
+      Alert(StringFormat("Producer: InpParityRunMode exige InpHistoricalFillDays=0 "
+                         "(atual=%d). Ajuste e reanexe.", InpHistoricalFillDays));
+      g_logger.Error("Producer", "parity requires fillDays=0",
+         StringFormat("\"fillDays\":%d", InpHistoricalFillDays));
+      Cleanup();
+      return INIT_PARAMETERS_INCORRECT;
+   }
+
    if(!g_isTesting) g_panel.UpdateSubtitle("Abrindo arquivo .mksbk...");
 
    // Writer com retry de sufixo numérico em caso de colisão (ADR-014 §4).
@@ -1043,6 +1057,11 @@ void OnTimer()
       if(g_writer != NULL)
       {
          MksError err;
+         // E2.3: ancora tambem nos checkpoints (crash-tolerance simetrica ao
+         // brickCount). SetSeed(0,0) antes do 1o brick e inocuo; apos, carrega
+         // a ancora real para um .mksbk recuperado de crash.
+         if(g_builder != NULL)
+            g_writer.SetSeed(g_builder.SeedMid(), g_builder.SeedTickSeq());
          if(!g_writer.Checkpoint(err) && g_logger != NULL)
             g_logger.Warn("Producer", "brick writer Checkpoint failed",
                StringFormat("\"err\":\"%s\"", MksJsonEscape(err.ToString())));
@@ -1061,6 +1080,8 @@ void OnDeinit(const int reason)
    if(g_writer != NULL)
    {
       MksError err;
+      if(g_builder != NULL)  // E2.3: ancora da escada no header antes do Close
+         g_writer.SetSeed(g_builder.SeedMid(), g_builder.SeedTickSeq());
       if(!g_writer.Close(err) && g_logger != NULL)
          g_logger.Error("Producer", "writer.Close failed",
             StringFormat("\"err\":\"%s\"", MksJsonEscape(err.ToString())));
