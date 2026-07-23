@@ -55,10 +55,19 @@ Ambas as configs deram `verify-parity` **exit 0** entre dois replays independent
 O determinismo da camada de decisão — incluindo o **breaker de conta** — está demonstrado sobre
 feed real. Ver `CHANGELOG.md [Não lançado]` e a Fase E2 de `docs/ROADMAP-CORE-HARDENING.md`.
 
-## Pendente (E2.2 completo)
+## Automatizado (2026-07-24)
 
-- Teste headless automatizado (`Test_RealTickGolden`-equivalente para a DECISÃO) que rode o
-  `CMksDecisionRunner` sobre o fixture e asserte contra estes journals no `TestRunner` — hoje a
-  verificação é o procedimento manual acima (o fixture precisaria ser copiado para `MQL5\Files\`
-  no setup, pois `Files/` é gitignorado).
-- E2.3 (âncora `seedMid`/`seedTickSeq` no header) reforça a proveniência deste bundle.
+- **`Test_RealTickGolden.mq5`** — golden de BRICKS headless (fixture → `CMksRenkoBuilder` →
+  compara records vs `../e2-brick/`).
+- **`Test_DecisionGolden.mq5`** — golden de DECISÃO headless: roda o `CMksDecisionRunner` sobre este
+  fixture (config A) e compara o journal produzido contra `baseline.golden.tsv`, **ignorando as
+  linhas `#`** (mesma normalização do `verify-parity`), falhando o `TestRunner` em divergência.
+  Substitui o procedimento manual acima pela config A. **Setup:** copiar o fixture **e**
+  `baseline.golden.tsv` para `<terminal>\MQL5\Files\MKS-ULTIMATE\golden\` (o `Files/` é gitignorado).
+- A âncora do E2.3 (`seedMid`/`seedTickSeq`) já aparece no header do journal (linha `# ANCHOR`) —
+  ignorada no diff, mas reforça a proveniência.
+
+## Pendente
+
+- Automatizar também a **config B** (gate-crossing, `InpMinEquityAbs=9990` → `gate-minequity.golden.tsv`)
+  no mesmo molde do `Test_DecisionGolden` (hoje só a config A está automatizada).
