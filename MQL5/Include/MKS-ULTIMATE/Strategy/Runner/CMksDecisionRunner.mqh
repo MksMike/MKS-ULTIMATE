@@ -523,6 +523,7 @@ public:
    int    OpenPositions()    const { return (m_simBroker != NULL) ? m_simBroker.OpenPositionsCount() : 0; }
    long   AutoCloseTotal()   const { return (m_simBroker != NULL) ? m_simBroker.AutoCloseTotal() : 0; }
    string JournalPath()      const { return m_cfg.journalPath; }
+   long   DayStartMsc()      const { return (m_snapshot != NULL) ? m_snapshot.DayStartMsc() : 0; } // E2.4: fronteira de dia UTC (feed-driven; observabilidade/teste)
 
    CMksColorReversalMetrics StrategyMetrics() const
    {

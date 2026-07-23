@@ -208,6 +208,69 @@ void Test_Runner_DeterministicAutoClose()
 // (2A) Test_DriveOrder — parte A: a ordem é LOAD-BEARING no nível do
 // simulador. O fill do Send depende do último OnTick.
 //==================================================================
+//==================================================================
+// (1c) E2.4 — rollover do dia UTC dirigido pelo FEED + determinismo na virada
+//==================================================================
+void Test_Runner_MidnightRolloverDeterministic()
+{
+   // E2.4: a fronteira de dia UTC do CMksAccountSnapshot vem do timeMsc do
+   // FEED (CMksFeedClock.SetNow por tick), NAO do wall-clock. Um stream que
+   // cruza 00:00 UTC rola o baseline no feed-midnight, e dois runs do MESMO
+   // stream produzem journals byte-a-byte identicos ATRAVESSANDO a virada.
+   const long MIDNIGHT = 1779494400000; // 00:00 UTC redondo (% 86400000 == 0)
+   const long DAY      = 86400000L;
+
+   // 5 ticks antes + 6 a partir da meia-noite (1s cada); i=5 -> MIDNIGHT.
+   // Mids oscilam 3-em-3 (brick 3.0) formando bricks/flips -> a estrategia decide.
+   double mids[] = {2000, 2003, 2006, 2003, 2000, 2003, 2006, 2003, 2000, 2003, 2006};
+   int n = ArraySize(mids);
+   MksError err;
+
+   string pa = "MKS-ULTIMATE\\Tests\\dr_midnight_a.tsv";
+   string pb = "MKS-ULTIMATE\\Tests\\dr_midnight_b.tsv";
+   FileDelete(pa); FileDelete(pb);
+
+   // --- Run A: observa o rollover cruzando a virada ---
+   MksDecisionRunnerConfig cfgA = MakeCfg(pa, 3000.0, 1);
+   CMksFakeSymbol symA;
+   CMksDecisionRunner runA(GetPointer(symA), cfgA, NULL);
+   MKS_ASSERT_TRUE(runA.Init(err), StringFormat("midnight run A init (%s)", err.ToString()));
+
+   long dayBefore = -1;
+   for(int i = 0; i < n; i++)
+   {
+      long tm = MIDNIGHT - 5000 + (long)i * 1000L;   // i=5 -> MIDNIGHT
+      MksTick t = MakeTick((ulong)(i + 1), tm, mids[i]);
+      runA.OnTick(t);
+      if(tm < MIDNIGHT) dayBefore = runA.DayStartMsc() / DAY; // baseline pre-virada
+   }
+   long dayAfter = runA.DayStartMsc() / DAY;                  // baseline final (pos-virada)
+   runA.Finish();
+
+   MKS_ASSERT_EQ_LONG(MIDNIGHT / DAY - 1, dayBefore,
+                      "baseline no dia UTC PRE-meia-noite (init no 1o tick)");
+   MKS_ASSERT_EQ_LONG(MIDNIGHT / DAY, dayAfter,
+                      "ROLLOVER feed-driven: baseline saltou pro dia POS-meia-noite");
+   MKS_ASSERT_TRUE(runA.JournalEvents() > 0,
+                   "estrategia decidiu na janela (journal nao vazio)");
+
+   // --- Run B: mesmo stream -> journal identico byte-a-byte (determinismo na virada) ---
+   MksDecisionRunnerConfig cfgB = MakeCfg(pb, 3000.0, 1);
+   CMksFakeSymbol symB;
+   CMksDecisionRunner runB(GetPointer(symB), cfgB, NULL);
+   MKS_ASSERT_TRUE(runB.Init(err), StringFormat("midnight run B init (%s)", err.ToString()));
+   for(int i = 0; i < n; i++)
+   {
+      long tm = MIDNIGHT - 5000 + (long)i * 1000L;
+      MksTick t = MakeTick((ulong)(i + 1), tm, mids[i]);
+      runB.OnTick(t);
+   }
+   runB.Finish();
+
+   AssertIdenticalBytes(pa, pb, "midnight-rollover");
+   FileDelete(pa); FileDelete(pb);
+}
+
 void Test_DriveOrder_ContractIsLoadBearing()
 {
    CMksFakeSymbol sym;                       // point=0.01
@@ -293,6 +356,7 @@ void OnStart()
 
    MKS_RUN(Test_Runner_DeterministicFlips);
    MKS_RUN(Test_Runner_DeterministicAutoClose);
+   MKS_RUN(Test_Runner_MidnightRolloverDeterministic);
    MKS_RUN(Test_DriveOrder_ContractIsLoadBearing);
    MKS_RUN(Test_DriveOrder_RunnerRespectsOrder);
 
