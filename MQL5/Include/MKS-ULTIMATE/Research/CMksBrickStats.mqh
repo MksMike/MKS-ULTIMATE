@@ -151,4 +151,64 @@ void MksStatRegime(const int &dir[], int n, int period, double threshold,
    }
 }
 
+// Resultado do trade "ride-to-flip" (a OUTRA metade da equação do edge:
+// não a taxa de acerto, mas o R-múltiplo — quanto ganha vs quanto perde).
+struct MksPayoff
+{
+   int    trades;
+   int    wins;
+   double sumR;      // soma de R (unidades de brick, bruto)
+   double sumR2;     // soma de R² (para desvio/t-stat)
+   double sumWinR;
+   double sumLossR;  // negativo
+   double sumFwd;    // soma do forward-run (bricks até reverter)
+
+   MksPayoff() { trades=0; wins=0; sumR=0; sumR2=0; sumWinR=0; sumLossR=0; sumFwd=0; }
+
+   double EV()      const { return trades > 0 ? sumR / trades : 0.0; }             // EV bruto em bricks
+   double WinRate() const { return trades > 0 ? (double)wins / trades : 0.0; }
+   double AvgWin()  const { return wins > 0 ? sumWinR / wins : 0.0; }
+   double AvgLoss() const { int l=trades-wins; return l > 0 ? sumLossR / l : 0.0; } // negativo
+   double AvgFwd()  const { return trades > 0 ? sumFwd / trades : 0.0; }
+   // EV líquido = bruto − custo (spread/slippage em bricks, por trade).
+   double NetEV(double costBricks) const { return EV() - costBricks; }
+   // t-stat do EV bruto vs 0 (significância de que o EV != 0). >2 ~ 5%.
+   double T() const
+   {
+      if(trades < 2) return 0.0;
+      double m = EV();
+      double var = sumR2 / trades - m * m;
+      if(var <= 0.0) return 0.0;
+      double se = MathSqrt(var) / MathSqrt((double)trades);
+      return (se > 0.0) ? m / se : 0.0;
+   }
+};
+
+// Trade "ride-to-flip": entra no close do brick i (quando signal[i]), corre
+// enquanto a direção continua, SAI no close do 1º brick j>i com dir[j]!=dir[i].
+// R = dir[i]·(close[j]−close[i])/brickSize (bricks; +ganho, −perda). Trades
+// NÃO-SOBREPOSTOS (o próximo entry parte do flip) → independentes, t-stat vale.
+// Sinais no último run (sem flip até o fim) são descartados (trade incompleto).
+void MksStatRideToFlip(const int &dir[], const double &closeArr[], int n,
+                       const bool &signal[], double brickSize, MksPayoff &out)
+{
+   if(brickSize <= 0.0) return;
+   int i = 0;
+   while(i < n - 1)
+   {
+      if(!signal[i]) { i++; continue; }
+      int j = i + 1;
+      while(j < n && dir[j] == dir[i]) j++;
+      if(j >= n) break;                         // sem flip até o fim: descarta
+      double R = (double)dir[i] * (closeArr[j] - closeArr[i]) / brickSize;
+      out.trades++;
+      out.sumR   += R;
+      out.sumR2  += R * R;
+      out.sumFwd += (double)(j - i);
+      if(R > 0.0) { out.wins++; out.sumWinR += R; }
+      else        { out.sumLossR += R; }
+      i = j;                                     // não-sobreposto
+   }
+}
+
 #endif // MKS_ULTIMATE_RESEARCH_CMKSBRICKSTATS_MQH

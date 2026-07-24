@@ -159,11 +159,92 @@ void Test_StatZ()
 }
 
 //+------------------------------------------------------------------+
+//| Payoff — 1 trade vencedor: sobe 2 bricks e reverte → R=+1          |
+//+------------------------------------------------------------------+
+void Test_Payoff_SingleWin()
+{
+   int    dir[]   = {1, 1, 1, -1};
+   double close[] = {100, 103, 106, 103};
+   bool   sig[]   = {true, false, false, false};
+   MksPayoff p;
+   MksStatRideToFlip(dir, close, 4, sig, 3.0, p);
+   MKS_ASSERT_EQ_INT(1, p.trades, "win: 1 trade");
+   MKS_ASSERT_EQ_INT(1, p.wins,   "win: 1 vitoria");
+   MKS_ASSERT_NEAR_DOUBLE(1.0, p.EV(),     1e-9, "win: EV=+1");
+   MKS_ASSERT_NEAR_DOUBLE(3.0, p.AvgFwd(), 1e-9, "win: fwd=3 (correu 3 bricks ate reverter)");
+}
+
+//+------------------------------------------------------------------+
+//| Payoff — 1 trade perdedor: reverte no 1o brick → R=-1             |
+//+------------------------------------------------------------------+
+void Test_Payoff_SingleLoss()
+{
+   int    dir[]   = {1, -1};
+   double close[] = {100, 97};
+   bool   sig[]   = {true, false};
+   MksPayoff p;
+   MksStatRideToFlip(dir, close, 2, sig, 3.0, p);
+   MKS_ASSERT_EQ_INT(1, p.trades, "loss: 1 trade");
+   MKS_ASSERT_EQ_INT(0, p.wins,   "loss: 0 vitoria");
+   MKS_ASSERT_NEAR_DOUBLE(-1.0, p.EV(), 1e-9, "loss: EV=-1");
+}
+
+//+------------------------------------------------------------------+
+//| Payoff — trades NÃO-SOBREPOSTOS: entra, sai no flip, re-entra      |
+//+------------------------------------------------------------------+
+void Test_Payoff_NonOverlap()
+{
+   int    dir[]   = {1, -1, 1, -1};
+   double close[] = {100, 97, 100, 97};
+   bool   sig[]   = {true, true, true, false};
+   MksPayoff p;
+   MksStatRideToFlip(dir, close, 4, sig, 3.0, p);
+   MKS_ASSERT_EQ_INT(3, p.trades, "non-overlap: 3 trades independentes");
+   MKS_ASSERT_NEAR_DOUBLE(-1.0, p.EV(),     1e-9, "non-overlap: EV=-1");
+   MKS_ASSERT_NEAR_DOUBLE(1.0,  p.AvgFwd(), 1e-9, "non-overlap: fwd=1 cada");
+}
+
+//+------------------------------------------------------------------+
+//| Payoff — sinal no ultimo run (sem flip) é descartado              |
+//+------------------------------------------------------------------+
+void Test_Payoff_NoFlipDiscarded()
+{
+   int    dir[]   = {1, 1, 1};
+   double close[] = {100, 103, 106};
+   bool   sig[]   = {true, false, false};
+   MksPayoff p;
+   MksStatRideToFlip(dir, close, 3, sig, 3.0, p);
+   MKS_ASSERT_EQ_INT(0, p.trades, "sem flip ate o fim: trade descartado");
+}
+
+//+------------------------------------------------------------------+
+//| Payoff — mix win+loss: win rate, avgW/avgL, EV                    |
+//+------------------------------------------------------------------+
+void Test_Payoff_WinLossMix()
+{
+   int    dir[]   = {1, 1, 1, -1, 1, -1};
+   double close[] = {100, 103, 106, 103, 100, 97};
+   bool   sig[]   = {true, false, false, false, true, false};
+   MksPayoff p;
+   MksStatRideToFlip(dir, close, 6, sig, 3.0, p);
+   MKS_ASSERT_EQ_INT(2, p.trades, "mix: 2 trades");
+   MKS_ASSERT_NEAR_DOUBLE(0.5,  p.WinRate(), 1e-9, "mix: win rate 0.5");
+   MKS_ASSERT_NEAR_DOUBLE(1.0,  p.AvgWin(),  1e-9, "mix: avgWin=+1");
+   MKS_ASSERT_NEAR_DOUBLE(-1.0, p.AvgLoss(), 1e-9, "mix: avgLoss=-1");
+   MKS_ASSERT_NEAR_DOUBLE(0.0,  p.EV(),      1e-9, "mix: EV=0 (1:1)");
+}
+
+//+------------------------------------------------------------------+
 void OnStart()
 {
    Print("=== Test_CMksBrickStats ===");
 
    MKS_RUN(Test_StatZ);
+   MKS_RUN(Test_Payoff_SingleWin);
+   MKS_RUN(Test_Payoff_SingleLoss);
+   MKS_RUN(Test_Payoff_NonOverlap);
+   MKS_RUN(Test_Payoff_NoFlipDiscarded);
+   MKS_RUN(Test_Payoff_WinLossMix);
    MKS_RUN(Test_RunLength_PureTrend);
    MKS_RUN(Test_RunLength_PureAlternation);
    MKS_RUN(Test_RunLength_Mixed);

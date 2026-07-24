@@ -21,13 +21,7 @@
 #property script_show_inputs
 
 #include <MKS-ULTIMATE/Research/CMksBrickStats.mqh>
-#include <MKS-ULTIMATE/Core/RenkoBuilder/CMksRenkoBuilder.mqh>
-#include <MKS-ULTIMATE/Core/RenkoBuilder/CMksFixedBrickSizer.mqh>
-#include <MKS-ULTIMATE/Core/Types/RenkoGeometry.mqh>
-#include <MKS-ULTIMATE/Core/Types/Tick.mqh>
-#include <MKS-ULTIMATE/Core/Types/Brick.mqh>
-#include <MKS-ULTIMATE/Core/Types/Error.mqh>
-#include <MKS-ULTIMATE/Core/Interfaces/IRenkoSink.mqh>
+#include <MKS-ULTIMATE/Research/CMksBrickSeries.mqh>
 
 input string   InpSymbol        = "";     // vazio => _Symbol
 input datetime InpFrom          = 0;      // 0 => agora - InpDaysBack
@@ -42,44 +36,6 @@ input int      InpMinBricks     = 500;    // abaixo disso, avisa "amostra fina"
 
 int g_digits = 2;
 string Fmt(double p) { return DoubleToString(p, g_digits); }
-
-//--- Coletor de bricks (direção + tempo + magnitude) para as stats.
-class CMksBrickCollector : public IRenkoSink
-{
-public:
-   int  dir[];
-   long t[];
-   int  m[];
-   int  count;
-   int  bull;
-   int  bear;
-   CMksBrickCollector() { count = 0; bull = 0; bear = 0; }
-   void OnBrickClose(const MksBrick &b) override
-   {
-      int idx = count;
-      ArrayResize(dir, idx + 1, 8192);
-      ArrayResize(t,   idx + 1, 8192);
-      ArrayResize(m,   idx + 1, 8192);
-      dir[idx] = b.IsBull() ? 1 : -1;
-      t[idx]   = b.closeTimeMsc;
-      m[idx]   = b.thresholdsCrossed;
-      if(b.IsBull()) bull++; else bear++;
-      count++;
-   }
-};
-
-MksTick ToMksTick(const MqlTick &mt, ulong seq)
-{
-   MksTick t;
-   t.seq     = seq;
-   t.timeMsc = mt.time_msc;
-   t.bid     = mt.bid;
-   t.ask     = mt.ask;
-   t.last    = mt.last;
-   t.volume  = (long)mt.volume;
-   t.flags   = mt.flags;
-   return t;
-}
 
 // Marcador GATED por significância (z), não por |p-0.5| — evita chamar
 // "sinal" o que é só amostra pequena (era a fraqueza da 1a versão).
@@ -139,8 +95,6 @@ void OnStart()
    datetime now  = TimeCurrent();
    datetime from = (InpFrom == 0) ? (datetime)(now - (long)InpDaysBack * 86400) : InpFrom;
    datetime to   = (InpTo   == 0) ? now : InpTo;
-   long fromMsc  = (long)from * 1000;
-   long toMsc    = (long)to   * 1000;
 
    Print("");
    Print("=== CharacterizeMarket (research — busca de edge) ===");
@@ -150,51 +104,9 @@ void OnStart()
                TimeToString(to,   TIME_DATE|TIME_MINUTES),
                Fmt(InpBrickSizePts), InpUtcOffsetHrs);
 
-   //--- Composition (mesmo produtor da produção: classic, fixed S) ---
-   MksRenkoGeometry geom = MksGeometryClassic();
-   CMksFixedBrickSizer sizer(InpBrickSizePts);
-   MksError szErr;
-   if(!sizer.Validate(szErr))
-   {
-      PrintFormat("sizer inválido: %s. Abortando.", szErr.ToString());
-      return;
-   }
-   CMksBrickCollector sink;
-   CMksRenkoBuilder builder(geom, GetPointer(sizer), GetPointer(sink));
-
-   //--- Geração dia-a-dia (memória limitada a 1 dia de ticks por vez) ---
-   const long DAY = 86400000L;
-   ulong seq = 0;
-   long  totalTicks = 0;
-   int   daysData = 0, daysEmpty = 0, dayIdx = 0;
-
-   for(long dayStart = fromMsc; dayStart < toMsc; dayStart += DAY)
-   {
-      long dayEnd = (dayStart + DAY < toMsc) ? (dayStart + DAY) : toMsc;
-      MqlTick ticks[];
-      int nt = CopyTicksRange(symbol, ticks, COPY_TICKS_ALL,
-                              (ulong)dayStart, (ulong)dayEnd);
-      dayIdx++;
-      if(nt <= 0) { daysEmpty++; }
-      else
-      {
-         daysData++;
-         totalTicks += nt;
-         for(int i = 0; i < nt; i++)
-         {
-            seq++;
-            MksTick mt = ToMksTick(ticks[i], seq);
-            MksError err;
-            builder.IngestTick(mt, err); // erros/recovery tratados internamente (E3)
-         }
-      }
-      if((dayIdx % 20) == 0)
-         PrintFormat("... %d dias processados (comData=%d, vazios=%d, bricks=%d)",
-                     dayIdx, daysData, daysEmpty, sink.count);
-   }
-
-   PrintFormat("ticks=%I64d  dias comData=%d vazios=%d  bricks=%d (BULL=%d BEAR=%d)",
-               totalTicks, daysData, daysEmpty, sink.count, sink.bull, sink.bear);
+   //--- Série de bricks do histórico (loader compartilhado; classic S) ---
+   CMksBrickSeriesCollector sink;
+   if(MksLoadBrickSeries(symbol, from, to, InpBrickSizePts, sink) < 0) return;
 
    if(sink.count < 2)
    {
