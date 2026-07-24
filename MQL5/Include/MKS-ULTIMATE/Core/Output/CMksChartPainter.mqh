@@ -4,11 +4,13 @@
 //| @module         : Core / Output
 //| @responsibility : Camada de visualização de TRADES por chart objects
 //|                   (ADR-028). Implementa ITradeVisualizer: setas de
-//|                   entrada/saída + linha conectora colorida por P&L,
-//|                   ancoradas no tempo real do tick disparador. Funciona
-//|                   em qualquer chart-alvo: no live desenha sobre o CS
-//|                   renko (XAUUSDm.MKSCR_*); no tester desenha sobre os
-//|                   candles M1 reais (onde os trades aconteceram).
+//|                   entrada/saída + linha conectora colorida por P&L.
+//|                   Âncora de tempo (AnchorTime): no live, o slot EXATO
+//|                   do último brick fechado no CS (sink.lastBarTime); no
+//|                   tester (sem CS), o tempo real do tick (timeMsc/1000).
+//|                   Funciona em qualquer chart-alvo: no live desenha
+//|                   sobre o CS renko (XAUUSDm.MKSCR_*); no tester sobre
+//|                   os candles M1 reais (onde os trades aconteceram).
 //|                   NÃO desenha bricks — renko é responsabilidade do CS
 //|                   (live) ou do visualizador de backtest (.mksbk → CS).
 //|                   Tentar fingir bricks no chart de tempo real do tester
@@ -56,10 +58,11 @@ struct MksChartPainterStyle
    }
 };
 
-// Desenha marcadores de trade como chart objects, ancorados no TEMPO REAL
-// (timeMsc/1000) do tick disparador. No live o MT5 encaixa o marcador na
-// barra do CS via timeline híbrida (ADR-023); no tester encaixa no candle
-// M1 correspondente. Entrada: seta ▲ (BUY azul) / ▼ (SELL laranja).
+// Desenha marcadores de trade como chart objects. Âncora de tempo via
+// AnchorTime: no LIVE, o slot do último brick fechado no CS (sink.lastBarTime,
+// timeline híbrida ADR-023) — NÃO o tempo real cru, que cairia na barra
+// parcial/fantasma; no TESTER (sem sink), o tempo real do tick (timeMsc/1000)
+// mapeia direto no candle M1. Entrada: seta ▲ (BUY azul) / ▼ (SELL laranja).
 // Saída: seta ✗ + linha conectora entrada→saída colorida por P&L (verde
 // lucro, vermelho prejuízo).
 class CMksChartPainter : public ITradeVisualizer

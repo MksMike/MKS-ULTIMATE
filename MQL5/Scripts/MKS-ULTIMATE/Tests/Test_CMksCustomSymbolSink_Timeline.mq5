@@ -3,12 +3,12 @@
 //| @project        : MKS-ULTIMATE
 //| @module         : Scripts / MKS-ULTIMATE / Tests
 //| @responsibility : Testes da timeline híbrida do Custom Symbol
-//|                   (ADR-023) + teto de drift (ADR-023-A). Valida a
-//|                   função pura CMksCustomSymbolSink::ComputeBrickTime
-//|                   nos cenários calmo / bump / cap / autocura, e o
-//|                   teste de regressão do runaway que matou o CS em
-//|                   2026-05-29 (bump sustentado → barra no futuro além
-//|                   do limite do MT5).
+//|                   (ADR-023) + teto de drift (ADR-023-A). Valida as
+//|                   funções puras CMksCustomSymbolSink::ComputeBrickTime
+//|                   (calmo / bump / cap / autocura + regressão do runaway
+//|                   que matou o CS em 2026-05-29) e ApplyCloseTimeline
+//|                   (E7.2: lastBarTime/nextBarTime só avançam no sucesso
+//|                   do CustomRatesUpdate — falha não deriva a timeline).
 //| @depends_on     : Core/Output/CMksCustomSymbolSink.mqh,
 //|                   Core/Testing/Asserts.mqh
 //| @install_path   : MQL5/Scripts/MKS-ULTIMATE/Tests/Test_CMksCustomSymbolSink_Timeline.mq5
@@ -193,6 +193,61 @@ void Test_BoxBodyBoundsAreBodyExtremes()
 }
 
 //+------------------------------------------------------------------+
+//| Test 13: ApplyCloseTimeline — SUCESSO avança lastBarTime E         |
+//| nextBarTime (âncora no slot gravado + próximo slot mínimo).         |
+//+------------------------------------------------------------------+
+void Test_ApplyCloseTimeline_SuccessAdvancesBoth()
+{
+   datetime last = (datetime)(BASE - 500);
+   datetime next = (datetime)(BASE - 440);
+   CMksCustomSymbolSink::ApplyCloseTimeline(true, (datetime)BASE, last, next);
+   MKS_ASSERT_EQ_LONG(BASE,      last, "success: lastBarTime = brickTime gravado");
+   MKS_ASSERT_EQ_LONG(BASE + 60, next, "success: nextBarTime = brickTime + 60");
+}
+
+//+------------------------------------------------------------------+
+//| Test 14: ApplyCloseTimeline — FALHA mantém AMBOS os slots (não      |
+//| ancora o painter em barra vazia, não deriva a timeline).            |
+//| Regressão do finding cs-recovery-advances-timeline-on-fail.         |
+//+------------------------------------------------------------------+
+void Test_ApplyCloseTimeline_FailureKeepsBoth()
+{
+   datetime last = (datetime)(BASE - 500);
+   datetime next = (datetime)(BASE - 440);
+   CMksCustomSymbolSink::ApplyCloseTimeline(false, (datetime)BASE, last, next);
+   MKS_ASSERT_EQ_LONG(BASE - 500, last, "fail: lastBarTime NAO avança (âncora do painter)");
+   MKS_ASSERT_EQ_LONG(BASE - 440, next, "fail: nextBarTime NAO avança (timeline não deriva)");
+}
+
+//+------------------------------------------------------------------+
+//| Test 15: sequência sucesso→FALHA→sucesso — a falha NÃO consome o    |
+//| slot nem empurra a timeline; o brick seguinte reusa o slot (sem     |
+//| buraco). Contraste com o bug antigo (next avançava na falha).       |
+//+------------------------------------------------------------------+
+void Test_ApplyCloseTimeline_FailDoesNotDriftTimeline()
+{
+   // Brick 1 sucesso no slot BASE → last=BASE, next=BASE+60.
+   datetime last = 0, next = 0;
+   CMksCustomSymbolSink::ApplyCloseTimeline(true, (datetime)BASE, last, next);
+   MKS_ASSERT_EQ_LONG(BASE,      last, "b1 ok: last=BASE");
+   MKS_ASSERT_EQ_LONG(BASE + 60, next, "b1 ok: next=BASE+60");
+
+   // Brick 2 FALHA (mesmo minuto real → brickTime seria o bump BASE+60). Com a
+   // falha, NEM last NEM next mexem: o slot BASE+60 não é consumido por uma
+   // barra que não foi gravada.
+   CMksCustomSymbolSink::ApplyCloseTimeline(false, (datetime)(BASE + 60), last, next);
+   MKS_ASSERT_EQ_LONG(BASE,      last, "b2 fail: last continua BASE (última barra REAL)");
+   MKS_ASSERT_EQ_LONG(BASE + 60, next, "b2 fail: next continua BASE+60 (sem drift)");
+
+   // Brick 3 sucesso REUSA o slot BASE+60 (a falha não empurrou a timeline).
+   // No bug antigo, next teria virado BASE+120 na falha e o brick 3 pularia um
+   // slot, abrindo buraco na série.
+   CMksCustomSymbolSink::ApplyCloseTimeline(true, (datetime)(BASE + 60), last, next);
+   MKS_ASSERT_EQ_LONG(BASE + 60,  last, "b3 ok: last=BASE+60 (slot reusado, sem buraco)");
+   MKS_ASSERT_EQ_LONG(BASE + 120, next, "b3 ok: next=BASE+120");
+}
+
+//+------------------------------------------------------------------+
 void OnStart()
 {
    Print("=== Test_CMksCustomSymbolSink_Timeline ===");
@@ -210,6 +265,10 @@ void OnStart()
    MKS_RUN(Test_GuardRejectsEpochZeroBarTime);
    MKS_RUN(Test_CloseNeverEmitsEpochForValidTick);
    MKS_RUN(Test_BoxBodyBoundsAreBodyExtremes);
+
+   MKS_RUN(Test_ApplyCloseTimeline_SuccessAdvancesBoth);
+   MKS_RUN(Test_ApplyCloseTimeline_FailureKeepsBoth);
+   MKS_RUN(Test_ApplyCloseTimeline_FailDoesNotDriftTimeline);
 
    g_mksTestRunner.Summary();
 }

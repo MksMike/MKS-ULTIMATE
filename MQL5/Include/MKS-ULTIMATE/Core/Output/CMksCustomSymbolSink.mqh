@@ -6,10 +6,13 @@
 //|                   barra no Custom Symbol via CustomRatesUpdate
 //|                   (ADR-020). Bricks fechados são caixinhas sem
 //|                   wicks (regra 3). A cada tick, OnBrickForming
-//|                   também atualiza a bar parcial no slot do próximo
-//|                   brick — com wicks (excursão), close = mid atual
-//|                   (ADR-021). Quando o brick fecha, OnBrickClose
-//|                   sobrescreve esse slot com a bar definitiva.
+//|                   atualiza a bar parcial no slot nextBarTime — com
+//|                   wicks (excursão), close = mid atual (ADR-021). Ao
+//|                   fechar, OnBrickClose grava em ComputeBrickTime: em
+//|                   mercado frenético (bump vence) sobrescreve o slot
+//|                   da parcial; em mercado calmo (realTime vence) grava
+//|                   num slot À FRENTE e a parcial fica órfã no slot
+//|                   anterior (aceito, ADR-023 r.3 — o .mksbk é a verdade).
 //| @depends_on     : Core/Interfaces/IRenkoSink.mqh, Core/Types/Brick.mqh
 //| @install_path   : MQL5/Include/MKS-ULTIMATE/Core/Output/CMksCustomSymbolSink.mqh
 //+------------------------------------------------------------------+
@@ -55,7 +58,8 @@ public:
    datetime lastBarTime;   // ADR-028: slot atribuído ao último brick fechado (âncora p/ marcadores)
    double   brickSizePts;  // ADR-022 regra 8: tamanho VISUAL full do brick
    int      barsPushed;
-   int      updateFailures;
+   int      updateFailures;      // agregado (close + forming) — consumido pelo relatório do EA
+   int      formingUpdateFailures; // só forming: gate do log da 1ª falha (E7.2, sinal precoce)
    int      formingSuppressed;  // barras parciais puladas por nextBarTime<=0 (guard time=0, 2026-07-22)
    int      invalidTimeDropped; // bricks descartados do desenho por brickTime<=0 (defesa)
    bool     showWicks;     // ADR-022 regra 3: false (default) = caixinhas;
@@ -72,6 +76,7 @@ public:
       brickSizePts       = 0.0;
       barsPushed         = 0;
       updateFailures     = 0;
+      formingUpdateFailures = 0;
       formingSuppressed  = 0;
       invalidTimeDropped = 0;
       showWicks          = false;
@@ -115,6 +120,22 @@ public:
    // testáveis sem CS.
    static double BoxBodyHigh(double open, double close) { return MathMax(open, close); }
    static double BoxBodyLow (double open, double close) { return MathMin(open, close); }
+
+   // Transição pura da timeline após UMA tentativa de gravar a barra do brick
+   // fechado (finding cs-recovery-advances-timeline-on-fail). SUCESSO (ok) →
+   // ancora lastBarTime no slot gravado e prepara o próximo slot mínimo (+60s).
+   // FALHA (!ok) → NÃO mexe em lastBarTime NEM em nextBarTime: ambos mantêm o
+   // slot da última barra REAL. Assim o painter (ADR-028) nunca ancora em slot
+   // vazio e a timeline não deriva pro futuro alimentando o runaway do bump que
+   // matava o CS. Não congela nada: no próximo brick de mercado calmo/recuperado
+   // o realTime volta a vencer em ComputeBrickTime. Testável sem Custom Symbol.
+   static void ApplyCloseTimeline(bool ok, datetime brickTime,
+                                  datetime &lastBarTime, datetime &nextBarTime)
+   {
+      if(!ok) return;                                 // falha: mantém os dois slots
+      lastBarTime = brickTime;
+      nextBarTime = (datetime)((long)brickTime + 60); // próximo slot mínimo
+   }
 
    void OnBrickClose(const MksBrick &brick) override
    {
@@ -183,28 +204,30 @@ public:
          if(SymbolSelect(csName, true))
             n = CustomRatesUpdate(csName, rates);
       }
-      if(n < 0)
+      bool ok = (n >= 0);
+      if(ok)
+         barsPushed++;
+      else
       {
          updateFailures++;
          if(updateFailures == 1 || (updateFailures % 500) == 0)
             PrintFormat("CS UPDATE FAIL (#%d): lastErr=%d",
                         updateFailures, GetLastError());
       }
-      else
-      {
-         barsPushed++;
-         lastBarTime = brickTime;   // ADR-028: âncora p/ marcadores — SÓ em barra efetivamente gravada (auditoria 2026-07-22)
-      }
-      // nextBarTime avança mesmo em falha (não travar a timeline); lastBarTime NÃO
-      // (senão o marcador da ADR-028 ancora num slot sem barra).
-      nextBarTime = (datetime)((long)brickTime + 60);           // próximo slot mínimo
+      // E7.2 / cs-recovery-advances-timeline-on-fail: lastBarTime E nextBarTime
+      // só avançam no SUCESSO. Em falha, ambos mantêm o slot da última barra
+      // real — o painter (ADR-028) não ancora em slot vazio e a timeline não
+      // deriva pro futuro (o runaway do bump). Ver ApplyCloseTimeline.
+      ApplyCloseTimeline(ok, brickTime, lastBarTime, nextBarTime);
    }
 
    // ADR-021: a cada tick, atualiza a bar PARCIAL no slot atual de
    // nextBarTime (a próxima bar, ainda não confirmada por brick fechado).
    // RESPEITA showWicks (igual ao OnBrickClose): com wicks o parcial mostra a
-   // excursão; sem, caixinha limpa. Quando o brick fechar, OnBrickClose
-   // sobrescreve este slot com a bar definitiva e incrementa nextBarTime.
+   // excursão; sem, caixinha limpa. Ao fechar, OnBrickClose grava em
+   // ComputeBrickTime: em mercado frenético (bump) sobrescreve ESTE slot com a
+   // bar definitiva; em mercado calmo (realTime vence) grava num slot à frente e
+   // esta parcial fica órfã aqui (aceito, ADR-023 r.3).
    void OnBrickForming(const MksFormingBrick &fb) override
    {
       if(!fb.hasData) return;
@@ -248,7 +271,14 @@ public:
       if(n < 0)
       {
          updateFailures++;
-         // Sem log a cada tick — emit failures vai pro contador.
+         formingUpdateFailures++;
+         // E7.2 / cs-forming-no-recovery-asymmetry: o forming roda a cada tick e
+         // é o sinal MAIS PRECOCE da morte do CS. Loga só a 1ª falha (contador
+         // dedicado, independente do close) — captura o instante exato da recusa
+         // do container sem poluir o log a cada tick.
+         if(formingUpdateFailures == 1)
+            PrintFormat("[CS] FORMING UPDATE FAIL (1a): lastErr=%d slot=%I64d cs=%s",
+                        GetLastError(), (long)nextBarTime, csName);
       }
    }
 };

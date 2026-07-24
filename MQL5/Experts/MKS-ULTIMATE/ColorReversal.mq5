@@ -349,6 +349,38 @@ bool EnsureCustomSymbolReady(const string &cs, ISymbol *src, MksError &err)
 }
 
 //+------------------------------------------------------------------+
+//| Recupera um CS CORROMPIDO: o wipe (CustomRatesDelete) deu erro —   |
+//| sinal de arquivo de histórico podre (ex.: containers em 1970.01.01 |
+//| de um crash/run antiga; o MT5 recusa apagar e atualizar). Fecha    |
+//| charts do CS, deseleciona do Market Watch, APAGA o símbolo (limpa  |
+//| o arquivo no disco) e recria limpo. Se nem recriar der (chart do   |
+//| CS travado que não fecha a tempo — ChartClose é assíncrono),        |
+//| retorna false e o caller ALERTA e segue SEM CS (o CS é visual-only, |
+//| ADR-020, NUNCA bloqueia o trading). NUNCA fecha o chart do próprio  |
+//| EA (roda no símbolo real). Espelha Producer.RecreateCorrupted*.    |
+//+------------------------------------------------------------------+
+bool RecreateCorruptedCustomSymbol(const string &cs, ISymbol *src, MksError &err)
+{
+   long chId = ChartFirst();
+   while(chId >= 0)
+   {
+      long nextId = ChartNext(chId);
+      if(chId != ChartID() && ChartSymbol(chId) == cs)
+         ChartClose(chId);
+      chId = nextId;
+   }
+   SymbolSelect(cs, false); // CustomSymbolDelete exige não-selecionado no MW
+   if(!CustomSymbolDelete(cs))
+   {
+      MKS_SET_ERROR(err, MKS_ERR_DATA_FILE_IO,
+                    "CustomSymbolDelete falhou (CS corrompido ainda em uso?)",
+                    StringFormat("cs=%s lastErr=%d", cs, GetLastError()));
+      return false;
+   }
+   return EnsureCustomSymbolReady(cs, src, err); // recria do zero
+}
+
+//+------------------------------------------------------------------+
 //| Cleanup — libera todos os ponteiros heap-alocados                 |
 //+------------------------------------------------------------------+
 void Cleanup()
@@ -615,32 +647,70 @@ int OnInit()
          return INIT_FAILED;
       }
       if(InpResetCustomSymbolBars)
+      {
+         // Mede o ERRO do wipe, não o retorno (espelha o Producer): um CS vazio
+         // devolve "nada a apagar" com lastErr==0 (benigno); um CS CORROMPIDO
+         // (barras em 1970 de run antiga) devolve erro real (ex.: 4102 — o MT5
+         // recusa apagar barras inválidas). O erro é o sinal confiável.
+         ResetLastError();
          CustomRatesDelete(g_csName, 0, LONG_MAX);
+         int wipeErr = GetLastError();
+         if(wipeErr != 0)
+         {
+            // CS corrompido → auto-cura (fecha chart do CS, deseleciona, apaga,
+            // recria limpo). DIFERENTE do Producer: se a auto-cura falhar, NÃO
+            // faz INIT_FAILED — o CS é visual-only (ADR-020) e NUNCA bloqueia o
+            // trading. Alerta alto e segue SEM CS (sink inerte, csName vazio).
+            g_logger.Warn("ColorReversal",
+               "CustomRatesDelete erro — CS corrompido? auto-recriando limpo",
+               StringFormat("\"lastErr\":%d", wipeErr));
+            MksError recErr;
+            if(RecreateCorruptedCustomSymbol(g_csName, g_iSymbol, recErr))
+               g_logger.Info("ColorReversal",
+                  "CS corrompido recriado limpo (auto-recovery)", "");
+            else
+            {
+               g_logger.Error("ColorReversal",
+                  "auto-recovery do CS falhou — SEGUINDO SEM CS (trading não bloqueia)",
+                  StringFormat("\"err\":\"%s\"", MksJsonEscape(recErr.ToString())));
+               Alert(StringFormat(
+                  "ColorReversal: Custom Symbol '%s' corrompido e NAO pode ser "
+                  "recriado (grafico do CS aberto?). O TRADING SEGUE NORMAL; a "
+                  "visualizacao renko fica OFF. Feche os graficos de '%s' e "
+                  "reanexe p/ restaurar o CS.", g_csName, g_csName));
+               g_csName = ""; // desliga o CS — sink fica inerte (early return)
+            }
+         }
+      }
 
       // Auto-open do chart do CS (ADR-022 §6) — UX: o operador não precisa
       // arrastar do Market Watch. Reusa um chart já aberto do CS se houver
       // (evita spam de janelas em re-init); senão abre um novo em M1. Só no
-      // live (no tester ChartOpen de CS não se aplica).
-      long existing = FindChartIdBySymbol(g_csName);
-      if(existing >= 0)
+      // live (no tester ChartOpen de CS não se aplica). Pulado se a auto-cura
+      // desligou o CS (csName vazio) — sem CS não há chart pra abrir.
+      if(StringLen(g_csName) > 0)
       {
-         g_csChartId = existing;
-      }
-      else
-      {
-         g_csChartId = (long)ChartOpen(g_csName, PERIOD_M1);
-         if(g_csChartId == 0)
+         long existing = FindChartIdBySymbol(g_csName);
+         if(existing >= 0)
          {
-            g_logger.Warn("ColorReversal", "ChartOpen do CS falhou (segue sem auto-open)",
-               StringFormat("\"cs\":\"%s\",\"lastErr\":%d",
-                            MksJsonEscape(g_csName), GetLastError()));
-            g_csChartId = -1;
+            g_csChartId = existing;
          }
          else
          {
-            g_logger.Info("ColorReversal", "cs chart aberto",
-               StringFormat("\"cs\":\"%s\",\"chartId\":%I64d",
-                            MksJsonEscape(g_csName), g_csChartId));
+            g_csChartId = (long)ChartOpen(g_csName, PERIOD_M1);
+            if(g_csChartId == 0)
+            {
+               g_logger.Warn("ColorReversal", "ChartOpen do CS falhou (segue sem auto-open)",
+                  StringFormat("\"cs\":\"%s\",\"lastErr\":%d",
+                               MksJsonEscape(g_csName), GetLastError()));
+               g_csChartId = -1;
+            }
+            else
+            {
+               g_logger.Info("ColorReversal", "cs chart aberto",
+                  StringFormat("\"cs\":\"%s\",\"chartId\":%I64d",
+                               MksJsonEscape(g_csName), g_csChartId));
+            }
          }
       }
    }

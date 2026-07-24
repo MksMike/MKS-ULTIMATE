@@ -203,8 +203,10 @@ Referência cruzada: os IDs entre colchetes (ex.: `[H1]`, `[M9]`, `[cs-recovery-
 
 ## Fase E7 — Custom Symbol: gate empírico
 
-**Status:** Em andamento (4 fixes aplicados; sobrevivência à meia-noite pendente de dado)
+**Status:** Em andamento — **E7.2 FECHADO** (2026-07-24, `compile-all` 54/54; **MT5-verde: `Test_CMksCustomSymbolSink_Timeline` 529/529, 15 tests, 0 failed**). Restam **E7.1** (sobrevivência à meia-noite, pende de DADO) e **E7.3** (ADR-031, bloqueada por E7.1).
 **Paralela; pré-requisito de E8.**
+
+**Nota (E7.2, 2026-07-24):** os 4 achados de robustez do sink na falha foram fechados. O núcleo: a transição da timeline virou função pura `CMksCustomSymbolSink::ApplyCloseTimeline` — `lastBarTime` E `nextBarTime` só avançam no SUCESSO do `CustomRatesUpdate` (`[cs-recovery-advances-timeline-on-fail]`), com +3 testes de regressão (rodam sem CS). `OnBrickForming` loga a 1ª falha via contador dedicado (`[cs-forming-no-recovery-asymmetry]`). Headers do sink e do painter corrigidos (`[cs-forming-bar-orphan-vs-doc]`, `[cs-painter-discards-real-timemsc]`). Ver `CHANGELOG.md [Não lançado]`. Paridade intocada (CS visual-only, ADR-020).
 
 **Por que importa:** o CS é **visual** (a estratégia não o lê — invariante ADR-020 §1, verificado). Mas a "cura" da morte à meia-noite é hipótese até o dado existir, e a fundação de indicadores depende de o CS ser confiável (ou de migrar para `IRenkoIndicator`).
 
@@ -212,10 +214,10 @@ Referência cruzada: os IDs entre colchetes (ex.: `[H1]`, `[M9]`, `[cs-recovery-
 
 - **E7.1 — Validar a sobrevivência à virada de dia** `[cs-midnight-survival-unverified, cs-spec-wipe-vs-explicit-wipe]`
   - Rodar o gate empírico cruzando ≥1 meia-noite de servidor (06-02→06-03) e idealmente um fim de semana, com **0 `CS UPDATE FAIL`**; rodar ao menos uma vez com `InpResetCustomSymbolBars=false` para isolar o fix (b) (persistência do histórico) do efeito de wipe+refill.
-- **E7.2 — Robustez do sink na falha** `[cs-recovery-advances-timeline-on-fail, cs-forming-no-recovery-asymmetry, cs-forming-bar-orphan-vs-doc, cs-painter-discards-real-timemsc]`
-  - Só avançar `lastBarTime`/`nextBarTime` no ramo de **sucesso** do `CustomRatesUpdate` (em falha, manter o slot anterior — painter ancora na última barra real).
-  - Logar a 1ª falha de `OnBrickForming` (captura o instante exato da recusa do container).
-  - Corrigir comentários do sink/painter para refletir o comportamento real (bar parcial órfã em mercado calmo; ancoragem em `lastBarTime` em live).
+- **E7.2 — Robustez do sink na falha** `[cs-recovery-advances-timeline-on-fail, cs-forming-no-recovery-asymmetry, cs-forming-bar-orphan-vs-doc, cs-painter-discards-real-timemsc]` — ✅ **feito (2026-07-24)**
+  - ✅ Só avançar `lastBarTime`/`nextBarTime` no ramo de **sucesso** do `CustomRatesUpdate` (em falha, manter o slot anterior — painter ancora na última barra real). → função pura `ApplyCloseTimeline` + 3 testes de regressão.
+  - ✅ Logar a 1ª falha de `OnBrickForming` (captura o instante exato da recusa do container). → contador dedicado `formingUpdateFailures`.
+  - ✅ Corrigir comentários do sink/painter para refletir o comportamento real (bar parcial órfã em mercado calmo; ancoragem em `lastBarTime` em live).
 - **E7.3 — Redigir a ADR-031 com o dado**
   - Com o gate cumprido, redigir formalmente a ADR-031 ("manter+corrigir o CS") — hoje só referenciada, ainda não escrita.
 
