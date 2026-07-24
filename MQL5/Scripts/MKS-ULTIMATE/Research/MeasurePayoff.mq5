@@ -28,6 +28,7 @@ input int      InpUtcOffsetHrs = -3;     // servidor→UTC
 input int      InpRegimePeriod = 20;
 input double   InpRegimeThresh = 0.6;
 input double   InpCostBricks   = 0.10;   // custo por trade em bricks (spread+slip; 240pt≈0.08 brick @S=3)
+input int      InpTimeWindows  = 6;      // nº de janelas temporais p/ checar ESTACIONARIDADE do EV
 
 // Constrói os 4 masks de entrada (all / trend / vol média / 21h) sobre a série.
 void BuildMasks(const int &dir[], const long &t[], int n, int offset,
@@ -88,6 +89,40 @@ void ReportMask(string label, const int &dir[], const double &cl[], int n,
                tr.NetEV(cost), te.NetEV(cost), PayoffVerdict(tr, te));
 }
 
+// ESTACIONARIDADE: quebra a série em K janelas de tempo (contagem igual) e
+// mede o EVnet do "ride momentum" (mask=all) em cada uma. Um edge REAL é
+// positivo em TODAS; um artefato de tendência antiga é positivo só nas velhas.
+// Esta é a checagem que separa "edge" de "peguei uma tendência no backtest".
+void ReportStationarity(const int &dir[], const double &cl[], const long &tm[],
+                        int n, int K, double S, double cost)
+{
+   int posWins = 0;
+   for(int w = 0; w < K; w++)
+   {
+      int a = (int)((long)w * n / K);
+      int b = (int)((long)(w + 1) * n / K);
+      int wn = b - a;
+      if(wn < 10) continue;
+      int    wdir[]; double wcl[]; bool wmask[];
+      ArrayResize(wdir, wn); ArrayResize(wcl, wn); ArrayResize(wmask, wn);
+      ArrayCopy(wdir, dir, 0, a, wn);
+      ArrayCopy(wcl,  cl,  0, a, wn);
+      for(int i = 0; i < wn; i++) wmask[i] = true;
+      MksPayoff p;
+      MksStatRideToFlip(wdir, wcl, wn, wmask, S, p);
+      double ev = p.NetEV(cost);
+      if(ev > 0) posWins++;
+      PrintFormat("  win%d [%s .. %s] EVnet=%+.3f t=%+.1f N=%d%s",
+                  w + 1,
+                  TimeToString((datetime)(tm[a] / 1000), TIME_DATE),
+                  TimeToString((datetime)(tm[b - 1] / 1000), TIME_DATE),
+                  ev, p.T(), p.trades, (ev > 0 ? "" : "   <== NEGATIVO"));
+   }
+   PrintFormat("  >>> %d de %d janelas positivas. %s", posWins, K,
+               (posWins == K) ? "ESTACIONARIO (positivo em todas)"
+                              : "NAO-ESTACIONARIO (edge concentrado — cuidado)");
+}
+
 void OnStart()
 {
    string symbol = (StringLen(InpSymbol) > 0) ? InpSymbol : _Symbol;
@@ -134,6 +169,11 @@ void OnStart()
    ReportMask("vol-media",  sink.dir, sink.close, n, mVolMid, nTr, trDir, trCl, trVolMid, teDir, teCl, teVolMid, InpBrickSizePts, InpCostBricks);
    ReportMask("hora-21",    sink.dir, sink.close, n, mH21,    nTr, trDir, trCl, trH21,    teDir, teCl, teH21,    InpBrickSizePts, InpCostBricks);
 
+   Print("");
+   PrintFormat("=== ESTACIONARIDADE — EVnet (ride momentum, mask=all) por %d janelas ===", InpTimeWindows);
+   Print("  edge REAL = positivo em TODAS; artefato de tendencia = positivo so nas antigas.");
+   ReportStationarity(sink.dir, sink.close, sink.t, n, InpTimeWindows, InpBrickSizePts, InpCostBricks);
+
    //--- TSV ---
    FolderCreate("MKS-ULTIMATE\\Research");
    string path = StringFormat("MKS-ULTIMATE\\Research\\payoff_%s.tsv", symbol);
@@ -154,6 +194,22 @@ void OnStart()
          FileWrite(fh, StringFormat("%s\t%d\t%.4f\t%.4f\t%.4f\t%.2f\t%.4f\t%.4f\t%.4f",
                    labels[mi], p.trades, p.WinRate(), p.EV(), p.NetEV(InpCostBricks),
                    p.T(), p.AvgWin(), p.AvgLoss(), p.AvgFwd()));
+      }
+      FileWrite(fh, "statwin\tfrom\tto\tev_net\tt\ttrades");
+      for(int w = 0; w < InpTimeWindows; w++)
+      {
+         int a = (int)((long)w * n / InpTimeWindows);
+         int b = (int)((long)(w + 1) * n / InpTimeWindows);
+         int wn = b - a; if(wn < 10) continue;
+         int wdir[]; double wcl[]; bool wmask[];
+         ArrayResize(wdir, wn); ArrayResize(wcl, wn); ArrayResize(wmask, wn);
+         ArrayCopy(wdir, sink.dir, 0, a, wn); ArrayCopy(wcl, sink.close, 0, a, wn);
+         for(int i = 0; i < wn; i++) wmask[i] = true;
+         MksPayoff wp; MksStatRideToFlip(wdir, wcl, wn, wmask, InpBrickSizePts, wp);
+         FileWrite(fh, StringFormat("statwin\t%s\t%s\t%.4f\t%.2f\t%d",
+                   TimeToString((datetime)(sink.t[a] / 1000)),
+                   TimeToString((datetime)(sink.t[b - 1] / 1000)),
+                   wp.NetEV(InpCostBricks), wp.T(), wp.trades));
       }
       FileClose(fh);
       PrintFormat("TSV: %s\\MQL5\\Files\\%s", TerminalInfoString(TERMINAL_DATA_PATH), path);
