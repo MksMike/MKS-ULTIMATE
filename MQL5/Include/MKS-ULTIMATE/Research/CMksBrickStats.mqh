@@ -1,0 +1,154 @@
+//+------------------------------------------------------------------+
+//| @file           : CMksBrickStats.mqh
+//| @project        : MKS-ULTIMATE
+//| @module         : Research
+//| @responsibility : Medições estatísticas PURAS sobre uma série de
+//|                   bricks fechados, para DESCOBERTA DE EDGE (research-
+//|                   only, NÃO toca o caminho de trading/paridade). Cada
+//|                   função condiciona a transição brick[i-1]→brick[i]
+//|                   ("continua" = mesma direção) a um contexto do brick
+//|                   i-1: run-length, hora do dia, volatilidade, regime.
+//|                   Desvio de P(continua) vs 0.5 (random walk) = candidato
+//|                   a edge. Puras → testáveis sem MT5 (um bug aqui = edge
+//|                   falso, o modo de falha que o projeto existe pra matar).
+//| @depends_on     : Core/Sensors/Regime/CMksReversalRegime.mqh
+//| @install_path   : MQL5/Include/MKS-ULTIMATE/Research/CMksBrickStats.mqh
+//+------------------------------------------------------------------+
+#ifndef MKS_ULTIMATE_RESEARCH_CMKSBRICKSTATS_MQH
+#define MKS_ULTIMATE_RESEARCH_CMKSBRICKSTATS_MQH
+
+#include <MKS-ULTIMATE/Core/Sensors/Regime/CMksReversalRegime.mqh>
+
+// Probabilidade de continuação a partir de contadores. Vazio → 0.5 (neutro,
+// sem evidência), para não simular edge onde não há amostra.
+double MksStatProb(int cont, int rev)
+{
+   int tot = cont + rev;
+   return (tot > 0) ? (double)cont / (double)tot : 0.5;
+}
+
+// z-score da proporção vs 0.5 (H0: random walk). z = 2·(p−0.5)·sqrt(N).
+// |z|>=2 ≈ 5% de significância; >=3 ≈ forte. Serve de gate contra "sinal"
+// que é só amostra pequena (o marcador por |p−0.5| sozinho mente). 0 sem N.
+double MksStatZ(int cont, int rev)
+{
+   int tot = cont + rev;
+   if(tot <= 0) return 0.0;
+   double p = (double)cont / (double)tot;
+   return 2.0 * (p - 0.5) * MathSqrt((double)tot);
+}
+
+// Hora do dia [0..23] do timestamp (msc), aplicando offset servidor→alvo.
+// Ex.: Exness server ~UTC+2/+3 — passar offset negativo p/ ler em UTC.
+int MksStatHourOf(long timeMsc, int offsetHours)
+{
+   long sec = timeMsc / 1000;
+   int  h   = (int)(((sec / 3600) + offsetHours) % 24);
+   if(h < 0) h += 24;
+   return h;
+}
+
+// A. RUN-LENGTH → CONTINUAÇÃO. Após um run de EXATAMENTE k bricks da mesma
+//    cor, o (k+1)-ésimo continua (mesma cor) ou reverte? cont[k]/rev[k] para
+//    k=1..maxK (runs > maxK dobrados em maxK). Índice 0 não usado.
+//    P(continua|run==k) = cont[k]/(cont[k]+rev[k]); >0.5 = momentum, <0.5 =
+//    reversão. É a pergunta fundamental do Renko.
+void MksStatRunLength(const int &dir[], int n, int maxK, int &cont[], int &rev[])
+{
+   ArrayResize(cont, maxK + 1);
+   ArrayResize(rev,  maxK + 1);
+   ArrayInitialize(cont, 0);
+   ArrayInitialize(rev,  0);
+   if(n < 2 || maxK < 1) return;
+
+   int run = 1; // comprimento do run terminando no índice 0
+   for(int i = 1; i < n; i++)
+   {
+      int k = (run < maxK) ? run : maxK;
+      if(dir[i] == dir[i - 1]) { cont[k]++; run++;    }
+      else                     { rev[k]++;  run = 1;  }
+   }
+}
+
+// D. HORA DO DIA → CONTINUAÇÃO. Condiciona a transição à hora do brick i-1.
+//    Revela padrão intraday (sessões Ásia/Londres/NY no XAU). 24 buckets.
+void MksStatHourOfDay(const int &dir[], const long &t[], int n,
+                      int offsetHours, int &cont[], int &rev[])
+{
+   ArrayResize(cont, 24);
+   ArrayResize(rev,  24);
+   ArrayInitialize(cont, 0);
+   ArrayInitialize(rev,  0);
+   for(int i = 1; i < n; i++)
+   {
+      int h = MksStatHourOf(t[i - 1], offsetHours);
+      if(dir[i] == dir[i - 1]) cont[h]++;
+      else                     rev[h]++;
+   }
+}
+
+// C. VOLATILIDADE (terciles) → CONTINUAÇÃO. Proxy de vol = velocidade de
+//    formação do brick (dt entre closes; dt pequeno = alta vol). Bucket 0 =
+//    baixa vol (lento), 2 = alta vol (rápido). loThr/hiThr = 33/66 pct de dt.
+//    Responde: o mercado tende ou reverte quando os bricks formam rápido?
+void MksStatVolatilityTerciles(const int &dir[], const long &t[], int n,
+                               int &cont[], int &rev[], long &loThr, long &hiThr)
+{
+   ArrayResize(cont, 3);
+   ArrayResize(rev,  3);
+   ArrayInitialize(cont, 0);
+   ArrayInitialize(rev,  0);
+   loThr = 0; hiThr = 0;
+   if(n < 4) return;
+
+   long dts[];
+   ArrayResize(dts, n - 1);
+   for(int i = 1; i < n; i++) dts[i - 1] = t[i] - t[i - 1];
+
+   long sorted[];
+   ArrayCopy(sorted, dts);
+   ArraySort(sorted);
+   int m = n - 1;
+   loThr = sorted[m / 3];         // 33º percentil (dt pequeno)
+   hiThr = sorted[(2 * m) / 3];   // 66º percentil
+
+   // Vol do brick i-1 = dt que o formou (t[i-1]-t[i-2]); precisa i>=2.
+   for(int i = 2; i < n; i++)
+   {
+      long v = t[i - 1] - t[i - 2];
+      int  b = (v <= loThr) ? 2 : ((v <= hiThr) ? 1 : 0); // dt pequeno → alta vol (2)
+      if(dir[i] == dir[i - 1]) cont[b]++;
+      else                     rev[b]++;
+   }
+}
+
+// B. REGIME (lateral vs trend) → CONTINUAÇÃO. Reusa o CMksReversalRegime
+//    validado (score de reversões numa janela). Bucket 0 = trend
+//    (score<threshold), 1 = lateral (score>=threshold). Espera-se trend→
+//    momentum e lateral→reversão (edge de regime-switching), se existir.
+void MksStatRegime(const int &dir[], int n, int period, double threshold,
+                   int &cont[], int &rev[])
+{
+   ArrayResize(cont, 2);
+   ArrayResize(rev,  2);
+   ArrayInitialize(cont, 0);
+   ArrayInitialize(rev,  0);
+   if(n < period + 1 || period < 2) return;
+
+   // CMksReversalRegime lê open/close; sintetiza close>open sse bull.
+   double op[]; double cl[];
+   ArrayResize(op, n);
+   ArrayResize(cl, n);
+   for(int i = 0; i < n; i++) { op[i] = 0.0; cl[i] = (double)dir[i]; }
+
+   CMksReversalRegime regime(period, threshold);
+   for(int i = period - 1; i < n - 1; i++)   // score no brick i, transição i→i+1
+   {
+      double score = regime.Compute(op, cl, i);
+      int    b     = (score >= threshold) ? 1 : 0;
+      if(dir[i + 1] == dir[i]) cont[b]++;
+      else                     rev[b]++;
+   }
+}
+
+#endif // MKS_ULTIMATE_RESEARCH_CMKSBRICKSTATS_MQH
