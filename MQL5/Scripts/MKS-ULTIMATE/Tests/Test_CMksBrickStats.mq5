@@ -235,11 +235,73 @@ void Test_Payoff_WinLossMix()
 }
 
 //+------------------------------------------------------------------+
+//| Fade — reversão imediata paga (target/stop=1): +1                 |
+//+------------------------------------------------------------------+
+void Test_Fade_ReversalWins()
+{
+   int    dir[]   = {1, -1};
+   double close[] = {100, 97};
+   bool   sig[]   = {true, false};
+   MksPayoff p;
+   MksStatFade(dir, close, 2, sig, 3.0, 1.0, 1.0, p);
+   MKS_ASSERT_EQ_INT(1, p.trades, "fade win: 1 trade");
+   MKS_ASSERT_EQ_INT(1, p.wins,   "fade win: 1 vitoria");
+   MKS_ASSERT_NEAR_DOUBLE(1.0, p.EV(), 1e-9, "fade win: EV=+1 (reversao veio)");
+}
+
+//+------------------------------------------------------------------+
+//| Fade — tendência continua contra: −1                             |
+//+------------------------------------------------------------------+
+void Test_Fade_TrendLoses()
+{
+   int    dir[]   = {1, 1};
+   double close[] = {100, 103};
+   bool   sig[]   = {true, false};
+   MksPayoff p;
+   MksStatFade(dir, close, 2, sig, 3.0, 1.0, 1.0, p);
+   MKS_ASSERT_EQ_INT(1, p.trades, "fade loss: 1 trade");
+   MKS_ASSERT_EQ_INT(0, p.wins,   "fade loss: 0 vitoria");
+   MKS_ASSERT_NEAR_DOUBLE(-1.0, p.EV(), 1e-9, "fade loss: EV=-1 (tendencia continuou)");
+}
+
+//+------------------------------------------------------------------+
+//| Fade — alvo 2: espera 2 bricks de reversão, clampa em +2         |
+//+------------------------------------------------------------------+
+void Test_Fade_Target2()
+{
+   int    dir[]   = {1, -1, -1};
+   double close[] = {100, 97, 94};
+   bool   sig[]   = {true, false, false};
+   MksPayoff p;
+   MksStatFade(dir, close, 3, sig, 3.0, 2.0, 2.0, p);
+   MKS_ASSERT_EQ_INT(1, p.trades, "fade t2: 1 trade");
+   MKS_ASSERT_NEAR_DOUBLE(2.0, p.EV(),     1e-9, "fade t2: EV=+2 (alvo 2 atingido)");
+   MKS_ASSERT_NEAR_DOUBLE(2.0, p.AvgFwd(), 1e-9, "fade t2: fwd=2");
+}
+
+//+------------------------------------------------------------------+
+//| Fade — não atinge alvo/stop até o fim → descartado               |
+//+------------------------------------------------------------------+
+void Test_Fade_NoHitDiscarded()
+{
+   int    dir[]   = {1, -1};
+   double close[] = {100, 99};   // reversao de so 0.33 brick, alvo 2 nao atinge
+   bool   sig[]   = {true, false};
+   MksPayoff p;
+   MksStatFade(dir, close, 2, sig, 3.0, 2.0, 2.0, p);
+   MKS_ASSERT_EQ_INT(0, p.trades, "fade sem alvo/stop: descartado");
+}
+
+//+------------------------------------------------------------------+
 void OnStart()
 {
    Print("=== Test_CMksBrickStats ===");
 
    MKS_RUN(Test_StatZ);
+   MKS_RUN(Test_Fade_ReversalWins);
+   MKS_RUN(Test_Fade_TrendLoses);
+   MKS_RUN(Test_Fade_Target2);
+   MKS_RUN(Test_Fade_NoHitDiscarded);
    MKS_RUN(Test_Payoff_SingleWin);
    MKS_RUN(Test_Payoff_SingleLoss);
    MKS_RUN(Test_Payoff_NonOverlap);

@@ -7,6 +7,10 @@ O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/) e es
 ## [Não lançado]
 
 ### Added
+- **Research — medição de FADE (reversão) + finding de DECAIMENTO do momentum (2026-07-25).** `CMksBrickStats.MksStatFade` (trade de reversão: entra CONTRA o brick, alvo/stop em bricks, clampado, não-sobreposto — o **espelho** do ride-to-flip). `MeasurePayoff` refatorado com dispatcher de modo (MOMENTUM/FADE) → cospe os dois **lado a lado** (EV/filtro + OOS + estacionaridade). +4 testes. **MT5-verde: `Test_CMksBrickStats` 64/64, 19 tests. `compile-all` 57/57.**
+  - **Finding CRÍTICO (XAU S=2/S=3, ~6.5 meses REAIS — histórico Exness pré-2026-01 veio vazio):** o momentum **NÃO é estacionário**. As 6 janelas de tempo mostram **DECAIMENTO monotônico**: forte em jan–fev 2026 (EVnet +0.19 a +0.39), some no meio, **NEGATIVO nas 2 janelas recentes** (mai–jul 2026, −0.03 a −0.06). O EVnet médio +0.13 / t=45 é **carregado pela tendência do ouro de jan–fev**; hoje o momentum **perde**. A estacionaridade **evitou construir um EA perdedor numa miragem** (t=45 enganoso). CompareBrickSizes confirma 4/6 em TODOS os tamanhos → não-estacionaridade é problema de **regime, não de escala** (bricks menores dão EVnet maior — S=2 melhor — mas mesma instabilidade). FADE adicionado pra testar se há edge de reversão no regime atual (pendente de rodar).
+
+### Added
 - **Research — estacionaridade + comparação de tamanho de brick (2026-07-25).** `MeasurePayoff` ganha seção **ESTACIONARIDADE** (EVnet do ride-momentum por N janelas de tempo — separa "edge real" de "artefato de tendência passada"; motivado pelo flip **90d net-negativo → 360d net-positivo t=24**, sinal clássico de não-estacionaridade). Novo `Scripts/.../Research/CompareBrickSizes.mq5`: compara tamanhos de brick pelo que importa — **EVnet com custo AUTO-ESCALADO** (spread fixo em pontos ÷ brick, comparação justa já que brick menor = spread come mais fração) + estacionaridade + histograma de run-length por tamanho. Responde "qual o melhor brick?" e "o edge é estável?" numa passada. Reusa a stat pura testada (`MksStatRideToFlip`/`MksStatRunLength`, sem nova função). `compile-all` 57/57.
 
 ### Added

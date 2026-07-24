@@ -211,4 +211,41 @@ void MksStatRideToFlip(const int &dir[], const double &closeArr[], int n,
    }
 }
 
+// Trade de REVERSÃO (fade): entra CONTRA a direção do brick i (short se bull),
+// caminha brick a brick e SAI quando o P&L (em bricks) atinge +target (win) ou
+// −stop (loss) — R clampado ao nível (alvo/stop fixo). Sem nível até o fim →
+// para. R = clamp(−dir[i]·(close[j]−close[i])/S). NÃO-SOBREPOSTO (próximo entry
+// parte da saída) → independentes. É o ESPELHO do ride-to-flip: ganha as
+// reversões pequenas e frequentes, perde as tendências raras e grandes.
+void MksStatFade(const int &dir[], const double &closeArr[], int n,
+                 const bool &signal[], double brickSize,
+                 double target, double stop, MksPayoff &out)
+{
+   if(brickSize <= 0.0 || target <= 0.0 || stop <= 0.0) return;
+   int i = 0;
+   while(i < n - 1)
+   {
+      if(!signal[i]) { i++; continue; }
+      int    side = -dir[i];              // fade: contra o brick
+      int    j    = i + 1;
+      double R    = 0.0;
+      bool   hit  = false;
+      while(j < n)
+      {
+         R = (double)side * (closeArr[j] - closeArr[i]) / brickSize;
+         if(R >=  target) { R =  target; hit = true; break; }
+         if(R <= -stop)   { R = -stop;   hit = true; break; }
+         j++;
+      }
+      if(!hit) break;                      // não atingiu alvo/stop até o fim
+      out.trades++;
+      out.sumR  += R;
+      out.sumR2 += R * R;
+      out.sumFwd += (double)(j - i);
+      if(R > 0.0) { out.wins++; out.sumWinR += R; }
+      else        { out.sumLossR += R; }
+      i = j;                               // não-sobreposto
+   }
+}
+
 #endif // MKS_ULTIMATE_RESEARCH_CMKSBRICKSTATS_MQH
