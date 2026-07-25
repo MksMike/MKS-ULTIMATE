@@ -99,11 +99,28 @@ void OnStart()
                   firstDivg, sinkA.dir[firstDivg], sinkA.trigger[firstDivg], sinkA.t[firstDivg],
                   sinkB.dir[firstDivg], sinkB.trigger[firstDivg], sinkB.t[firstDivg]);
 
-   bool perfect = (nA == nB && dirD == 0 && trigD == 0 && closeD == 0 && timeD == 0);
    Print("");
-   Print(perfect
-      ? ">>> FEED VALIDADO: CopyTicks == .mkstick brick-a-brick. A pesquisa roda sobre feed FIEL ao capturado."
-      : ">>> FEED DIVERGE: CopyTicks != .mkstick. A pesquisa roda sobre feed NAO-identico ao capturado — quantificado acima (backfill/revisao do broker?).");
+   if(nB == 0)
+   {
+      Print(">>> INCONCLUSIVO: CopyTicks retornou 0 bricks nessa janela — historico de ticks");
+      Print("    NAO baixado neste terminal (ou conta diferente do .mkstick). R8 exige as DUAS");
+      Print("    fontes com dado na MESMA janela E conta. Capture um .mkstick NESTE terminal e");
+      Print("    rode o R8 na hora, OU force o download (Strategy Tester real-ticks na janela).");
+   }
+   else if(src.AccountMismatch())
+   {
+      Print(">>> CROSS-ACCOUNT: o .mkstick e de OUTRA conta que este terminal — a comparacao nao");
+      Print("    e limpa (feeds podem diferir por servidor/conta). Rode com o .mkstick da conta atual.");
+      PrintFormat("    (contagem: A=%d B=%d, divergencias dir=%d trig=%d close=%d time=%d)",
+                  nA, nB, dirD, trigD, closeD, timeD);
+   }
+   else
+   {
+      bool perfect = (nA == nB && dirD == 0 && trigD == 0 && closeD == 0 && timeD == 0);
+      Print(perfect
+         ? ">>> FEED VALIDADO: CopyTicks == .mkstick brick-a-brick. A pesquisa roda sobre feed FIEL ao capturado."
+         : ">>> FEED DIVERGE: CopyTicks != .mkstick — quantificado acima (backfill/revisao do broker?).");
+   }
    Print("=== fim ===");
 }
 //+------------------------------------------------------------------+
