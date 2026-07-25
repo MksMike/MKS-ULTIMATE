@@ -321,7 +321,7 @@ Detalhes em `docs/CHECKPOINT-2026-05-27-night.md` e `docs/CHECKPOINT-2026-05-27-
 
 ## Fase 9.5 — Fechamento e endurecimento do core (gate para a Fase 10)
 
-**Status:** Não iniciada
+**Status:** Em andamento — **gate E1–E5 CONCLUÍDO (2026-07-24)** → Fase 10 destravada. **E6** (UX) e **E7** (CS: E7.2 fechado 2026-07-24, E7.1/E7.3 pendentes) em andamento; **E8** (indicadores) não iniciada. E6/E7/E8 bloqueiam operação real / novos indicadores, **não** a Fase 10.
 
 **Origem:** a auditoria completa de 2026-06-02 (`docs/CHECKPOINT-2026-06-02-auditoria.md`) mostrou que "Fase concluída" significava, em vários pontos, "código escrito e validado pontualmente" — não "verificado de ponta a ponta". Em particular, a paridade bit-a-bit só está provada no envelope estreito `fillDays=0` comparando o **stream de bricks**; a camada onde o V5 quebrou a conta — decisão→execução→equity — nunca foi comparada live↔replay. Decisão do dono: **deixar o core 100% robusto antes de qualquer estratégia ou indicador novo.**
 
@@ -343,11 +343,13 @@ Detalhes em `docs/CHECKPOINT-2026-05-27-night.md` e `docs/CHECKPOINT-2026-05-27-
 
 ## Fase 10 — Estratégias reais
 
-**Status:** Não iniciada — **bloqueada pela Fase 9.5 (E1–E5)**
+**Status:** Em andamento — gate E1–E5 aberto (2026-07-24). Fase em **DESCOBERTA DE EDGE** (research-only): toolkit em `MQL5/Include/MKS-ULTIMATE/Research/` + `Scripts/.../Research/` mede hit-rate / payoff / OOS / estacionaridade sobre o histórico. **Nenhuma estratégia/EA ainda.**
 
-Cada estratégia vira um projeto separado (EA próprio, documentação própria), usando o framework. Só começa depois da Fase 9 validada **e da Fase 9.5 (E1–E5) fechada**.
+Cada estratégia vira um projeto separado (EA próprio, documentação própria), usando o framework. A descoberta usa medição disciplinada, não coleção de ideias (anti-curve-fit/anti-V5). **Achado central (2026-07-25):** direção pura no XAU **sem edge durável após custo** — momentum decai a negativo, reversão morta (t=−16). Ver memória `edge-search-state`.
 
-Não há lista prévia. Estratégias serão decididas conforme oportunidade e estudo.
+**Nota de rigor (auditoria externa 2026-07-25):** a camada de research reintroduziu vícios do eixo-1 do V5 — mede sobre o `close` matemático (não `triggerPrice` observado), custo constante (spread varia por hora), e look-ahead nos terciles de vol. **Em endurecimento antes de confiar em qualquer número.** A conclusão QUALITATIVA (sem edge de direção durável) sobrevive e se reforça (os vícios faziam o resultado parecer melhor que a realidade); os números específicos e leads (ex.: hora-21) são não-confiáveis.
+
+Estratégias serão decididas conforme oportunidade e estudo.
 
 ---
 

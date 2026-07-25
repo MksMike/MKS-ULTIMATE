@@ -2616,7 +2616,7 @@ O pipeline sim+stress+report existe e é provado em pequena escala (`Test_RPT_Ca
 ### ADR-039: Calibração do StressLab ao broker real (Exness XAU) — spread medido + ancorado; latência/slippage pendentes
 
 **Data:** 2026-07-21
-**Status:** Proposta
+**Status:** Aceita (2026-07-25 — reconciliação de drift; spread 240pt + drift de latência ~0.25/ms **medidos e ligados** no StressReplayer/StressRunner. Dívida remanescente: **slippage puro de ordem** — pendente de dado, ADR-039 §4/§ARCHITECTURE §4).
 **Relação:** Executa a **fatia 5 (calibração)** da ADR-038 e o item de calibração da **Parte B** do `docs/ROADMAP-CHECKLIST.md`. Fecha a dívida "spread-stress inerte" nomeada na ADR-038.
 
 **Contexto:**
@@ -2651,7 +2651,7 @@ Os presets do StressLab (`CMksStressParams`) traziam `baselineSpreadPoints=0` (s
 ### ADR-040: Circuit breaker CORRETIVO — fecha tudo + trava ao cruzar limite Por Conta
 
 **Data:** 2026-07-22
-**Status:** Proposta
+**Status:** Aceita (2026-07-25 — reconciliação de drift; `CMksCircuitBreaker` **em produção** no `ColorReversal.mq5`, input `InpEnableCorrectiveBreaker` **default ON**, MT5-verde `Test_CMksCircuitBreaker` 18/18 + refactor sem regressão).
 **Relação:** Resolve a decisão pendente **`flatten-on-breach`** (ADR-036 §Fronteiras / §4 Decisões pendentes / checklist §G). Complementa a camada Por Conta do `CMksRiskManager` (Fase 6.3).
 
 **Contexto:**
