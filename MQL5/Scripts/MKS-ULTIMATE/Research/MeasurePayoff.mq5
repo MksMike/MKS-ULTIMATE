@@ -50,6 +50,9 @@ void BuildMasks(const int &dir[], const long &t[], int n, int offset,
    ArrayResize(mAll, n); ArrayResize(mTrend, n);
    ArrayResize(mVolMid, n); ArrayResize(mH21, n);
 
+   // NOTA (R5): threshold de vol full-sample = look-ahead. `vol-media` aqui é
+   // um filtro DESCRITIVO (condiciona o EV p/ inspeção), NÃO um sinal forward.
+   // O sinal de vol forward-honesto (expanding threshold) vive no GatedMomentum.
    long loThr = 0, hiThr = 0;
    if(n >= 4)
    {

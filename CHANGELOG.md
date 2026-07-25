@@ -7,6 +7,9 @@ O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/) e es
 ## [Não lançado]
 
 ### Fixed
+- **Research R5 — gate de volatilidade FORWARD-HONEST (threshold expanding, sem look-ahead) (2026-07-25).** O `GatedMomentum.BuildVolRegime` classificava vol-HI/MID/LO com terciles sobre a série **TODA** — look-ahead (usa dado futuro pra classificar o presente; "tolerável p/ descrição, fatal quando vira sinal", como a auditoria disse). Fix: o threshold é **recomputado a partir de TODO o passado `[W, i)` a cada `InpThreshUpdate` bricks (expanding)** — zero look-ahead; o warmup (1º bloco) fica sem regime. O filtro `vol-media` do `MeasurePayoff` marcado como **DESCRITIVO** (full-sample, não sinal forward). `compile-all` 57/57.
+
+### Fixed
 - **Research R1 — o R passa a usar `triggerPrice` (preço OBSERVADO), não o `close` matemático — eixo-1 fora da pesquisa (2026-07-25).** A auditoria externa apontou o vício central: `MksStatRideToFlip`/`MksStatFade` calculavam o payoff sobre `brick.close` (open±S, **fictício** — preço onde o mercado não negociou), o **eixo-1 do V5 reencarnado na camada de research** (otimista em até (M−1)·S quando o flip de saída cai num brick M>1). Fix: `CMksBrickSeriesCollector` agora coleta **`triggerPrice`** (mid do tick disparador, ADR-010 = preço de fill realista) + `high`/`low` (dado p/ R2); param das stats `closeArr → priceArr` com contrato "passar preço observado"; os 3 scripts de research (`MeasurePayoff`/`GatedMomentum`/`CompareBrickSizes`) passam `sink.trigger`. `compile-all` 57/57 (19 testes válidos — matemática do R inalterada). **Impacto esperado:** EV de momentum fica ligeiramente PIOR/mais realista → **reforça** a conclusão "sem edge de direção durável". Pendentes: **R2** (fade intra-brick via high/low), **R3** (custo por-hora do bid/ask), **R5** (thresholds de vol trailing, não full-sample), **R8** (validar bricks CopyTicks vs `.mkstick`).
 
 ### Changed

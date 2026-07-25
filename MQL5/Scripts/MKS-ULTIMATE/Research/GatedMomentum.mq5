@@ -27,25 +27,37 @@ input double   InpBrickSizePts = 2.0;     // S (o de melhor EVnet foi 2.0)
 input double   InpSpreadPoints = 240;     // custo escala: spread/brick
 input double   InpSlipPoints   = 0;
 input int      InpVolWindow    = 20;      // janela trailing p/ medir a vol de regime (bricks)
+input int      InpThreshUpdate = 5000;    // R5: recomputa o threshold de vol a cada N bricks (forward-honest)
 input int      InpTimeWindows  = 6;
 
 // Preenche mHi/mMid/mLo por brick: regime de vol via dt dos últimos W bricks
-// (dt pequeno = rápido = alta vol). Terciles sobre a série. i<W → nenhum.
-void BuildVolRegime(const long &t[], int n, int W, bool &mHi[], bool &mMid[], bool &mLo[])
+// (dt pequeno = rápido = alta vol). **R5 (forward-honest, sem look-ahead):** o
+// threshold de tercil é recomputado a partir de TODO o passado [W, i) a cada
+// updateEvery bricks (expanding) — nunca usa dado futuro. O 1º bloco (warmup)
+// fica sem regime (thresholds ainda não estabelecidos).
+void BuildVolRegime(const long &t[], int n, int W, int updateEvery,
+                    bool &mHi[], bool &mMid[], bool &mLo[])
 {
    ArrayResize(mHi, n); ArrayResize(mMid, n); ArrayResize(mLo, n);
    ArrayInitialize(mHi, false); ArrayInitialize(mMid, false); ArrayInitialize(mLo, false);
-   if(n <= W + 3) return;
+   if(updateEvery < 50) updateEvery = 50;
+   if(n <= W + updateEvery) return;   // sem bloco de teste após o warmup
 
-   long dtt[]; ArrayResize(dtt, n - W);
-   for(int i = W; i < n; i++) dtt[i - W] = t[i] - t[i - W];
-   long s[]; ArrayCopy(s, dtt); ArraySort(s);
-   int m = n - W;
-   long loT = s[m / 3];        // dt pequeno (fast)
-   long hiT = s[2 * m / 3];
-
+   long loT = 0, hiT = 0;
+   bool haveThresh = false;
    for(int i = W; i < n; i++)
    {
+      if(i > W && ((i - W) % updateEvery) == 0)   // recomputa do passado [W, i)
+      {
+         int cnt = i - W;
+         long dtt[]; ArrayResize(dtt, cnt);
+         for(int k = W; k < i; k++) dtt[k - W] = t[k] - t[k - W];
+         ArraySort(dtt);
+         loT = dtt[cnt / 3];
+         hiT = dtt[(2 * cnt) / 3];
+         haveThresh = true;
+      }
+      if(!haveThresh) continue;                    // warmup: sem regime
       long d = t[i] - t[i - W];
       if(d <= loT)      mHi[i]  = true;   // rápido = alta vol
       else if(d >  hiT) mLo[i]  = true;   // lento = baixa vol
@@ -89,7 +101,7 @@ void OnStart()
 
    bool mAll[]; ArrayResize(mAll, n); for(int i = 0; i < n; i++) mAll[i] = true;
    bool mHi[], mMid[], mLo[];
-   BuildVolRegime(sink.t, n, InpVolWindow, mHi, mMid, mLo);
+   BuildVolRegime(sink.t, n, InpVolWindow, InpThreshUpdate, mHi, mMid, mLo);
 
    Print("");
    Print("=== Momentum por REGIME de volatilidade (vol trailing dos ultimos W bricks) ===");
