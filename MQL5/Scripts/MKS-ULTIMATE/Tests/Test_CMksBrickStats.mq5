@@ -243,7 +243,7 @@ void Test_Fade_ReversalWins()
    double close[] = {100, 97};
    bool   sig[]   = {true, false};
    MksPayoff p;
-   MksStatFade(dir, close, 2, sig, 3.0, 1.0, 1.0, p);
+   MksStatFade(dir, close, close, close,2, sig, 3.0, 1.0, 1.0, p);
    MKS_ASSERT_EQ_INT(1, p.trades, "fade win: 1 trade");
    MKS_ASSERT_EQ_INT(1, p.wins,   "fade win: 1 vitoria");
    MKS_ASSERT_NEAR_DOUBLE(1.0, p.EV(), 1e-9, "fade win: EV=+1 (reversao veio)");
@@ -258,7 +258,7 @@ void Test_Fade_TrendLoses()
    double close[] = {100, 103};
    bool   sig[]   = {true, false};
    MksPayoff p;
-   MksStatFade(dir, close, 2, sig, 3.0, 1.0, 1.0, p);
+   MksStatFade(dir, close, close, close,2, sig, 3.0, 1.0, 1.0, p);
    MKS_ASSERT_EQ_INT(1, p.trades, "fade loss: 1 trade");
    MKS_ASSERT_EQ_INT(0, p.wins,   "fade loss: 0 vitoria");
    MKS_ASSERT_NEAR_DOUBLE(-1.0, p.EV(), 1e-9, "fade loss: EV=-1 (tendencia continuou)");
@@ -273,7 +273,7 @@ void Test_Fade_Target2()
    double close[] = {100, 97, 94};
    bool   sig[]   = {true, false, false};
    MksPayoff p;
-   MksStatFade(dir, close, 3, sig, 3.0, 2.0, 2.0, p);
+   MksStatFade(dir, close, close, close,3, sig, 3.0, 2.0, 2.0, p);
    MKS_ASSERT_EQ_INT(1, p.trades, "fade t2: 1 trade");
    MKS_ASSERT_NEAR_DOUBLE(2.0, p.EV(),     1e-9, "fade t2: EV=+2 (alvo 2 atingido)");
    MKS_ASSERT_NEAR_DOUBLE(2.0, p.AvgFwd(), 1e-9, "fade t2: fwd=2");
@@ -288,8 +288,28 @@ void Test_Fade_NoHitDiscarded()
    double close[] = {100, 99};   // reversao de so 0.33 brick, alvo 2 nao atinge
    bool   sig[]   = {true, false};
    MksPayoff p;
-   MksStatFade(dir, close, 2, sig, 3.0, 2.0, 2.0, p);
+   MksStatFade(dir, close, close, close,2, sig, 3.0, 2.0, 2.0, p);
    MKS_ASSERT_EQ_INT(0, p.trades, "fade sem alvo/stop: descartado");
+}
+
+//+------------------------------------------------------------------+
+//| Fade R2 — stop tocado INTRA-BRICK (high) apesar do close favoravel |
+//+------------------------------------------------------------------+
+void Test_Fade_IntrabarStop()
+{
+   // Fade short do bull @100 (S=2, stop=2 => stop em 104). O brick 1 fecha em
+   // 99 (close favoravel p/ short), mas o HIGH bateu 106 => stop tocado no
+   // caminho. Close-only contaria como nao-hit; R2 conta como LOSS -2.
+   int    dir[]   = {1, -1};
+   double price[] = {100, 99};
+   double high[]  = {100, 106};
+   double low[]   = {100, 98};
+   bool   sig[]   = {true, false};
+   MksPayoff p;
+   MksStatFade(dir, price, high, low, 2, sig, 2.0, 2.0, 2.0, p);
+   MKS_ASSERT_EQ_INT(1, p.trades, "fade R2: 1 trade (stop intra-brick)");
+   MKS_ASSERT_EQ_INT(0, p.wins,   "fade R2: 0 win");
+   MKS_ASSERT_NEAR_DOUBLE(-2.0, p.EV(), 1e-9, "fade R2: EV=-2 (high tocou o stop apesar do close +)");
 }
 
 //+------------------------------------------------------------------+
@@ -302,6 +322,7 @@ void OnStart()
    MKS_RUN(Test_Fade_TrendLoses);
    MKS_RUN(Test_Fade_Target2);
    MKS_RUN(Test_Fade_NoHitDiscarded);
+   MKS_RUN(Test_Fade_IntrabarStop);
    MKS_RUN(Test_Payoff_SingleWin);
    MKS_RUN(Test_Payoff_SingleLoss);
    MKS_RUN(Test_Payoff_NonOverlap);

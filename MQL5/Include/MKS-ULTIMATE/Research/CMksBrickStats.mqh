@@ -215,14 +215,14 @@ void MksStatRideToFlip(const int &dir[], const double &priceArr[], int n,
 }
 
 // Trade de REVERSÃO (fade): entra CONTRA a direção do brick i (short se bull),
-// caminha brick a brick e SAI quando o P&L (em bricks) atinge +target (win) ou
-// −stop (loss) — R clampado ao nível (alvo/stop fixo). Sem nível até o fim →
-// para. R = clamp(−dir[i]·(priceArr[j]−priceArr[i])/S). priceArr = preço
-// OBSERVADO (triggerPrice), não close. NÃO-SOBREPOSTO. É o ESPELHO do ride-to-
-// flip. **LIMITAÇÃO (R2, pendente):** testa alvo/stop só no priceArr do close
-// de cada brick, NÃO na excursão intra-brick (high/low) — trade que tocou o
-// stop e voltou conta como win → EV do fade OTIMISTA. Fix R2 usa high/low.
-void MksStatFade(const int &dir[], const double &priceArr[], int n,
+// no priceArr[i] (OBSERVADO). SAI quando o P&L (bricks) atinge +target (win) ou
+// −stop (loss). **R2 (intra-brick):** testa os níveis contra a EXCURSÃO de cada
+// brick (high/low), NÃO só no close — senão trade que tocou o stop e voltou
+// contaria como win (EV otimista). Desempate PESSIMISTA: se o brick tocou alvo
+// E stop, assume STOP primeiro (path-ambiguity → pior caso). Sem nível até o
+// fim → para. NÃO-SOBREPOSTO. É o ESPELHO do ride-to-flip.
+void MksStatFade(const int &dir[], const double &priceArr[],
+                 const double &highArr[], const double &lowArr[], int n,
                  const bool &signal[], double brickSize,
                  double target, double stop, MksPayoff &out)
 {
@@ -231,15 +231,20 @@ void MksStatFade(const int &dir[], const double &priceArr[], int n,
    while(i < n - 1)
    {
       if(!signal[i]) { i++; continue; }
-      int    side = -dir[i];              // fade: contra o brick
-      int    j    = i + 1;
-      double R    = 0.0;
-      bool   hit  = false;
+      int    side  = -dir[i];              // fade: contra o brick
+      double entry = priceArr[i];
+      int    j     = i + 1;
+      double R     = 0.0;
+      bool   hit   = false;
       while(j < n)
       {
-         R = (double)side * (priceArr[j] - priceArr[i]) / brickSize;
-         if(R >=  target) { R =  target; hit = true; break; }
-         if(R <= -stop)   { R = -stop;   hit = true; break; }
+         // P&L da posição nos extremos intra-brick de j.
+         double pnlHi = (double)side * (highArr[j] - entry) / brickSize;
+         double pnlLo = (double)side * (lowArr[j]  - entry) / brickSize;
+         double best  = MathMax(pnlHi, pnlLo);
+         double worst = MathMin(pnlHi, pnlLo);
+         if(worst <= -stop)   { R = -stop;  hit = true; break; } // stop 1º (pessimista)
+         if(best  >=  target) { R =  target; hit = true; break; }
          j++;
       }
       if(!hit) break;                      // não atingiu alvo/stop até o fim

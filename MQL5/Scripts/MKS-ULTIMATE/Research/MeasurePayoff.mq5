@@ -35,10 +35,11 @@ input double   InpFadeStop     = 2.0;    // FADE: stop (bricks da tendência con
 enum ENUM_TRADE_MODE { MODE_MOM = 0, MODE_FADE = 1 };
 
 // Dispatcher: roda o trade do modo escolhido sobre um mask.
-void RunTrade(int mode, const int &dir[], const double &cl[], int n,
+void RunTrade(int mode, const int &dir[], const double &cl[],
+              const double &hi[], const double &lo[], int n,
               const bool &mask[], double S, MksPayoff &out)
 {
-   if(mode == MODE_FADE) MksStatFade(dir, cl, n, mask, S, InpFadeTarget, InpFadeStop, out);
+   if(mode == MODE_FADE) MksStatFade(dir, cl, hi, lo, n, mask, S, InpFadeTarget, InpFadeStop, out);
    else                  MksStatRideToFlip(dir, cl, n, mask, S, out);
 }
 
@@ -88,16 +89,17 @@ string PayoffVerdict(const MksPayoff &tr, const MksPayoff &te)
 }
 
 // Roda o payoff de um mask sobre full/train/test e imprime a linha.
-void ReportMask(int mode, string label, const int &dir[], const double &cl[], int n,
+void ReportMask(int mode, string label, const int &dir[], const double &cl[],
+                const double &hi[], const double &lo[], int n,
                 const bool &mask[], int nTr,
-                const int &trDir[], const double &trCl[], const bool &trMask[],
-                const int &teDir[], const double &teCl[], const bool &teMask[],
+                const int &trDir[], const double &trCl[], const double &trHi[], const double &trLo[], const bool &trMask[],
+                const int &teDir[], const double &teCl[], const double &teHi[], const double &teLo[], const bool &teMask[],
                 double S, double cost)
 {
    MksPayoff f, tr, te;
-   RunTrade(mode, dir,   cl,   n,   mask,   S, f);
-   RunTrade(mode, trDir, trCl, nTr, trMask, S, tr);
-   RunTrade(mode, teDir, teCl, ArraySize(teDir), teMask, S, te);
+   RunTrade(mode, dir,   cl,   hi,   lo,   n,   mask,   S, f);
+   RunTrade(mode, trDir, trCl, trHi, trLo, nTr, trMask, S, tr);
+   RunTrade(mode, teDir, teCl, teHi, teLo, ArraySize(teDir), teMask, S, te);
    PrintFormat("  %-11s EVnet=%+.3f | EVgross=%+.3f t=%+.1f win=%.3f avgW=%+.2f avgL=%+.2f fwd=%.2f N=%d | OOS tr=%+.3f te=%+.3f %s",
                label, f.NetEV(cost), f.EV(), f.T(), f.WinRate(),
                f.AvgWin(), f.AvgLoss(), f.AvgFwd(), f.trades,
@@ -108,7 +110,8 @@ void ReportMask(int mode, string label, const int &dir[], const double &cl[], in
 // mede o EVnet do "ride momentum" (mask=all) em cada uma. Um edge REAL é
 // positivo em TODAS; um artefato de tendência antiga é positivo só nas velhas.
 // Esta é a checagem que separa "edge" de "peguei uma tendência no backtest".
-void ReportStationarity(int mode, const int &dir[], const double &cl[], const long &tm[],
+void ReportStationarity(int mode, const int &dir[], const double &cl[],
+                        const double &hi[], const double &lo[], const long &tm[],
                         int n, int K, double S, double cost)
 {
    int posWins = 0;
@@ -118,13 +121,16 @@ void ReportStationarity(int mode, const int &dir[], const double &cl[], const lo
       int b = (int)((long)(w + 1) * n / K);
       int wn = b - a;
       if(wn < 10) continue;
-      int    wdir[]; double wcl[]; bool wmask[];
-      ArrayResize(wdir, wn); ArrayResize(wcl, wn); ArrayResize(wmask, wn);
+      int    wdir[]; double wcl[], whi[], wlo[]; bool wmask[];
+      ArrayResize(wdir, wn); ArrayResize(wcl, wn);
+      ArrayResize(whi, wn); ArrayResize(wlo, wn); ArrayResize(wmask, wn);
       ArrayCopy(wdir, dir, 0, a, wn);
       ArrayCopy(wcl,  cl,  0, a, wn);
+      ArrayCopy(whi,  hi,  0, a, wn);
+      ArrayCopy(wlo,  lo,  0, a, wn);
       for(int i = 0; i < wn; i++) wmask[i] = true;
       MksPayoff p;
-      RunTrade(mode, wdir, wcl, wn, wmask, S, p);
+      RunTrade(mode, wdir, wcl, whi, wlo, wn, wmask, S, p);
       double ev = p.NetEV(cost);
       if(ev > 0) posWins++;
       PrintFormat("  win%d [%s .. %s] EVnet=%+.3f t=%+.1f N=%d%s",
@@ -164,11 +170,11 @@ void OnStart()
 
    //--- Split train/test + masks por metade (thresholds OOS-limpos) ---
    int half = n / 2, nTr = half, nTe = n - half;
-   int trDir[], teDir[]; double trCl[], teCl[]; long trT[], teT[];
-   ArrayResize(trDir, nTr); ArrayResize(trCl, nTr); ArrayResize(trT, nTr);
-   ArrayResize(teDir, nTe); ArrayResize(teCl, nTe); ArrayResize(teT, nTe);
-   ArrayCopy(trDir, sink.dir,   0, 0,   nTr); ArrayCopy(trCl, sink.trigger, 0, 0,   nTr); ArrayCopy(trT, sink.t, 0, 0,   nTr);
-   ArrayCopy(teDir, sink.dir,   0, nTr, nTe); ArrayCopy(teCl, sink.trigger, 0, nTr, nTe); ArrayCopy(teT, sink.t, 0, nTr, nTe);
+   int trDir[], teDir[]; double trCl[], teCl[], trHi[], trLo[], teHi[], teLo[]; long trT[], teT[];
+   ArrayResize(trDir, nTr); ArrayResize(trCl, nTr); ArrayResize(trHi, nTr); ArrayResize(trLo, nTr); ArrayResize(trT, nTr);
+   ArrayResize(teDir, nTe); ArrayResize(teCl, nTe); ArrayResize(teHi, nTe); ArrayResize(teLo, nTe); ArrayResize(teT, nTe);
+   ArrayCopy(trDir, sink.dir, 0, 0, nTr); ArrayCopy(trCl, sink.trigger, 0, 0, nTr); ArrayCopy(trHi, sink.high, 0, 0, nTr); ArrayCopy(trLo, sink.low, 0, 0, nTr); ArrayCopy(trT, sink.t, 0, 0, nTr);
+   ArrayCopy(teDir, sink.dir, 0, nTr, nTe); ArrayCopy(teCl, sink.trigger, 0, nTr, nTe); ArrayCopy(teHi, sink.high, 0, nTr, nTe); ArrayCopy(teLo, sink.low, 0, nTr, nTe); ArrayCopy(teT, sink.t, 0, nTr, nTe);
 
    bool trAll[], trTrend[], trVolMid[], trH21[];
    bool teAll[], teTrend[], teVolMid[], teH21[];
@@ -179,28 +185,28 @@ void OnStart()
    PrintFormat("=== [MOMENTUM] EV do ride-to-flip (N=%d bricks; train=%d test=%d) ===", n, nTr, nTe);
    Print("  EVnet>0 = riding momentum paga apos custo; <0 = o spread come.");
    Print("  win=taxa acerto  avgW/avgL=R medio ganho/perda  fwd=bricks ate reverter  t=signif.");
-   ReportMask(MODE_MOM, "all",       sink.dir, sink.trigger, n, mAll,    nTr, trDir, trCl, trAll,    teDir, teCl, teAll,    InpBrickSizePts, InpCostBricks);
-   ReportMask(MODE_MOM, "trend",     sink.dir, sink.trigger, n, mTrend,  nTr, trDir, trCl, trTrend,  teDir, teCl, teTrend,  InpBrickSizePts, InpCostBricks);
-   ReportMask(MODE_MOM, "vol-media",  sink.dir, sink.trigger, n, mVolMid, nTr, trDir, trCl, trVolMid, teDir, teCl, teVolMid, InpBrickSizePts, InpCostBricks);
-   ReportMask(MODE_MOM, "hora-21",    sink.dir, sink.trigger, n, mH21,    nTr, trDir, trCl, trH21,    teDir, teCl, teH21,    InpBrickSizePts, InpCostBricks);
+   ReportMask(MODE_MOM, "all",       sink.dir, sink.trigger, sink.high, sink.low, n, mAll,    nTr, trDir, trCl, trHi, trLo, trAll,    teDir, teCl, teHi, teLo, teAll,    InpBrickSizePts, InpCostBricks);
+   ReportMask(MODE_MOM, "trend",     sink.dir, sink.trigger, sink.high, sink.low, n, mTrend,  nTr, trDir, trCl, trHi, trLo, trTrend,  teDir, teCl, teHi, teLo, teTrend,  InpBrickSizePts, InpCostBricks);
+   ReportMask(MODE_MOM, "vol-media",  sink.dir, sink.trigger, sink.high, sink.low, n, mVolMid, nTr, trDir, trCl, trHi, trLo, trVolMid, teDir, teCl, teHi, teLo, teVolMid, InpBrickSizePts, InpCostBricks);
+   ReportMask(MODE_MOM, "hora-21",    sink.dir, sink.trigger, sink.high, sink.low, n, mH21,    nTr, trDir, trCl, trHi, trLo, trH21,    teDir, teCl, teHi, teLo, teH21,    InpBrickSizePts, InpCostBricks);
 
    Print("");
    PrintFormat("=== ESTACIONARIDADE [MOMENTUM] — EVnet (mask=all) por %d janelas ===", InpTimeWindows);
    Print("  edge REAL = positivo em TODAS; artefato de tendencia = positivo so nas antigas.");
-   ReportStationarity(MODE_MOM, sink.dir, sink.trigger, sink.t, n, InpTimeWindows, InpBrickSizePts, InpCostBricks);
+   ReportStationarity(MODE_MOM, sink.dir, sink.trigger, sink.high, sink.low, sink.t, n, InpTimeWindows, InpBrickSizePts, InpCostBricks);
 
    Print("");
    PrintFormat("=== [FADE] EV da reversao (entra CONTRA; alvo=%.1f stop=%.1f bricks) ===", InpFadeTarget, InpFadeStop);
    Print("  espelho do momentum: ganha reversoes pequenas, perde tendencias. EVnet>0 = reversao paga.");
-   ReportMask(MODE_FADE, "all",       sink.dir, sink.trigger, n, mAll,    nTr, trDir, trCl, trAll,    teDir, teCl, teAll,    InpBrickSizePts, InpCostBricks);
-   ReportMask(MODE_FADE, "trend",     sink.dir, sink.trigger, n, mTrend,  nTr, trDir, trCl, trTrend,  teDir, teCl, teTrend,  InpBrickSizePts, InpCostBricks);
-   ReportMask(MODE_FADE, "vol-media",  sink.dir, sink.trigger, n, mVolMid, nTr, trDir, trCl, trVolMid, teDir, teCl, teVolMid, InpBrickSizePts, InpCostBricks);
-   ReportMask(MODE_FADE, "hora-21",    sink.dir, sink.trigger, n, mH21,    nTr, trDir, trCl, trH21,    teDir, teCl, teH21,    InpBrickSizePts, InpCostBricks);
+   ReportMask(MODE_FADE, "all",       sink.dir, sink.trigger, sink.high, sink.low, n, mAll,    nTr, trDir, trCl, trHi, trLo, trAll,    teDir, teCl, teHi, teLo, teAll,    InpBrickSizePts, InpCostBricks);
+   ReportMask(MODE_FADE, "trend",     sink.dir, sink.trigger, sink.high, sink.low, n, mTrend,  nTr, trDir, trCl, trHi, trLo, trTrend,  teDir, teCl, teHi, teLo, teTrend,  InpBrickSizePts, InpCostBricks);
+   ReportMask(MODE_FADE, "vol-media",  sink.dir, sink.trigger, sink.high, sink.low, n, mVolMid, nTr, trDir, trCl, trHi, trLo, trVolMid, teDir, teCl, teHi, teLo, teVolMid, InpBrickSizePts, InpCostBricks);
+   ReportMask(MODE_FADE, "hora-21",    sink.dir, sink.trigger, sink.high, sink.low, n, mH21,    nTr, trDir, trCl, trHi, trLo, trH21,    teDir, teCl, teHi, teLo, teH21,    InpBrickSizePts, InpCostBricks);
 
    Print("");
    PrintFormat("=== ESTACIONARIDADE [FADE] — EVnet (mask=all) por %d janelas ===", InpTimeWindows);
    Print("  se o fade for positivo nas janelas RECENTES onde o momentum morreu -> edge do regime atual.");
-   ReportStationarity(MODE_FADE, sink.dir, sink.trigger, sink.t, n, InpTimeWindows, InpBrickSizePts, InpCostBricks);
+   ReportStationarity(MODE_FADE, sink.dir, sink.trigger, sink.high, sink.low, sink.t, n, InpTimeWindows, InpBrickSizePts, InpCostBricks);
 
    //--- TSV ---
    FolderCreate("MKS-ULTIMATE\\Research");
@@ -218,10 +224,10 @@ void OnStart()
          for(int mi = 0; mi < 4; mi++)
          {
             MksPayoff p;
-            if(mi==0) RunTrade(md, sink.dir, sink.trigger, n, mAll,    InpBrickSizePts, p);
-            if(mi==1) RunTrade(md, sink.dir, sink.trigger, n, mTrend,  InpBrickSizePts, p);
-            if(mi==2) RunTrade(md, sink.dir, sink.trigger, n, mVolMid, InpBrickSizePts, p);
-            if(mi==3) RunTrade(md, sink.dir, sink.trigger, n, mH21,    InpBrickSizePts, p);
+            if(mi==0) RunTrade(md, sink.dir, sink.trigger, sink.high, sink.low, n,mAll,    InpBrickSizePts, p);
+            if(mi==1) RunTrade(md, sink.dir, sink.trigger, sink.high, sink.low, n,mTrend,  InpBrickSizePts, p);
+            if(mi==2) RunTrade(md, sink.dir, sink.trigger, sink.high, sink.low, n,mVolMid, InpBrickSizePts, p);
+            if(mi==3) RunTrade(md, sink.dir, sink.trigger, sink.high, sink.low, n,mH21,    InpBrickSizePts, p);
             FileWrite(fh, StringFormat("%s\t%s\t%d\t%.4f\t%.4f\t%.4f\t%.2f\t%.4f\t%.4f\t%.4f",
                       modeName[md], labels[mi], p.trades, p.WinRate(), p.EV(), p.NetEV(InpCostBricks),
                       p.T(), p.AvgWin(), p.AvgLoss(), p.AvgFwd()));
@@ -233,11 +239,12 @@ void OnStart()
             int a = (int)((long)w * n / InpTimeWindows);
             int b = (int)((long)(w + 1) * n / InpTimeWindows);
             int wn = b - a; if(wn < 10) continue;
-            int wdir[]; double wcl[]; bool wmask[];
-            ArrayResize(wdir, wn); ArrayResize(wcl, wn); ArrayResize(wmask, wn);
+            int wdir[]; double wcl[], whi[], wlo[]; bool wmask[];
+            ArrayResize(wdir, wn); ArrayResize(wcl, wn); ArrayResize(whi, wn); ArrayResize(wlo, wn); ArrayResize(wmask, wn);
             ArrayCopy(wdir, sink.dir, 0, a, wn); ArrayCopy(wcl, sink.trigger, 0, a, wn);
+            ArrayCopy(whi, sink.high, 0, a, wn); ArrayCopy(wlo, sink.low, 0, a, wn);
             for(int i = 0; i < wn; i++) wmask[i] = true;
-            MksPayoff wp; RunTrade(md, wdir, wcl, wn, wmask, InpBrickSizePts, wp);
+            MksPayoff wp; RunTrade(md, wdir, wcl, whi, wlo, wn, wmask, InpBrickSizePts, wp);
             FileWrite(fh, StringFormat("%s\t%s\t%s\t%.4f\t%.2f\t%d",
                       modeName[md],
                       TimeToString((datetime)(sink.t[a] / 1000)),

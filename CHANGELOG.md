@@ -7,6 +7,9 @@ O formato segue [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/) e es
 ## [Não lançado]
 
 ### Fixed
+- **Research R2 — fade testa stop/alvo na EXCURSÃO intra-brick (high/low), não no close (2026-07-25).** O `MksStatFade` checava os níveis só no preço do close de cada brick → **trade que tocou o stop e voltou contava como win** (EV OTIMISTA — a auditoria disse que "o fade não pode produzir número confiável" sem isso). Fix: checa contra `high`/`low` (coletados no R1) com **desempate PESSIMISTA** (tocou alvo E stop no mesmo brick → assume stop primeiro). O cascade de high/low foi threadado por `RunTrade→ReportMask→ReportStationarity→OnStart+TSV` no `MeasurePayoff`. +1 teste (`Test_Fade_IntrabarStop`: high toca o stop apesar do close favorável → close-only contaria como não-hit, R2 conta como loss −2). **MT5-verde: `Test_CMksBrickStats` 20 tests. compile-all 57/57.** **Por que importa AGORA:** o pós-R1 revelou o fade **positivo no regime recente** (mai-jul, t=8.8) — R1 ressuscitou o lead que eu erradamente chamei de morto. O R2 é o teste crítico: essa reversão recente sobrevive ao accounting honesto dos stops intra-brick?
+
+### Fixed
 - **Research R5 — gate de volatilidade FORWARD-HONEST (threshold expanding, sem look-ahead) (2026-07-25).** O `GatedMomentum.BuildVolRegime` classificava vol-HI/MID/LO com terciles sobre a série **TODA** — look-ahead (usa dado futuro pra classificar o presente; "tolerável p/ descrição, fatal quando vira sinal", como a auditoria disse). Fix: o threshold é **recomputado a partir de TODO o passado `[W, i)` a cada `InpThreshUpdate` bricks (expanding)** — zero look-ahead; o warmup (1º bloco) fica sem regime. O filtro `vol-media` do `MeasurePayoff` marcado como **DESCRITIVO** (full-sample, não sinal forward). `compile-all` 57/57.
 
 ### Fixed
