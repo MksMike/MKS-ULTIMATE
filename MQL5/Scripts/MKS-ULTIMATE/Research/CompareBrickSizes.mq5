@@ -96,10 +96,10 @@ void OnStart()
 
       bool mAll[]; ArrayResize(mAll, n);
       for(int i = 0; i < n; i++) mAll[i] = true;
-      MksPayoff p; MksStatRideToFlip(sink.dir, sink.close, n, mAll, S, p);
+      MksPayoff p; MksStatRideToFlip(sink.dir, sink.trigger, n, mAll, S, p);
 
       int rlC[], rlR[]; MksStatRunLength(sink.dir, n, InpMaxRunLen, rlC, rlR);
-      int pos = CountPosWindows(sink.dir, sink.close, n, InpTimeWindows, S, costB);
+      int pos = CountPosWindows(sink.dir, sink.trigger, n, InpTimeWindows, S, costB);
 
       double evnet = p.NetEV(costB);
       PrintFormat("S=%-4.1f bricks=%-6d grn=%-5d red=%-5d cost=%.3fbrk | EVg=%+.3f EVnet=%+.3f t=%+5.1f | stat=%d/%d | runs L1=%d L2=%d L3=%d L4=%d L5+=%d",

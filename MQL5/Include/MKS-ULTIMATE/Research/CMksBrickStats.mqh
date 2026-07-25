@@ -184,12 +184,15 @@ struct MksPayoff
    }
 };
 
-// Trade "ride-to-flip": entra no close do brick i (quando signal[i]), corre
-// enquanto a direção continua, SAI no close do 1º brick j>i com dir[j]!=dir[i].
-// R = dir[i]·(close[j]−close[i])/brickSize (bricks; +ganho, −perda). Trades
+// Trade "ride-to-flip": entra no brick i (quando signal[i]), corre enquanto a
+// direção continua, SAI no 1º brick j>i com dir[j]!=dir[i]. R = dir[i]·
+// (priceArr[j]−priceArr[i])/brickSize. **priceArr DEVE ser o preço OBSERVADO
+// (triggerPrice, mid do tick que fechou o brick — ADR-010), NÃO o close
+// matemático** — usar close é o eixo-1 do V5 (operar sobre preço fictício onde
+// o mercado não negociou; otimista quando o flip cai num brick M>1). Trades
 // NÃO-SOBREPOSTOS (o próximo entry parte do flip) → independentes, t-stat vale.
 // Sinais no último run (sem flip até o fim) são descartados (trade incompleto).
-void MksStatRideToFlip(const int &dir[], const double &closeArr[], int n,
+void MksStatRideToFlip(const int &dir[], const double &priceArr[], int n,
                        const bool &signal[], double brickSize, MksPayoff &out)
 {
    if(brickSize <= 0.0) return;
@@ -200,7 +203,7 @@ void MksStatRideToFlip(const int &dir[], const double &closeArr[], int n,
       int j = i + 1;
       while(j < n && dir[j] == dir[i]) j++;
       if(j >= n) break;                         // sem flip até o fim: descarta
-      double R = (double)dir[i] * (closeArr[j] - closeArr[i]) / brickSize;
+      double R = (double)dir[i] * (priceArr[j] - priceArr[i]) / brickSize;
       out.trades++;
       out.sumR   += R;
       out.sumR2  += R * R;
@@ -214,10 +217,12 @@ void MksStatRideToFlip(const int &dir[], const double &closeArr[], int n,
 // Trade de REVERSÃO (fade): entra CONTRA a direção do brick i (short se bull),
 // caminha brick a brick e SAI quando o P&L (em bricks) atinge +target (win) ou
 // −stop (loss) — R clampado ao nível (alvo/stop fixo). Sem nível até o fim →
-// para. R = clamp(−dir[i]·(close[j]−close[i])/S). NÃO-SOBREPOSTO (próximo entry
-// parte da saída) → independentes. É o ESPELHO do ride-to-flip: ganha as
-// reversões pequenas e frequentes, perde as tendências raras e grandes.
-void MksStatFade(const int &dir[], const double &closeArr[], int n,
+// para. R = clamp(−dir[i]·(priceArr[j]−priceArr[i])/S). priceArr = preço
+// OBSERVADO (triggerPrice), não close. NÃO-SOBREPOSTO. É o ESPELHO do ride-to-
+// flip. **LIMITAÇÃO (R2, pendente):** testa alvo/stop só no priceArr do close
+// de cada brick, NÃO na excursão intra-brick (high/low) — trade que tocou o
+// stop e voltou conta como win → EV do fade OTIMISTA. Fix R2 usa high/low.
+void MksStatFade(const int &dir[], const double &priceArr[], int n,
                  const bool &signal[], double brickSize,
                  double target, double stop, MksPayoff &out)
 {
@@ -232,7 +237,7 @@ void MksStatFade(const int &dir[], const double &closeArr[], int n,
       bool   hit  = false;
       while(j < n)
       {
-         R = (double)side * (closeArr[j] - closeArr[i]) / brickSize;
+         R = (double)side * (priceArr[j] - priceArr[i]) / brickSize;
          if(R >=  target) { R =  target; hit = true; break; }
          if(R <= -stop)   { R = -stop;   hit = true; break; }
          j++;

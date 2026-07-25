@@ -94,10 +94,10 @@ void OnStart()
    Print("");
    Print("=== Momentum por REGIME de volatilidade (vol trailing dos ultimos W bricks) ===");
    Print("  hipotese: vol-HI (mercado ativo/trending) paga; vol-LO (quieto) nao.");
-   ReportRegime("all",    sink.dir, sink.close, n, mAll, InpBrickSizePts);
-   ReportRegime("vol-HI", sink.dir, sink.close, n, mHi,  InpBrickSizePts);
-   ReportRegime("vol-MID", sink.dir, sink.close, n, mMid, InpBrickSizePts);
-   ReportRegime("vol-LO", sink.dir, sink.close, n, mLo,  InpBrickSizePts);
+   ReportRegime("all",    sink.dir, sink.trigger, n, mAll, InpBrickSizePts);
+   ReportRegime("vol-HI", sink.dir, sink.trigger, n, mHi,  InpBrickSizePts);
+   ReportRegime("vol-MID", sink.dir, sink.trigger, n, mMid, InpBrickSizePts);
+   ReportRegime("vol-LO", sink.dir, sink.trigger, n, mLo,  InpBrickSizePts);
 
    Print("");
    PrintFormat("=== ESTACIONARIDADE do vol-HI momentum por %d janelas ===", InpTimeWindows);
@@ -111,7 +111,7 @@ void OnStart()
       int wdir[]; double wcl[]; bool wmask[];
       ArrayResize(wdir, wn); ArrayResize(wcl, wn); ArrayResize(wmask, wn);
       ArrayCopy(wdir, sink.dir, 0, a, wn);
-      ArrayCopy(wcl,  sink.close, 0, a, wn);
+      ArrayCopy(wcl,  sink.trigger, 0, a, wn);
       for(int i = 0; i < wn; i++) wmask[i] = mHi[a + i];   // vol-HI mask fatiada
       MksPayoff p; MksStatRideToFlip(wdir, wcl, wn, wmask, InpBrickSizePts, p);
       double ev = p.NetEV(g_costB);
@@ -136,10 +136,10 @@ void OnStart()
       for(int r = 0; r < 4; r++)
       {
          MksPayoff p;
-         if(r==0) MksStatRideToFlip(sink.dir, sink.close, n, mAll, InpBrickSizePts, p);
-         if(r==1) MksStatRideToFlip(sink.dir, sink.close, n, mHi,  InpBrickSizePts, p);
-         if(r==2) MksStatRideToFlip(sink.dir, sink.close, n, mMid, InpBrickSizePts, p);
-         if(r==3) MksStatRideToFlip(sink.dir, sink.close, n, mLo,  InpBrickSizePts, p);
+         if(r==0) MksStatRideToFlip(sink.dir, sink.trigger, n, mAll, InpBrickSizePts, p);
+         if(r==1) MksStatRideToFlip(sink.dir, sink.trigger, n, mHi,  InpBrickSizePts, p);
+         if(r==2) MksStatRideToFlip(sink.dir, sink.trigger, n, mMid, InpBrickSizePts, p);
+         if(r==3) MksStatRideToFlip(sink.dir, sink.trigger, n, mLo,  InpBrickSizePts, p);
          FileWrite(fh, StringFormat("%s\t%d\t%.4f\t%.4f\t%.4f\t%.2f",
                    lbl[r], p.trades, p.WinRate(), p.EV(), p.NetEV(g_costB), p.T()));
       }
@@ -151,7 +151,7 @@ void OnStart()
          int wn = b - a; if(wn < 10) continue;
          int wdir[]; double wcl[]; bool wmask[];
          ArrayResize(wdir, wn); ArrayResize(wcl, wn); ArrayResize(wmask, wn);
-         ArrayCopy(wdir, sink.dir, 0, a, wn); ArrayCopy(wcl, sink.close, 0, a, wn);
+         ArrayCopy(wdir, sink.dir, 0, a, wn); ArrayCopy(wcl, sink.trigger, 0, a, wn);
          for(int i = 0; i < wn; i++) wmask[i] = mHi[a + i];
          MksPayoff p; MksStatRideToFlip(wdir, wcl, wn, wmask, InpBrickSizePts, p);
          FileWrite(fh, StringFormat("%s\t%s\t%.4f\t%.2f\t%d",

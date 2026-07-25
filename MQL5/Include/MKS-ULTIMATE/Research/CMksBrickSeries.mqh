@@ -25,12 +25,18 @@
 #include <MKS-ULTIMATE/Core/Types/Error.mqh>
 #include <MKS-ULTIMATE/Core/Interfaces/IRenkoSink.mqh>
 
-// Acumula por brick: direção (+1/-1), close matemático, tempo (msc), M.
+// Acumula por brick: direção (+1/-1), close matemático, **triggerPrice** (mid
+// OBSERVADO no tick que fechou o brick — ADR-010; é o preço de fill realista,
+// não o close fictício = eixo-1 do V5), tempo (msc), high/low (excursão real
+// p/ stop/alvo intra-brick), M (thresholdsCrossed).
 class CMksBrickSeriesCollector : public IRenkoSink
 {
 public:
    int    dir[];
-   double close[];
+   double close[];     // close MATEMÁTICO (open±S) — NÃO usar p/ R (fictício)
+   double trigger[];   // mid observado no disparo (ADR-010) — preço de fill p/ R
+   double high[];      // excursão máxima intra-brick
+   double low[];       // excursão mínima intra-brick
    long   t[];
    int    m[];
    int    count;
@@ -40,14 +46,20 @@ public:
    void OnBrickClose(const MksBrick &b) override
    {
       int idx = count;
-      ArrayResize(dir,   idx + 1, 8192);
-      ArrayResize(close, idx + 1, 8192);
-      ArrayResize(t,     idx + 1, 8192);
-      ArrayResize(m,     idx + 1, 8192);
-      dir[idx]   = b.IsBull() ? 1 : -1;
-      close[idx] = b.close;
-      t[idx]     = b.closeTimeMsc;
-      m[idx]     = b.thresholdsCrossed;
+      ArrayResize(dir,     idx + 1, 8192);
+      ArrayResize(close,   idx + 1, 8192);
+      ArrayResize(trigger, idx + 1, 8192);
+      ArrayResize(high,    idx + 1, 8192);
+      ArrayResize(low,     idx + 1, 8192);
+      ArrayResize(t,       idx + 1, 8192);
+      ArrayResize(m,       idx + 1, 8192);
+      dir[idx]     = b.IsBull() ? 1 : -1;
+      close[idx]   = b.close;
+      trigger[idx] = b.triggerPrice;
+      high[idx]    = b.high;
+      low[idx]     = b.low;
+      t[idx]       = b.closeTimeMsc;
+      m[idx]       = b.thresholdsCrossed;
       if(b.IsBull()) bull++; else bear++;
       count++;
    }
