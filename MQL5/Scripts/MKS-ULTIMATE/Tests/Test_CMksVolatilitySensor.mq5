@@ -180,11 +180,65 @@ void Test_RawBricksPerHour()
 }
 
 //+------------------------------------------------------------------+
+//| MIDRANK — série de dt CONSTANTE → score 5.0 (MEDIUM), nao LOW/ULTRA |
+//+------------------------------------------------------------------+
+void Test_ConstantSeriesIsMedium()
+{
+   CMksVolatilitySensor s;
+   long t = T0; s.OnBrick(t);
+   for(int i = 0; i < 50; i++) { t += 30000; s.OnBrick(t); }  // dt constante 30s
+   MKS_ASSERT_NEAR_DOUBLE(5.0, s.Score(), 1e-9,
+      StringFormat("midrank: dt constante -> score 5.0 exato (got %.4f)", s.Score()));
+   MKS_ASSERT_EQ_INT((int)MKS_VOL_MEDIUM, (int)s.Level(),
+      "midrank: constante -> MEDIUM (nao colapsa em LOW/ULTRA por empate)");
+}
+
+//+------------------------------------------------------------------+
+//| ULTRA ALCANCAVEL — rajada no top da distribuicao dispara ULTRA     |
+//+------------------------------------------------------------------+
+void Test_UltraReachable()
+{
+   // ULTRA e um SPIKE (outlier vs ref recente), nao regime sustentado: uma
+   // rajada longa vira a "nova normal" (ref adapta) e sai de ULTRA — isso e o
+   // C4 correto. Aqui: ref cheia de 60s (500), depois rajada CURTA de 1s (~top
+   // 3% da distribuicao) — a EWMA cai o bastante p/ o effDt ficar no fundo da
+   // ref ANTES da rajada poluir a janela de 500.
+   CMksVolatilitySensor s;
+   long t = T0; s.OnBrick(t);
+   for(int i = 0; i < 520; i++) { t += 60000; s.OnBrick(t); }  // ref cheia de 60s
+   for(int i = 0; i < 15;  i++) { t += 1000;  s.OnBrick(t); }  // rajada curta de 1s
+   MKS_ASSERT_TRUE(s.Score() > 9.0,
+      StringFormat("ultra: spike -> score > 9 (got %.2f)", s.Score()));
+   MKS_ASSERT_EQ_INT((int)MKS_VOL_ULTRA, (int)s.Level(),
+      "ultra: ALCANCAVEL (gate de risco dispara) num spike vs ref lenta");
+}
+
+//+------------------------------------------------------------------+
+//| GAP — descontinuidade (dt > maxGap) NAO polui a EWMA/referencia    |
+//+------------------------------------------------------------------+
+void Test_GapDiscontinuity()
+{
+   CMksVolatilitySensor s;  // maxGap default 4h
+   long t = T0; s.OnBrick(t);
+   for(int i = 0; i < 20; i++) { t += 60000; s.OnBrick(t); }   // 60s -> raw ~60/h
+   double rawBefore = s.RawBricksPerHour();
+   t += 48L * 3600 * 1000; s.OnBrick(t);                       // fim-de-semana (48h > 4h)
+   MKS_ASSERT_NEAR_DOUBLE(rawBefore, s.RawBricksPerHour(), 1.0,
+      "gap: 48h nao entra na EWMA (raw ~inalterado, nao despenca)");
+   t += 60000; s.OnBrick(t);                                   // volta ao normal
+   MKS_ASSERT_TRUE(s.Score() > 3.0 && s.Score() < 7.0,
+      StringFormat("gap: pos-gap 60s ainda ~MEDIUM (ref limpa do gap) (got %.2f)", s.Score()));
+}
+
+//+------------------------------------------------------------------+
 void OnStart()
 {
    Print("=== Test_CMksVolatilitySensor ===");
 
    MKS_RUN(Test_WarmupNeutral);
+   MKS_RUN(Test_ConstantSeriesIsMedium);
+   MKS_RUN(Test_UltraReachable);
+   MKS_RUN(Test_GapDiscontinuity);
    MKS_RUN(Test_C1_FastBricksHighScore);
    MKS_RUN(Test_C1_SlowBricksLowScore);
    MKS_RUN(Test_C2_GapDropsScoreBeforeNextBrick);

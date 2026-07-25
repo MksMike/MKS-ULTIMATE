@@ -104,8 +104,10 @@ int MksLoadBrickSeries(const string symbol, datetime from, datetime to,
    {
       long dayEnd = (dayStart + DAY < toMsc) ? (dayStart + DAY) : toMsc;
       MqlTick ticks[];
+      // to_msc INCLUSIVO → dayEnd-1: o tick exatamente na fronteira (dayStart+
+      // k·DAY) cai só no chunk seguinte, sem ser ingerido 2x (inflaria seq/vol).
       int nt = CopyTicksRange(symbol, ticks, COPY_TICKS_ALL,
-                              (ulong)dayStart, (ulong)dayEnd);
+                              (ulong)dayStart, (ulong)(dayEnd - 1));
       dayIdx++;
       if(nt <= 0) daysEmpty++;
       else

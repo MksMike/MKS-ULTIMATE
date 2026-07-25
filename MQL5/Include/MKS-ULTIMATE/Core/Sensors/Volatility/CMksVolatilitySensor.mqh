@@ -59,6 +59,8 @@ private:
    double m_alpha;        // peso EWMA (derivado da meia-vida)
    int    m_refWindow;    // tamanho da referência trailing (bricks)
    double m_hyst;         // margem de histerese na escala 0-10
+   double m_maxGapMs;     // dt acima disto = DESCONTINUIDADE (pausa/fim-de-semana):
+                          // NÃO entra na EWMA nem na referência (não envenena a vol)
 
    //--- estado ---
    double m_ewmaDt;       // EWMA do dt entre bricks (ms)
@@ -75,14 +77,21 @@ private:
    ENUM_MKS_VOL_LEVEL m_level;
    long   m_lastUpdateMsc;
 
-   //--- fração da referência <= dt (percentil), busca binária ---
+   //--- percentil com MIDRANK p/ empates: pct = (qtde<dt + qtde<=dt)/(2n).
+   //    Sem midrank, um bloco de dts idênticos recebia o percentil do TOPO do
+   //    bloco (viés p/ baixo no score) e uma série constante colapsava em
+   //    LOW-ou-ULTRA por 1 ulp; com midrank, constante → pct 0.5 → MEDIUM.
    double PctRank(double dt) const
    {
       int n = ArraySize(m_sorted);
       if(n == 0) return 0.5;
-      int lo = 0, hi = n;
+      int lo = 0, hi = n;                 // lower: 1º índice com sorted >= dt
+      while(lo < hi) { int mid = (lo + hi) / 2; if(m_sorted[mid] < dt) lo = mid + 1; else hi = mid; }
+      int lower = lo;
+      lo = lower; hi = n;                 // upper: 1º índice com sorted > dt
       while(lo < hi) { int mid = (lo + hi) / 2; if(m_sorted[mid] <= dt) lo = mid + 1; else hi = mid; }
-      return (double)lo / (double)n;   // lo = qtde <= dt
+      int upper = lo;
+      return (double)(lower + upper) / (2.0 * (double)n);
    }
 
    // dt pequeno = brick rápido = alta vol → score alto. score = (1-pct)*10.
@@ -91,19 +100,29 @@ private:
    // Histerese: só troca de nível quando o score cruza a borda + margem.
    ENUM_MKS_VOL_LEVEL ApplyHysteresis(ENUM_MKS_VOL_LEVEL cur, double score) const
    {
-      double edge[5]; edge[0]=3.0; edge[1]=5.0; edge[2]=7.0; edge[3]=9.0; edge[4]=1e9; // borda SUPERIOR de LOW,MED,HIGH,EXTREME
+      double edge[4]; edge[0]=3.0; edge[1]=5.0; edge[2]=7.0; edge[3]=9.0; // borda SUP de LOW,MED,HIGH,EXTREME
       int L = (int)cur;
-      while(L < 4 && score >= edge[L]       + m_hyst) L++;   // sobe
-      while(L > 0 && score <  edge[L - 1]   - m_hyst) L--;   // desce
+      while(L < 4)   // sobe: cruza a borda + margem
+      {
+         double up = edge[L] + m_hyst;
+         // ULTRA capado em 9.5: score = 10·(1−pctrank) chega a ~9.99, nunca 10,
+         // e com hyst>=1 a borda 9+hyst>=10 tornaria ULTRA (gate de risco)
+         // INALCANÇÁVEL. Cap garante que uma rajada no top ~5% dispara ULTRA.
+         if(L == 3 && up > 9.5) up = 9.5;
+         if(score >= up) L++; else break;
+      }
+      while(L > 0 && score < edge[L - 1] - m_hyst) L--;   // desce
       return (ENUM_MKS_VOL_LEVEL)L;
    }
 
 public:
-   CMksVolatilitySensor(double halfLifeBricks = 10.0, int refWindow = 500, double hysteresis = 1.0)
+   CMksVolatilitySensor(double halfLifeBricks = 10.0, int refWindow = 500,
+                        double hysteresis = 1.0, double maxGapMs = 14400000.0) // 4h
    {
       m_alpha = (halfLifeBricks > 0.0) ? (1.0 - MathPow(2.0, -1.0 / halfLifeBricks)) : 1.0;
       m_refWindow = (refWindow >= 10) ? refWindow : 10;
       m_hyst = (hysteresis >= 0.0) ? hysteresis : 0.0;
+      m_maxGapMs = (maxGapMs > 0.0) ? maxGapMs : 14400000.0;
       Reset();
    }
 
@@ -124,14 +143,21 @@ public:
       {
          double dt = (double)(brickMsc - m_lastBrickMsc);
          if(dt < 0.0) dt = 0.0;   // defesa: tempo não-monotônico
-         m_ewmaDt = m_haveEwma ? (m_alpha * dt + (1.0 - m_alpha) * m_ewmaDt) : dt;
-         m_haveEwma = true;
+         // dt > maxGap = descontinuidade (pausa/fim-de-semana). NÃO entra na
+         // EWMA nem na referência — senão o gap gigante envenena a vol por
+         // ~3×meia-vida (Monday-open lido como calmo sem ser). O gap ainda é
+         // visto por OnTick (calmaria observável), só não polui a distribuição.
+         if(dt <= m_maxGapMs)
+         {
+            m_ewmaDt = m_haveEwma ? (m_alpha * dt + (1.0 - m_alpha) * m_ewmaDt) : dt;
+            m_haveEwma = true;
 
-         if(m_refCount < m_refWindow) { m_ref[m_refCount] = dt; m_refCount++; }
-         else { m_ref[m_refHead] = dt; m_refHead = (m_refHead + 1) % m_refWindow; }
-         ArrayResize(m_sorted, m_refCount);
-         ArrayCopy(m_sorted, m_ref, 0, 0, m_refCount);
-         ArraySort(m_sorted);
+            if(m_refCount < m_refWindow) { m_ref[m_refCount] = dt; m_refCount++; }
+            else { m_ref[m_refHead] = dt; m_refHead = (m_refHead + 1) % m_refWindow; }
+            ArrayResize(m_sorted, m_refCount);
+            ArrayCopy(m_sorted, m_ref, 0, 0, m_refCount);
+            ArraySort(m_sorted);
+         }
       }
       m_lastBrickMsc = brickMsc;
       m_haveLast = true;
