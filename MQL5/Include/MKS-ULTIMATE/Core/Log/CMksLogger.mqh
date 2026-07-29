@@ -45,10 +45,16 @@ string MksJsonEscape(string s)
 //   lg.Log(MKS_LOG_INFO, "Producer", "starting", "");
 //   lg.Log(MKS_LOG_INFO, "Producer", "brick emitted",
 //          StringFormat("\"brickIdx\":%d,\"M\":%d", 1, 1));
+//   // Precisão de ms: passe o timeMsc do tick que originou o evento.
+//   lg.Log(MKS_LOG_INFO, "TradeManager", "brick closed", "",
+//          brick.closeTimeMsc);
 //   lg.Close();
 //
-// Escape: implementação escapa internamente module e msg (aspas, barras,
-// controle). ctxJson NÃO é re-escapado — caller monta JSON válido.
+// Timestamp: o overload de quatro parâmetros usa TimeCurrent (precisão
+// de segundo, .000Z); o overload que recebe timeMsc produz precisão de
+// ms real (ADR-007 §1). Escape: implementação escapa internamente module
+// e msg (aspas, barras, controle). ctxJson NÃO é re-escapado — caller
+// monta JSON válido.
 class CMksLogger : public ILogger
 {
 private:
@@ -73,14 +79,15 @@ private:
       return "UNKNOWN";
    }
 
-   // Timestamp ISO 8601 UTC. Precisão de SEGUNDO — millis sempre .000.
-   // MQL5 não expõe API para "TimeCurrent com millis" — time_msc só
-   // existe dentro de MqlTick, não como "agora". GetTickCount não
-   // alinha com TimeCurrent (uptime do sistema vs. tempo do broker),
-   // então não pode ser usado para preencher sub-segundo honestamente.
-   // Em backtest, TimeCurrent é o tempo simulado.
-   // TODO: ganhar precisão de ms quando o caller puder passar o
-   // timeMsc do tick corrente como contexto.
+   // Timestamp ISO 8601 UTC a partir do "agora" do broker. Precisão de
+   // SEGUNDO — millis sempre .000. MQL5 não expõe API para "TimeCurrent
+   // com millis" — time_msc só existe dentro de MqlTick, não como
+   // "agora". GetTickCount não alinha com TimeCurrent (uptime do sistema
+   // vs. tempo do broker), então não pode ser usado para preencher
+   // sub-segundo honestamente. Em backtest, TimeCurrent é o tempo
+   // simulado. Usado no overload de Log() sem timeMsc — quando o caller
+   // tem o tick corrente, prefere-se FormatTimestampMsc para honrar a
+   // precisão de ms exigida pela ADR-007 §1.
    string FormatTimestamp() const
    {
       datetime t = TimeCurrent();
@@ -89,6 +96,23 @@ private:
       return StringFormat("%04d-%02d-%02dT%02d:%02d:%02d.000Z",
                           dt.year, dt.mon, dt.day,
                           dt.hour, dt.min, dt.sec);
+   }
+
+   // Timestamp ISO 8601 UTC com precisão de milissegundo (ADR-007 §1) a
+   // partir de um timeMsc explícito — ms desde epoch, mesma convenção de
+   // MqlTick.time_msc e MksTick.timeMsc. O caller passa o timeMsc do tick
+   // que originou o evento (ex.: brick.closeTimeMsc em decisões
+   // pós-brick), garantindo que dois eventos no mesmo segundo sejam
+   // distinguíveis no log-diff de paridade backtest/live.
+   string FormatTimestampMsc(long timeMsc) const
+   {
+      datetime t  = (datetime)(timeMsc / 1000);
+      int      ms = (int)(timeMsc % 1000);
+      MqlDateTime dt;
+      TimeToStruct(t, dt);
+      return StringFormat("%04d-%02d-%02dT%02d:%02d:%02d.%03dZ",
+                          dt.year, dt.mon, dt.day,
+                          dt.hour, dt.min, dt.sec, ms);
    }
 
    // Escapa caracteres que invalidariam JSON. Cobre os controles
@@ -114,6 +138,40 @@ private:
          FileWriteString(m_handle, line + "\n");
          FileFlush(m_handle); // garante persistência mesmo em crash
       }
+   }
+
+   // Núcleo comum aos overloads públicos de Log: aplica o filtro de
+   // nível, serializa o JSON-line com o ts já formatado e emite. Manter
+   // uma única fonte da verdade do schema evita divergência entre o
+   // caminho "agora" (sem timeMsc) e o caminho de precisão de ms.
+   void EmitLog(ENUM_MKS_LOG_LEVEL level,
+                const string &module,
+                const string &msg,
+                const string &ctxJson,
+                const string &ts)
+   {
+      // META sempre escreve; demais respeitam filtro de nível mínimo.
+      if(level != MKS_LOG_META && level < m_minLevel)
+         return;
+
+      string levelStr = LevelToString(level);
+
+      string line;
+      if(StringLen(ctxJson) > 0)
+      {
+         line = StringFormat(
+            "{\"ts\":\"%s\",\"level\":\"%s\",\"module\":\"%s\","
+            "\"msg\":\"%s\",%s}",
+            ts, levelStr, EscapeJson(module), EscapeJson(msg), ctxJson);
+      }
+      else
+      {
+         line = StringFormat(
+            "{\"ts\":\"%s\",\"level\":\"%s\",\"module\":\"%s\","
+            "\"msg\":\"%s\"}",
+            ts, levelStr, EscapeJson(module), EscapeJson(msg));
+      }
+      EmitLine(line);
    }
 
 public:
@@ -185,34 +243,28 @@ public:
       Log(MKS_LOG_META, MKS_MODULE_LOGGER, "session header", ctxJson);
    }
 
+   // Overload de contrato (ILogger): usa o "agora" do broker como ts,
+   // com precisão de segundo (.000Z). Preferir o overload com timeMsc
+   // sempre que o caller tiver o tick que originou o evento.
    void Log(ENUM_MKS_LOG_LEVEL level,
             const string &module,
             const string &msg,
             const string &ctxJson) override
    {
-      // META sempre escreve; demais respeitam filtro de nível mínimo.
-      if(level != MKS_LOG_META && level < m_minLevel)
-         return;
+      EmitLog(level, module, msg, ctxJson, FormatTimestamp());
+   }
 
-      string ts       = FormatTimestamp();
-      string levelStr = LevelToString(level);
-
-      string line;
-      if(StringLen(ctxJson) > 0)
-      {
-         line = StringFormat(
-            "{\"ts\":\"%s\",\"level\":\"%s\",\"module\":\"%s\","
-            "\"msg\":\"%s\",%s}",
-            ts, levelStr, EscapeJson(module), EscapeJson(msg), ctxJson);
-      }
-      else
-      {
-         line = StringFormat(
-            "{\"ts\":\"%s\",\"level\":\"%s\",\"module\":\"%s\","
-            "\"msg\":\"%s\"}",
-            ts, levelStr, EscapeJson(module), EscapeJson(msg));
-      }
-      EmitLine(line);
+   // Overload com precisão de ms (ADR-007 §1): o caller passa o timeMsc
+   // do tick corrente (ex.: brick.closeTimeMsc em eventos pós-brick).
+   // Disponível apenas via ponteiro concreto CMksLogger* — a interface
+   // ILogger permanece com a assinatura de quatro parâmetros.
+   void Log(ENUM_MKS_LOG_LEVEL level,
+            const string &module,
+            const string &msg,
+            const string &ctxJson,
+            long timeMsc)
+   {
+      EmitLog(level, module, msg, ctxJson, FormatTimestampMsc(timeMsc));
    }
 
    void Close()
@@ -248,6 +300,30 @@ public:
    void Error(const string &module, const string &msg, const string &ctxJson)
    {
       Log(MKS_LOG_ERROR, module, msg, ctxJson);
+   }
+
+   //--- Overloads com timeMsc explícito: ts ganha precisão de ms a
+   //--- partir do tick que originou o evento (ADR-007 §1). Uso típico:
+   //--- decisões pós-brick passando brick.closeTimeMsc.
+   void Trace(const string &module, const string &msg, const string &ctxJson, long timeMsc)
+   {
+      Log(MKS_LOG_TRACE, module, msg, ctxJson, timeMsc);
+   }
+   void Debug(const string &module, const string &msg, const string &ctxJson, long timeMsc)
+   {
+      Log(MKS_LOG_DEBUG, module, msg, ctxJson, timeMsc);
+   }
+   void Info(const string &module, const string &msg, const string &ctxJson, long timeMsc)
+   {
+      Log(MKS_LOG_INFO, module, msg, ctxJson, timeMsc);
+   }
+   void Warn(const string &module, const string &msg, const string &ctxJson, long timeMsc)
+   {
+      Log(MKS_LOG_WARN, module, msg, ctxJson, timeMsc);
+   }
+   void Error(const string &module, const string &msg, const string &ctxJson, long timeMsc)
+   {
+      Log(MKS_LOG_ERROR, module, msg, ctxJson, timeMsc);
    }
 };
 
